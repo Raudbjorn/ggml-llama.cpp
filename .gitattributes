@@ -11,3 +11,5 @@
 *.txt filter=lfs diff=lfs merge=lfs -text
 *.Dockerfile filter=lfs diff=lfs merge=lfs -text
 *.dockerignore filter=lfs diff=lfs merge=lfs -text
+*.lock filter=lfs diff=lfs merge=lfs -text
+*.nix filter=lfs diff=lfs merge=lfs -text
