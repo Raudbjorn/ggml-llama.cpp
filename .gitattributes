@@ -14,3 +14,4 @@
 *.lock filter=lfs diff=lfs merge=lfs -text
 *.nix filter=lfs diff=lfs merge=lfs -text
 *.bin filter=lfs diff=lfs merge=lfs -text
+/examples/chatLLaMa filter=lfs diff=lfs merge=lfs -text
