@@ -17,3 +17,4 @@
 /examples/chatLLaMa filter=lfs diff=lfs merge=lfs -text
 /SHA256SUMS filter=lfs diff=lfs merge=lfs -text
 *.swift filter=lfs diff=lfs merge=lfs -text
+*.bat filter=lfs diff=lfs merge=lfs -text
