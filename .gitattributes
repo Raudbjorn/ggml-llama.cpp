@@ -26,3 +26,4 @@
 *.cu filter=lfs diff=lfs merge=lfs -text
 *.cl filter=lfs diff=lfs merge=lfs -text
 *.csv filter=lfs diff=lfs merge=lfs -text
+*.cmake filter=lfs diff=lfs merge=lfs -text
