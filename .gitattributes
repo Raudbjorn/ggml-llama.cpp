@@ -39,3 +39,4 @@
 *.html filter=lfs diff=lfs merge=lfs -text
 *.vim filter=lfs diff=lfs merge=lfs -text
 *.gbnf filter=lfs diff=lfs merge=lfs -text
+*.gguf filter=lfs diff=lfs merge=lfs -text
