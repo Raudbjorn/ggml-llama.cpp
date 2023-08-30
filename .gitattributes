@@ -44,3 +44,4 @@
 *.spec filter=lfs diff=lfs merge=lfs -text
 /gguf-py/LICENSE filter=lfs diff=lfs merge=lfs -text
 *.toml filter=lfs diff=lfs merge=lfs -text
+*.typed filter=lfs diff=lfs merge=lfs -text
