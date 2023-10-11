@@ -47,3 +47,4 @@
 *.typed filter=lfs diff=lfs merge=lfs -text
 *.ini filter=lfs diff=lfs merge=lfs -text
 /.devops/cloud-v-pipeline filter=lfs diff=lfs merge=lfs -text
+/examples/batched.swift/Makefile filter=lfs diff=lfs merge=lfs -text
