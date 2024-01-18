@@ -64,3 +64,9 @@
 *.properties filter=lfs diff=lfs merge=lfs -text
 *.jar filter=lfs diff=lfs merge=lfs -text
 /examples/llama.android/gradlew filter=lfs diff=lfs merge=lfs -text
+*.gitmodules filter=lfs diff=lfs merge=lfs -text
+*.ccls filter=lfs diff=lfs merge=lfs -text
+*.clang-format filter=lfs diff=lfs merge=lfs -text
+/kompute/LICENSE filter=lfs diff=lfs merge=lfs -text
+/kompute/Makefile filter=lfs diff=lfs merge=lfs -text
+*.comp filter=lfs diff=lfs merge=lfs -text
