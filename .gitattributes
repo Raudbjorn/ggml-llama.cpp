@@ -70,3 +70,4 @@
 /kompute/LICENSE filter=lfs diff=lfs merge=lfs -text
 /kompute/Makefile filter=lfs diff=lfs merge=lfs -text
 *.comp filter=lfs diff=lfs merge=lfs -text
+*.feature filter=lfs diff=lfs merge=lfs -text
