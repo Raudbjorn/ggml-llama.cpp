@@ -72,3 +72,4 @@
 *.comp filter=lfs diff=lfs merge=lfs -text
 *.feature filter=lfs diff=lfs merge=lfs -text
 /retrieval filter=lfs diff=lfs merge=lfs -text
+*.cuh filter=lfs diff=lfs merge=lfs -text
