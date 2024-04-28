@@ -75,3 +75,5 @@
 *.cuh filter=lfs diff=lfs merge=lfs -text
 /AUTHORS filter=lfs diff=lfs merge=lfs -text
 *.svg filter=lfs diff=lfs merge=lfs -text
+*.inp filter=lfs diff=lfs merge=lfs -text
+*.out filter=lfs diff=lfs merge=lfs -text
