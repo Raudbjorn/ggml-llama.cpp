@@ -77,3 +77,4 @@
 *.svg filter=lfs diff=lfs merge=lfs -text
 *.inp filter=lfs diff=lfs merge=lfs -text
 *.out filter=lfs diff=lfs merge=lfs -text
+*.ico filter=lfs diff=lfs merge=lfs -text
