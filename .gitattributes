@@ -82,3 +82,4 @@
 /ggml/src/ggml-cann/Doxyfile filter=lfs diff=lfs merge=lfs -text
 *.ipynb filter=lfs diff=lfs merge=lfs -text
 *.disabled filter=lfs diff=lfs merge=lfs -text
+/CODEOWNERS filter=lfs diff=lfs merge=lfs -text
