@@ -83,3 +83,4 @@
 *.ipynb filter=lfs diff=lfs merge=lfs -text
 *.disabled filter=lfs diff=lfs merge=lfs -text
 /CODEOWNERS filter=lfs diff=lfs merge=lfs -text
+*.modulemap filter=lfs diff=lfs merge=lfs -text
