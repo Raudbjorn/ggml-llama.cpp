@@ -96,3 +96,4 @@
 /licenses/LICENSE-jsonhpp filter=lfs diff=lfs merge=lfs -text
 /licenses/LICENSE-linenoise filter=lfs diff=lfs merge=lfs -text
 *.mp3 filter=lfs diff=lfs merge=lfs -text
+*.wgsl filter=lfs diff=lfs merge=lfs -text
