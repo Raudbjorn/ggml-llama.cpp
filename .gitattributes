@@ -106,3 +106,5 @@
 *.jpg filter=lfs diff=lfs merge=lfs -text
 *.tmpl filter=lfs diff=lfs merge=lfs -text
 *.glsl filter=lfs diff=lfs merge=lfs -text
+*.idl filter=lfs diff=lfs merge=lfs -text
+*.farf filter=lfs diff=lfs merge=lfs -text
