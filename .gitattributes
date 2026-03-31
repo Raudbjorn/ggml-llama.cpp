@@ -1,3 +1,7 @@
+# Treat the generated single-file WebUI build as binary for diff purposes.
+# Git's pack-file delta compression still works (byte-level), but this prevents
+# git diff from printing the entire minified file on every change.
+tools/server/public/index.html -diff
 *.gitignore filter=lfs diff=lfs merge=lfs -text
 /Makefile filter=lfs diff=lfs merge=lfs -text
 *.py filter=lfs diff=lfs merge=lfs -text
