@@ -121,3 +121,4 @@ tools/server/public/index.html -diff
 *.abi filter=lfs diff=lfs merge=lfs -text
 *.example filter=lfs diff=lfs merge=lfs -text
 *.mp4 filter=lfs diff=lfs merge=lfs -text
+*.jsonl filter=lfs diff=lfs merge=lfs -text
