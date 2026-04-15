@@ -118,3 +118,4 @@ tools/server/public/index.html -diff
 *.ps1 filter=lfs diff=lfs merge=lfs -text
 *.slang filter=lfs diff=lfs merge=lfs -text
 *.schema filter=lfs diff=lfs merge=lfs -text
+*.abi filter=lfs diff=lfs merge=lfs -text
