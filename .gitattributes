@@ -116,3 +116,4 @@
 *.schema filter=lfs diff=lfs merge=lfs -text
 *.abi filter=lfs diff=lfs merge=lfs -text
 *.example filter=lfs diff=lfs merge=lfs -text
+*.mp4 filter=lfs diff=lfs merge=lfs -text
