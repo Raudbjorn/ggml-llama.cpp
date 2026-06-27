@@ -1,11 +1,11 @@
 // CPU-vs-SYCL correctness harness for TurboQuant kernels.
 //
-// Rationale: the SYCL TurboQuant kernels (merged from the FellypeMelo fork)
-// produce nonsense at inference time. This harness isolates *where* by running
-// the SAME ggml graph on the CPU backend (the known-good reference) and on the
-// SYCL backend, then diffing the outputs. There is deliberately NO hand-rolled
-// reference math -- the CPU backend IS the reference -- so the only thing under
-// test is the SYCL kernel.
+// Rationale: verify the SYCL TurboQuant kernels match the CPU reference. This
+// harness isolates *where* a discrepancy lives by running the SAME ggml graph on
+// the CPU backend (the known-good reference) and on the SYCL backend, then
+// diffing the outputs. There is deliberately NO hand-rolled reference math --
+// the CPU backend IS the reference -- so the only thing under test is the SYCL
+// kernel.
 //
 // Each TurboQuant stage is probed independently so a failure localises the bug:
 //   - TURBO_WHT          : the (inverse) Walsh-Hadamard rotation
@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <random>
@@ -242,17 +243,13 @@ static void probe_mul_mat(ggml_backend_t cpu, ggml_backend_t sycl,
 
 // (4) The actual KV-cache path: flash attention with turbo K/V.
 //
-// supports_op() VETOES turbo FA on SYCL (ggml_sycl_flash_attn_ext_supported
-// returns false for turbo KV), so the normal graph path would fall back to CPU
-// and never exercise the GPU kernel. We deliberately FORCE the turbo FA graph
-// onto SYCL (run_on_backend with supported=nullptr bypasses the check; the
-// executor still routes turbo -> the TILE kernel), and compare against an F16
-// reference run on CPU. The reference uses the same raw K/V values in F16, so a
-// correct turbo FA kernel should land within quantization error (high cosine);
-// genuine nonsense collapses the cosine.
-// For non-turbo KV (q8_0/f16) n_q selects the kernel: n_q==1 (decode) routes to
-// VEC, n_q>2 routes to TILE. Turbo KV always routes to TILE (fattn.cpp), never
-// VEC. `path` is just a display hint.
+// Turbo stores K/V WHT-rotated and the SYCL kernel is WHT-opaque, so this probe
+// mirrors the model graph: forward-WHT Q before FA, inverse-WHT the output (the
+// turbo branch in build()). The reference is bare F16 FA on CPU with raw Q, so
+// the round-trip lands within quantization error (high cosine); a real kernel
+// bug collapses it. run_on_backend with supported=nullptr forces the graph onto
+// SYCL, exercising the kernel even with the veto in place. Turbo routes to VEC;
+// `path` is a display hint.
 static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
                              ggml_type kv_type, const char * name,
                              int64_t n_q, const char * path) {
@@ -287,7 +284,14 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_set_name(v, "v");
         ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv, n_q_pad, 1, 1);
         ggml_set_name(m, "m");
-        return ggml_flash_attn_ext(ctx, q, k, v, m, scale, 0.0f, 0.0f);
+        const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
+        ggml_tensor * qq = turbo ? ggml_turbo_wht(ctx, q, 0, 0, nullptr) : q;  // forward, auto group
+        ggml_tensor * o  = ggml_flash_attn_ext(ctx, qq, k, v, m, scale, 0.0f, 0.0f);
+        if (turbo) {
+            const int group = (d % 128 == 0) ? 128 : 64;
+            o = ggml_turbo_wht(ctx, o, 1, group, nullptr);  // inverse
+        }
+        return o;
     };
 
     char label[64];
@@ -424,15 +428,27 @@ int main() {
     probe_fa_f16(cpu, sycl, 8, "tile");
     probe_fa_f16(cpu, sycl, 1, "vec");
 
-    printf("\n[5] flash attention (turbo KV cache) - n_q=1 (decode; turbo routes TILE, never VEC)\n");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 1, "tile");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 1, "tile");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 1, "tile");
+    const bool run_turbo_fa = getenv("LLAMA_TEST_TURBO_FA") != nullptr;
 
-    printf("\n[6] flash attention (turbo KV cache) - TILE path (n_q=8, prefill)\n");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 8, "tile");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 8, "tile");
-    probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 8, "tile");
+    printf("\n[5] flash attention (turbo KV cache) - n_q=1 (decode; turbo routes VEC)\n");
+    if (!run_turbo_fa) {
+        skip("flash_attn turbo [decode]",
+             "turbo VEC FA hangs IGC on Arc A770; set LLAMA_TEST_TURBO_FA=1 (with SYCL_PROGRAM_COMPILE_OPTIONS=-cl-opt-disable) to force");
+    } else {
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 1, "vec");
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 1, "vec");
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 1, "vec");
+    }
+
+    printf("\n[6] flash attention (turbo KV cache) - n_q=8 (prefill; turbo routes VEC)\n");
+    if (!run_turbo_fa) {
+        skip("flash_attn turbo [prefill]",
+             "turbo VEC FA hangs IGC on Arc A770; set LLAMA_TEST_TURBO_FA=1 (with SYCL_PROGRAM_COMPILE_OPTIONS=-cl-opt-disable) to force");
+    } else {
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO2_0, "turbo2_0", 8, "vec");
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", 8, "vec");
+        probe_flash_attn(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", 8, "vec");
+    }
 
     printf("\n[7] flash attention q8_0 KV (baseline quantized) - SYCL vs CPU\n");
     probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 8, "prefill");
