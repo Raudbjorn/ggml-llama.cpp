@@ -118,3 +118,8 @@
 *.example filter=lfs diff=lfs merge=lfs -text
 *.mp4 filter=lfs diff=lfs merge=lfs -text
 *.jsonl filter=lfs diff=lfs merge=lfs -text
+*.S filter=lfs diff=lfs merge=lfs -text
+*.ld filter=lfs diff=lfs merge=lfs -text
+/tools/ui/src/lib/vendors/big-integer/LICENSE filter=lfs diff=lfs merge=lfs -text
+/tools/ui/src/lib/vendors/nerdamer-prime/LICENSE filter=lfs diff=lfs merge=lfs -text
+*.patch filter=lfs diff=lfs merge=lfs -text
