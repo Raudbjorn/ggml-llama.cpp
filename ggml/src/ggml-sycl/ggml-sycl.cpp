@@ -323,8 +323,8 @@ static void ggml_check_sycl() try {
 #else
         g_ggml_sycl_enable_flash_attention = 0;
 #endif
-        g_ggml_sycl_fa_force_vec_standard = get_sycl_env("GGML_SYCL_FA_FORCE_VEC_STANDARD", 0);
-        g_ggml_sycl_fa_q8_gqa_tile = get_sycl_env("GGML_SYCL_FA_Q8_GQA_TILE", 0);
+        g_ggml_sycl_fa_force_vec_standard = ggml_sycl_get_env("GGML_SYCL_FA_FORCE_VEC_STANDARD", 0);
+        g_ggml_sycl_fa_q8_gqa_tile = ggml_sycl_get_env("GGML_SYCL_FA_Q8_GQA_TILE", 0);
 
         g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
 
