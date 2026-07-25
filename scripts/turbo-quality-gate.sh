@@ -41,7 +41,7 @@ case "${TURBO_QUALITY_STRICT:-0}" in
 esac
 
 # Per-stage tempdir for captured stdout/stderr.
-STAGE_LOG_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t turbo-gate.XXXXXX)"
+STAGE_LOG_DIR="$(mktemp -d 2>/dev/null || mktemp -d "${TMPDIR:-/tmp}/turbo-gate.XXXXXX")"
 if [ -z "$STAGE_LOG_DIR" ] || [ ! -d "$STAGE_LOG_DIR" ]; then
   echo "ERROR: failed to create temporary directory for stage logs" >&2
   exit 1
@@ -120,15 +120,18 @@ stage_correctness() {
       FAIL_COUNT=$((FAIL_COUNT+1))
       emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
       return
-    fi
+    }
     # In strict mode, nonzero xfail/skip/xpass counts also fail the stage.
     # Harness emits: "== summary: <G> GATE-FAIL, <P> XPASS (promote to GATE!), <X> xfail (expected-broken), <S> SKIP =="
     if [ "$STRICT" = "1" ]; then
       local xfail_n skip_n xpass_n
-      xfail_n=$(grep -ioE '[0-9]+ xfail' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
-      skip_n=$(grep -ioE '[0-9]+ skip' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
-      xpass_n=$(grep -ioE '[0-9]+ xpass' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
-      if [ "${xfail_n:-0}" -gt 0 ] || [ "${skip_n:-0}" -gt 0 ] || [ "${xpass_n:-0}" -gt 0 ]; then
+      xfail_n=$(grep -ioE '[0-9]+ xfail' "$log" | grep -oE '[0-9]+' | head -1)
+      skip_n=$(grep -ioE '[0-9]+ skip' "$log" | grep -oE '[0-9]+' | head -1)
+      xpass_n=$(grep -ioE '[0-9]+ xpass' "$log" | grep -oE '[0-9]+' | head -1)
+      : "${xfail_n:=0}"
+      : "${skip_n:=0}"
+      : "${xpass_n:=0}"
+      if [ "$xfail_n" -gt 0 ] || [ "$skip_n" -gt 0 ] || [ "$xpass_n" -gt 0 ]; then
         FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n skip=$skip_n xpass=$xpass_n)"
         FAIL_COUNT=$((FAIL_COUNT+1))
         emit_summary "$stage_label" "FAIL" "$log" "strict mode: xfail=$xfail_n skip=$skip_n xpass=$xpass_n"
@@ -146,6 +149,7 @@ stage_correctness() {
       FAIL_COUNT=$((FAIL_COUNT+1))
       emit_summary "$stage_label" "FAIL" "$log" "harness exited $rc"
     fi
+    return
   fi
 
   if [ "$STRICT" = "1" ]; then
@@ -159,17 +163,18 @@ stage_correctness() {
         emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL non-zero or missing summary"
         return
       fi
-      if [ "$STRICT" = "1" ]; then
-        local xfail_n2 skip_n2 xpass_n2
-        xfail_n2=$(grep -ioE '[0-9]+ xfail' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
-        skip_n2=$(grep -ioE '[0-9]+ skip' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
-        xpass_n2=$(grep -ioE '[0-9]+ xpass' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
-        if [ "${xfail_n2:-0}" -gt 0 ] || [ "${skip_n2:-0}" -gt 0 ] || [ "${xpass_n2:-0}" -gt 0 ]; then
-          FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2)"
-          FAIL_COUNT=$((FAIL_COUNT+1))
-          emit_summary "$stage_label2" "FAIL" "$log2" "strict mode: xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2"
-          return
-        fi
+      local xfail_n2 skip_n2 xpass_n2
+      xfail_n2=$(grep -ioE '[0-9]+ xfail' "$log2" | grep -oE '[0-9]+' | head -1)
+      skip_n2=$(grep -ioE '[0-9]+ skip' "$log2" | grep -oE '[0-9]+' | head -1)
+      xpass_n2=$(grep -ioE '[0-9]+ xpass' "$log2" | grep -oE '[0-9]+' | head -1)
+      : "${xfail_n2:=0}"
+      : "${skip_n2:=0}"
+      : "${xpass_n2:=0}"
+      if [ "$xfail_n2" -gt 0 ] || [ "$skip_n2" -gt 0 ] || [ "$xpass_n2" -gt 0 ]; then
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2)"
+        FAIL_COUNT=$((FAIL_COUNT+1))
+        emit_summary "$stage_label2" "FAIL" "$log2" "strict mode: xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2"
+        return
       fi
       emit_summary "$stage_label2" "PASS" "$log2" ""
     else
@@ -201,7 +206,8 @@ stage_ppl() {
   local stage_label="1 perplexity (turbo3 vs q8_0, -fa on)"
   local log_t="$STAGE_LOG_DIR/ppl-turbo.log"
   local log_q="$STAGE_LOG_DIR/ppl-q8.log"
-  local rc_t rc_q ppl_turbo_valid ppl_q8_valid ppl_limit
+  local rc_t rc_q ppl_limit
+
 
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
     if [ "$STRICT" = "1" ]; then
@@ -224,6 +230,12 @@ stage_ppl() {
       SKIP_COUNT=$((SKIP_COUNT+1))
       emit_summary "$stage_label" "SKIP" "-" "WIKI unset (non-strict; no auto-download by design)"
     fi
+    return
+  fi
+  if [ ! -x "$LLAMA/llama-perplexity" ]; then
+    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
     return
   fi
 
@@ -279,6 +291,7 @@ stage_scaling() {
   local log_q="$STAGE_LOG_DIR/scaling-q8.log"
   local rc_t rc_q ratio
 
+
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ] || [ -z "$WIKI" ] || [ ! -f "$WIKI" ]; then
     if [ "$STRICT" = "1" ]; then
       FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: MODEL or WIKI unset"
@@ -288,6 +301,12 @@ stage_scaling() {
       SKIP_COUNT=$((SKIP_COUNT+1))
       emit_summary "$stage_label" "SKIP" "-" "MODEL or WIKI unset (non-strict)"
     fi
+    return
+  fi
+  if [ ! -x "$LLAMA/llama-perplexity" ]; then
+    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
     return
   fi
 
