@@ -115,28 +115,22 @@ stage_correctness() {
   fi
 
   if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" "$CORRECTNESS_BIN" >"$log" 2>&1; then
-    grep -qE '^== summary: 0 GATE-FAIL,' "$log" || {
-      FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report 0 GATE-FAIL"
-      FAIL_COUNT=$((FAIL_COUNT+1))
-      emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
-      return
-    }
-    # In strict mode, nonzero xfail/skip/xpass counts also fail the stage.
-    # Harness emits: "== summary: <G> GATE-FAIL, <P> XPASS (promote to GATE!), <X> xfail (expected-broken), <S> SKIP =="
+    # Strict mode requires a fully clean run: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP.
+    # Non-strict mode only requires 0 GATE-FAIL; xfail/skip counts may be nonzero.
     if [ "$STRICT" = "1" ]; then
-      local xfail_n skip_n xpass_n
-      xfail_n=$(grep -ioE '[0-9]+ xfail' "$log" | grep -oE '[0-9]+' | head -1)
-      skip_n=$(grep -ioE '[0-9]+ skip' "$log" | grep -oE '[0-9]+' | head -1)
-      xpass_n=$(grep -ioE '[0-9]+ xpass' "$log" | grep -oE '[0-9]+' | head -1)
-      : "${xfail_n:=0}"
-      : "${skip_n:=0}"
-      : "${xpass_n:=0}"
-      if [ "$xfail_n" -gt 0 ] || [ "$skip_n" -gt 0 ] || [ "$xpass_n" -gt 0 ]; then
-        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n skip=$skip_n xpass=$xpass_n)"
+      is_strict_clean_run "$log" || {
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report a fully clean run in strict mode"
         FAIL_COUNT=$((FAIL_COUNT+1))
-        emit_summary "$stage_label" "FAIL" "$log" "strict mode: xfail=$xfail_n skip=$skip_n xpass=$xpass_n"
+        emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL/XPASS/xfail/SKIP non-zero in strict"
         return
-      fi
+      }
+    else
+      grep -qE '^== summary: 0 GATE-FAIL,' "$log" || {
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report 0 GATE-FAIL"
+        FAIL_COUNT=$((FAIL_COUNT+1))
+        emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
+        return
+      }
     fi
     emit_summary "$stage_label" "PASS" "$log" ""
   else
@@ -144,10 +138,12 @@ stage_correctness() {
     if [ "$rc" = "124" ]; then
       TIMEOUT_COUNT=$((TIMEOUT_COUNT+1))
       emit_summary "$stage_label" "124" "$log" ""
+      return
     else
       FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness exited $rc"
       FAIL_COUNT=$((FAIL_COUNT+1))
       emit_summary "$stage_label" "FAIL" "$log" "harness exited $rc"
+      return
     fi
     return
   fi
@@ -157,35 +153,25 @@ stage_correctness() {
     local log2="$STAGE_LOG_DIR/correctness-b.log"
     if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
          LLAMA_TEST_TURBO_FA=1 "$CORRECTNESS_BIN" >"$log2" 2>&1; then
-      if ! grep -qE '^== summary: 0 GATE-FAIL,' "$log2"; then
-        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report 0 GATE-FAIL"
+      # Strict mode requires a fully clean run on the turbo-FA second pass too.
+      is_strict_clean_run "$log2" || {
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report a fully clean run in strict mode"
         FAIL_COUNT=$((FAIL_COUNT+1))
-        emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL non-zero or missing summary"
+        emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL/XPASS/xfail/SKIP non-zero in strict"
         return
-      fi
-      local xfail_n2 skip_n2 xpass_n2
-      xfail_n2=$(grep -ioE '[0-9]+ xfail' "$log2" | grep -oE '[0-9]+' | head -1)
-      skip_n2=$(grep -ioE '[0-9]+ skip' "$log2" | grep -oE '[0-9]+' | head -1)
-      xpass_n2=$(grep -ioE '[0-9]+ xpass' "$log2" | grep -oE '[0-9]+' | head -1)
-      : "${xfail_n2:=0}"
-      : "${skip_n2:=0}"
-      : "${xpass_n2:=0}"
-      if [ "$xfail_n2" -gt 0 ] || [ "$skip_n2" -gt 0 ] || [ "$xpass_n2" -gt 0 ]; then
-        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2)"
-        FAIL_COUNT=$((FAIL_COUNT+1))
-        emit_summary "$stage_label2" "FAIL" "$log2" "strict mode: xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2"
-        return
-      fi
+      }
       emit_summary "$stage_label2" "PASS" "$log2" ""
     else
       local rc2=$?
       if [ "$rc2" = "124" ]; then
         TIMEOUT_COUNT=$((TIMEOUT_COUNT+1))
         emit_summary "$stage_label2" "124" "$log2" ""
+        return
       else
         FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness exited $rc2"
         FAIL_COUNT=$((FAIL_COUNT+1))
         emit_summary "$stage_label2" "FAIL" "$log2" "harness exited $rc2"
+        return
       fi
     fi
   fi
@@ -201,12 +187,22 @@ validate_numeric() {
   return 0
 }
 
+# is_strict_clean_run <log> - returns 0 if the harness summary line reports
+# 0 GATE-FAIL, 0 XPASS, 0 xfail, and 0 SKIP (a fully clean run for strict mode).
+# Matches the exact format emitted by test-sycl-turbo-correctness:
+#   "== summary: 0 GATE-FAIL, 0 XPASS (promote to GATE!), 0 xfail (expected-broken), 0 SKIP =="
+is_strict_clean_run() {
+  local log="$1"
+  grep -qE '^== summary: 0 GATE-FAIL, 0 XPASS \(promote to GATE!\), 0 xfail \(expected-broken\), 0 SKIP ==' "$log"
+}
+
 # stage_ppl - perplexity check. -fa on is mandatory.
 stage_ppl() {
   local stage_label="1 perplexity (turbo3 vs q8_0, -fa on)"
   local log_t="$STAGE_LOG_DIR/ppl-turbo.log"
   local log_q="$STAGE_LOG_DIR/ppl-q8.log"
   local rc_t rc_q ppl_limit
+
 
 
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
@@ -290,6 +286,7 @@ stage_scaling() {
   local log_t="$STAGE_LOG_DIR/scaling-turbo.log"
   local log_q="$STAGE_LOG_DIR/scaling-q8.log"
   local rc_t rc_q ratio
+
 
 
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ] || [ -z "$WIKI" ] || [ ! -f "$WIKI" ]; then
