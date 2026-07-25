@@ -85,6 +85,19 @@ All fork knobs are read inside the library and keep working in SDK builds:
 `GGML_SYCL_FA_ONEDNN`, `GGML_SYCL_FA_PROFILE`, and the upstream
 `GGML_SYCL_*` set.
 
+## Known issues
+
+- **Teardown segfault after GPU inference (pre-existing).** A minimal C-API
+  consumer (llama_backend_init, load, decode, llama_free) that fully offloads
+  to SYCL0 can segfault inside `llama_free` -> `~llama_kv_cache` -> libc free
+  after inference completes successfully. Reproduces against pre-SDK builds of
+  the fork (so it is not introduced by the SDK restructure) and does not
+  reproduce with the fork's own binaries (llama-completion, llama-bench) at
+  identical parameters, nor with CPU-only inference (`n_gpu_layers = 0`).
+  Impact: exit-time crash only; generated output is correct. Workaround until
+  root-caused: skip `llama_free`/`llama_backend_free` on process exit (the OS
+  reclaims), or run teardown before backend-heavy destruction ordering matters.
+
 ## Regenerating the lib branch
 
 ```bash
