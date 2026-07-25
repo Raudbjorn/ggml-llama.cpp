@@ -5147,6 +5147,142 @@ static bool ggml_sycl_rope_view_set_rows_eligible(
     return true;
 }
 
+// FFN fusion eligibility profiler.
+//
+// Upstream CUDA fuses the dense feed-forward block as
+// (ffn_up MUL_MAT, ffn_gate MUL_MAT, GLU) into a single kernel, optionally
+// absorbing bias and scale. The fork's build_ffn emits exactly that shape for
+// LLM_FFN_SILU with LLM_FFN_PAR: two MUL_MAT nodes feeding ggml_swiglu_split
+// (src/llama-graph.cpp:1336). SYCL currently fuses only the MoE MUL_MAT_ID path.
+//
+// This counts how many production sites would actually qualify before any kernel
+// is written. The ROPE fusion effort proved the value of measuring first: it was
+// structurally matched but 0% production-eligible because SET_ROWS destinations
+// were q8_0.
+static bool ggml_sycl_ffn_fusion_profile_enabled() {
+    const char * value = getenv("GGML_SYCL_FFN_FUSION_PROFILE");
+    return value != nullptr && strcmp(value, "1") == 0;
+}
+
+struct ggml_sycl_ffn_fusion_profile {
+    std::atomic<uint64_t> graph_calls              = 0;
+    std::atomic<uint64_t> glu_nodes                = 0;
+    std::atomic<uint64_t> structural_matches       = 0;
+    std::atomic<uint64_t> eligible_matches         = 0;
+    std::atomic<uint64_t> decode_eligible_matches  = 0;
+    std::atomic<uint64_t> batched_eligible_matches = 0;
+    std::atomic<uint64_t> reject_not_mul_mat       = 0;
+    std::atomic<uint64_t> reject_src_mismatch      = 0;
+    std::atomic<uint64_t> reject_glu_op            = 0;
+    std::atomic<uint64_t> reject_type              = 0;
+    std::atomic<uint64_t> reject_shape             = 0;
+    std::atomic<uint64_t> reject_non_contig        = 0;
+
+    ~ggml_sycl_ffn_fusion_profile() {
+        if (!ggml_sycl_ffn_fusion_profile_enabled()) {
+            return;
+        }
+        fprintf(
+            stderr,
+            "GGML_SYCL_FFN_FUSION_PROFILE: graph_calls=%" PRIu64 " glu_nodes=%" PRIu64
+            " structural_matches=%" PRIu64 " eligible_matches=%" PRIu64
+            " decode_eligible_matches=%" PRIu64 " batched_eligible_matches=%" PRIu64
+            " reject_not_mul_mat=%" PRIu64 " reject_src_mismatch=%" PRIu64
+            " reject_glu_op=%" PRIu64 " reject_type=%" PRIu64
+            " reject_shape=%" PRIu64 " reject_non_contig=%" PRIu64 "\n",
+            graph_calls.load(), glu_nodes.load(), structural_matches.load(),
+            eligible_matches.load(), decode_eligible_matches.load(),
+            batched_eligible_matches.load(), reject_not_mul_mat.load(),
+            reject_src_mismatch.load(), reject_glu_op.load(), reject_type.load(),
+            reject_shape.load(), reject_non_contig.load());
+    }
+};
+
+static ggml_sycl_ffn_fusion_profile & ggml_sycl_ffn_fusion_profile_data() {
+    static ggml_sycl_ffn_fusion_profile profile;
+    return profile;
+}
+
+// Mirrors the upstream CUDA ggml_cuda_should_fuse_mul_mat predicate: both
+// producers must be MUL_MAT feeding one GLU, sharing the same activation input,
+// with matching quantized weight types and contiguous, shape-identical outputs.
+static bool ggml_sycl_ffn_fusion_eligible(
+    const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu,
+    ggml_sycl_ffn_fusion_profile & profile) {
+    if (up->op != GGML_OP_MUL_MAT || gate->op != GGML_OP_MUL_MAT) {
+        profile.reject_not_mul_mat.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    // Both projections must consume the same normalized activation, otherwise the
+    // fused kernel cannot share its load of the input.
+    if (up->src[1] != gate->src[1]) {
+        profile.reject_src_mismatch.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    const ggml_glu_op glu_op = ggml_get_glu_op(glu);
+    if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU &&
+        glu_op != GGML_GLU_OP_REGLU) {
+        profile.reject_glu_op.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (up->src[0]->type != gate->src[0]->type || up->type != gate->type) {
+        profile.reject_type.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (!ggml_are_same_shape(up, gate)) {
+        profile.reject_shape.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (!ggml_is_contiguous(up) || !ggml_is_contiguous(gate)) {
+        profile.reject_non_contig.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    return true;
+}
+
+static void ggml_sycl_profile_ffn_fusion(const ggml_cgraph * cgraph) {
+    if (!ggml_sycl_ffn_fusion_profile_enabled()) {
+        return;
+    }
+
+    ggml_sycl_ffn_fusion_profile & profile = ggml_sycl_ffn_fusion_profile_data();
+    profile.graph_calls.fetch_add(1, std::memory_order_relaxed);
+    for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
+        if (cgraph->nodes[node_idx]->op == GGML_OP_GLU) {
+            profile.glu_nodes.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (node_idx + 2 >= cgraph->n_nodes ||
+            !ggml_can_fuse_subgraph(
+                cgraph, node_idx, { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU },
+                { node_idx + 2 })) {
+            continue;
+        }
+        const ggml_tensor * first  = cgraph->nodes[node_idx];
+        const ggml_tensor * second = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * glu    = cgraph->nodes[node_idx + 2];
+        // ggml_swiglu_split(gate, up) passes gate as src[0] and up as src[1]; the
+        // graph may emit either producer first, so accept both orderings.
+        const bool ordered = glu->src[0] == first && glu->src[1] == second;
+        const bool swapped = glu->src[0] == second && glu->src[1] == first;
+        if (!ordered && !swapped) {
+            continue;
+        }
+        profile.structural_matches.fetch_add(1, std::memory_order_relaxed);
+
+        const ggml_tensor * gate = ordered ? first : second;
+        const ggml_tensor * up   = ordered ? second : first;
+        if (!ggml_sycl_ffn_fusion_eligible(up, gate, glu, profile)) {
+            continue;
+        }
+        profile.eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        if (up->ne[1] == 1) {
+            profile.decode_eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            profile.batched_eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
 static void ggml_sycl_profile_rope_fusion(const ggml_cgraph * cgraph) {
     if (!ggml_sycl_rope_fusion_profile_enabled()) {
         return;
@@ -5304,6 +5440,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     ggml_backend_sycl_clear_pending_status(dev_ctx);
     ggml_sycl_profile_rope_fusion(cgraph);
+    ggml_sycl_profile_ffn_fusion(cgraph);
     const bool graph_profile_enabled = ggml_sycl_graph_profile_enabled();
     ggml_sycl_graph_profile * graph_profile =
         graph_profile_enabled ? &ggml_sycl_graph_profile_data() : nullptr;
