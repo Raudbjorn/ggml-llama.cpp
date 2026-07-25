@@ -198,6 +198,14 @@ struct ggml_sycl_fattn_profile_bucket {
     uint64_t combine_us = 0;
     uint64_t gqa_ratio = 0;
     uint64_t repeated_packed_kv_bytes = 0;
+    // Launch geometry of the most recent launch in this bucket. These are shapes,
+    // not accumulators, so they record last-value-wins like gqa_ratio.
+    uint64_t parallel_blocks = 0;
+    uint64_t ntiles_total = 0;
+    uint64_t blocks_total = 0;
+    uint64_t work_items_total = 0;
+    uint64_t max_wg_per_cu = 0;
+    uint64_t nsm = 0;
 };
 
 class ggml_sycl_fattn_profile_collector {
@@ -213,7 +221,9 @@ public:
                     stderr,
                     "GGML_SYCL_FA_PROFILE: route=%s layout=%s launches=%llu "
                     "conversion_us=%llu conversion_bytes=%llu stage1_us=%llu "
-                    "combine_us=%llu gqa=%llu repeated_packed_kv_bytes=%llu\n",
+                    "combine_us=%llu gqa=%llu repeated_packed_kv_bytes=%llu "
+                    "parallel_blocks=%llu ntiles_total=%llu blocks_total=%llu "
+                    "work_items_total=%llu max_wg_per_cu=%llu nsm=%llu\n",
                     route == 0 ? "VEC" : "TILE",
                     layout == 0 ? "canonical" : "quants-first",
                     (unsigned long long) bucket.launches,
@@ -222,7 +232,13 @@ public:
                     (unsigned long long) bucket.stage1_us,
                     (unsigned long long) bucket.combine_us,
                     (unsigned long long) bucket.gqa_ratio,
-                    (unsigned long long) bucket.repeated_packed_kv_bytes);
+                    (unsigned long long) bucket.repeated_packed_kv_bytes,
+                    (unsigned long long) bucket.parallel_blocks,
+                    (unsigned long long) bucket.ntiles_total,
+                    (unsigned long long) bucket.blocks_total,
+                    (unsigned long long) bucket.work_items_total,
+                    (unsigned long long) bucket.max_wg_per_cu,
+                    (unsigned long long) bucket.nsm);
             }
         }
         fflush(stderr);
@@ -236,7 +252,13 @@ public:
         uint64_t stage1_us,
         uint64_t combine_us,
         uint64_t gqa_ratio,
-        uint64_t repeated_packed_kv_bytes) {
+        uint64_t repeated_packed_kv_bytes,
+        uint64_t parallel_blocks,
+        uint64_t ntiles_total,
+        uint64_t blocks_total,
+        uint64_t work_items_total,
+        uint64_t max_wg_per_cu,
+        uint64_t nsm) {
         std::lock_guard<std::mutex> lock(mutex);
         ggml_sycl_fattn_profile_bucket & bucket =
             buckets[tile_route ? 1 : 0][quants_first ? 1 : 0];
@@ -247,6 +269,12 @@ public:
         bucket.combine_us += combine_us;
         bucket.gqa_ratio = gqa_ratio;
         bucket.repeated_packed_kv_bytes += repeated_packed_kv_bytes;
+        bucket.parallel_blocks = parallel_blocks;
+        bucket.ntiles_total = ntiles_total;
+        bucket.blocks_total = blocks_total;
+        bucket.work_items_total = work_items_total;
+        bucket.max_wg_per_cu = max_wg_per_cu;
+        bucket.nsm = nsm;
     }
 
 private:
@@ -262,6 +290,107 @@ bool ggml_sycl_fattn_profile_enabled() {
     return enabled;
 }
 
+// Sync-free geometry table, keyed by route x phase. Values are shapes, so the last
+// launch in each bucket wins; only the launch counter accumulates.
+struct ggml_sycl_fattn_geometry_bucket {
+    uint64_t launches = 0;
+    char type_k[16] = {};
+    uint64_t parallel_blocks = 0;
+    uint64_t ntiles_total = 0;
+    uint64_t blocks_total = 0;
+    uint64_t work_items_total = 0;
+    uint64_t max_wg_per_cu = 0;
+    uint64_t nsm = 0;
+    uint64_t stream_k = 0;
+};
+
+class ggml_sycl_fattn_geometry_collector {
+public:
+    ~ggml_sycl_fattn_geometry_collector() {
+        for (int route = 0; route < 2; ++route) {
+            for (int phase = 0; phase < 2; ++phase) {
+                const ggml_sycl_fattn_geometry_bucket & bucket = buckets[route][phase];
+                if (bucket.launches == 0) {
+                    continue;
+                }
+                fprintf(
+                    stderr,
+                    "GGML_SYCL_FA_GEOMETRY: route=%s phase=%s type_k=%s launches=%llu "
+                    "parallel_blocks=%llu ntiles_total=%llu blocks_total=%llu "
+                    "work_items_total=%llu max_wg_per_cu=%llu nsm=%llu stream_k=%llu\n",
+                    route == 0 ? "VEC" : "TILE",
+                    phase == 0 ? "decode" : "prefill",
+                    bucket.type_k,
+                    (unsigned long long) bucket.launches,
+                    (unsigned long long) bucket.parallel_blocks,
+                    (unsigned long long) bucket.ntiles_total,
+                    (unsigned long long) bucket.blocks_total,
+                    (unsigned long long) bucket.work_items_total,
+                    (unsigned long long) bucket.max_wg_per_cu,
+                    (unsigned long long) bucket.nsm,
+                    (unsigned long long) bucket.stream_k);
+            }
+        }
+        fflush(stderr);
+    }
+
+    void record(
+        bool tile_route,
+        bool decode,
+        const char * type_k,
+        uint64_t parallel_blocks,
+        uint64_t ntiles_total,
+        uint64_t blocks_total,
+        uint64_t work_items_total,
+        uint64_t max_wg_per_cu,
+        uint64_t nsm,
+        uint64_t stream_k) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ggml_sycl_fattn_geometry_bucket & bucket =
+            buckets[tile_route ? 1 : 0][decode ? 0 : 1];
+        bucket.launches++;
+        if (type_k != nullptr) {
+            std::snprintf(bucket.type_k, sizeof(bucket.type_k), "%s", type_k);
+        }
+        bucket.parallel_blocks  = parallel_blocks;
+        bucket.ntiles_total     = ntiles_total;
+        bucket.blocks_total     = blocks_total;
+        bucket.work_items_total = work_items_total;
+        bucket.max_wg_per_cu    = max_wg_per_cu;
+        bucket.nsm              = nsm;
+        bucket.stream_k         = stream_k;
+    }
+
+private:
+    std::mutex mutex;
+    ggml_sycl_fattn_geometry_bucket buckets[2][2] = {};
+};
+
+void ggml_sycl_fattn_profile_record_geometry(
+    bool tile_route,
+    bool decode,
+    const char * type_k,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm,
+    uint64_t stream_k) {
+    static ggml_sycl_fattn_geometry_collector collector;
+    collector.record(
+        tile_route,
+        decode,
+        type_k,
+        parallel_blocks,
+        ntiles_total,
+        blocks_total,
+        work_items_total,
+        max_wg_per_cu,
+        nsm,
+        stream_k);
+}
+
 void ggml_sycl_fattn_profile_record(
     bool tile_route,
     bool quants_first,
@@ -270,7 +399,13 @@ void ggml_sycl_fattn_profile_record(
     uint64_t stage1_us,
     uint64_t combine_us,
     uint64_t gqa_ratio,
-    uint64_t repeated_packed_kv_bytes) {
+    uint64_t repeated_packed_kv_bytes,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm) {
     static ggml_sycl_fattn_profile_collector collector;
     collector.record(
         tile_route,
@@ -280,7 +415,13 @@ void ggml_sycl_fattn_profile_record(
         stage1_us,
         combine_us,
         gqa_ratio,
-        repeated_packed_kv_bytes);
+        repeated_packed_kv_bytes,
+        parallel_blocks,
+        ntiles_total,
+        blocks_total,
+        work_items_total,
+        max_wg_per_cu,
+        nsm);
 }
 
 static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_tensor * dst) {

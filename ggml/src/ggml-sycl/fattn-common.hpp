@@ -69,7 +69,27 @@ void ggml_sycl_fattn_profile_record(
     uint64_t stage1_us,
     uint64_t combine_us,
     uint64_t gqa_ratio,
-    uint64_t repeated_packed_kv_bytes);
+    uint64_t repeated_packed_kv_bytes,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm);
+
+// Sync-free launch-geometry record. Covers every route and KV type, unlike the
+// timing profile which synchronizes the queue and stays limited to q8 decode.
+void ggml_sycl_fattn_profile_record_geometry(
+    bool tile_route,
+    bool decode,
+    const char * type_k,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm,
+    uint64_t stream_k);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -1294,6 +1314,25 @@ void launch_fattn(
         }
     }
 
+    // Launch geometry is a pure function of device properties and tensor shapes, so
+    // unlike the timing profile above it needs no queue synchronization and is not
+    // restricted to q8 decode. Recording it for every route is what makes the VEC and
+    // TILE grids directly comparable.
+    if (ggml_sycl_fattn_profile_enabled()) {
+        ggml_sycl_fattn_profile_record_geometry(
+            tile_route,
+            Q->ne[1] == 1,
+            ggml_type_name(K->type),
+            (uint64_t) parallel_blocks,
+            (uint64_t) ntiles_total,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
+                block_dim.x * block_dim.y * block_dim.z,
+            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) nsm,
+            (uint64_t) stream_k);
+    }
+
     float scale         = 1.0f;
     float max_bias      = 0.0f;
     float logit_softcap = 0.0f;
@@ -1394,6 +1433,16 @@ void launch_fattn(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 profile_after_combine - profile_after_stage1).count(),
             gqa_ratio,
-            packed_kv_bytes * (gqa_ratio - 1));
+            packed_kv_bytes * (gqa_ratio - 1),
+            // Launch geometry: blocks_total and work_items_total are the realized
+            // grid for both the stream-k and split-k paths, so they can be compared
+            // directly against device residency.
+            (uint64_t) parallel_blocks,
+            (uint64_t) ntiles_total,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
+                block_dim.x * block_dim.y * block_dim.z,
+            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) nsm);
     }
 }
