@@ -123,6 +123,87 @@ stands. The throughput figures observed alongside it (q8_0 VEC 6.88 t/s, f16 for
 13.99 t/s, f16 TILE 14.83 t/s at d16384) are **not** promotion evidence and must not be
 compared against the campaign baseline below. Phase 1 requires sole tenancy.
 
+## Phase 1 result - prediction 2 confirmed, prediction 3 initially FAILED
+
+### First attempt (`d87f024e4`) was rejected by the gate
+
+A partial paired campaign under verified sole tenancy completed three cells before
+aborting on a tenancy violation. It rejected the change:
+
+| cell | metric | wg=2 | wg=16 | delta |
+|---|---|---:|---:|---:|
+| d0 f16 | pp512 | 512.90 | 435.57 | **-15.08 %** |
+| d0 f16 | tg128 | 23.94 | 23.85 | -0.39 % |
+| d0 q8_0 | pp512 | 537.74 | 519.01 | **-3.48 %** |
+| d0 q8_0 | tg128 | 24.58 | 24.57 | -0.05 % |
+| d4096 f16 | pp512 | 294.80 | 302.84 | +2.73 % |
+| d4096 f16 | tg128 | 20.37 | 21.17 | +3.93 % |
+
+Prediction 3 was stated only for tg128, where it held (-0.39 %, -0.05 %). Prefill was
+never predicted, and it blew the -2 % protected-cell guard.
+
+Two lessons, both against the earlier analysis:
+
+1. **The indicative contended numbers were badly inflated.** +19.5 % at d4096 became
+   +3.93 % under gate conditions, roughly a 5x overstatement. A starved kernel suffers
+   disproportionately from contention, so the wg=2 baseline was penalised more than the
+   candidate. The +71.1 % headline does not survive.
+2. **The first regression hypothesis was wrong.** It blamed the `stream_k` branch. Geometry
+   showed `stream_k=0` for every workload measured; prefill uses the split-k branch too.
+
+### Root cause: the occupancy limit was a floor, not a cap
+
+`parallel_blocks` was initialized to `max_blocks_per_sm` and the efficiency search only
+ever grew it. Harmless while the value was 2; wrong once it reflected real occupancy.
+
+Split-K manufactures parallelism when the tile count cannot fill the device, at the cost of
+multiplying `dst_tmp` scratch and widening the combine reduction over every output element.
+Decode needs it (`ntiles_total` = 32 against a 512 `blocks_per_wave`). Prefill does not
+(`ntiles_total` = 4096, already saturated) yet inherited the same floor:
+
+| path | wg=2 | wg=16 (before fix) |
+|---|---|---|
+| prefill | 2 splits, 8192 blocks | 8 splits, **32768 blocks** |
+
+### Fix (`53f390a91`): grow from one split, bounded by occupancy
+
+| path | wg=2 | wg=16 |
+|---|---|---|
+| decode | 2 splits, 64 blocks, 8192 items | 16 splits, 512 blocks, **65536 items** |
+| prefill | 1 split, 4096 blocks | 1 split, 4096 blocks |
+
+Prefill is now **invariant** to the occupancy constant - identical grid at both values - and
+splits less than the original baseline. The regression is removed structurally, not tuned
+away. Correctness: `0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP`.
+
+### Indicative re-measurement of the fix
+
+Alternating arms, arm order reversed between passes, three passes. The render node was
+shared with a user `llama-server` running Qwen3-Coder-30B at `-ngl 99`, so these are
+**not** promotion evidence:
+
+| metric | KV | depth | wg=2 | wg=16 | delta |
+|---|---|---:|---:|---:|---:|
+| pp512 | f16 | 0 | 724.65 | 696.27 | -3.92 % |
+| pp512 | q8_0 | 0 | 681.92 | 719.61 | +5.53 % |
+| tg32 | f16 | 16384 | 6.43 | 15.04 | +133.90 % |
+| tg32 | q8_0 | 16384 | 8.74 | 14.16 | +62.01 % |
+
+The prefill deltas straddle zero and the raw passes show a 16 % spread (f16 wg=16:
+717.74, 619.40, 696.27), consistent with contention rather than a real effect. **The
+geometry invariance, not this measurement, is the evidence that prefill is fixed.**
+
+Decode direction is robust but magnitude is not: wg=2 f16 fell to 6.43 here against 13.93
+when measured earlier under lighter load, which again shows contention punishing the
+starved arm hardest and inflating the delta.
+
+### Still outstanding
+
+A paired campaign on a genuinely idle device. `scripts/perf` harness plus
+`scratchpad/e1-campaign.sh` (stops and restores the CPU llama.cpp unit via a trap, verified
+working) will run it. Required before promotion, before the deep-cell numbers can be
+trusted, and before the upstream issue and PR.
+
 ## Baseline to beat
 
 Post-P5 phase-7 held numbers, Mistral-7B-Instruct v0.1 Q4_K_M, q8_0/q8_0 KV:
