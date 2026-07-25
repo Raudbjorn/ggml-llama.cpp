@@ -71,7 +71,7 @@ emit_summary() {
 # strict mode, also runs a second pass with LLAMA_TEST_TURBO_FA=1 to exercise
 # the turbo-FA path.
 stage_correctness() {
-  local stage_label="0.1 correctness (LLAMA_TEST_TURBO_FA=0)"
+  local stage_label="0.1 correctness (LLAMA_TEST_TURBO_FA=${LLAMA_TEST_TURBO_FA:-0})"
   local log="$STAGE_LOG_DIR/correctness-a.log"
 
   if [ "$CORRECTNESS_BIN" = "skip" ]; then
