@@ -120,7 +120,7 @@ stage_correctness() {
       FAIL_COUNT=$((FAIL_COUNT+1))
       emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
       return
-    fi
+    }
     # In strict mode, nonzero xfail/skip/xpass counts also fail the stage.
     # Harness emits: "== summary: <G> GATE-FAIL, <P> XPASS (promote to GATE!), <X> xfail (expected-broken), <S> SKIP =="
     if [ "$STRICT" = "1" ]; then
