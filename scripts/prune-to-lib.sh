@@ -66,6 +66,11 @@ PRUNE_PATHS=(
     sweep-logs
     conversion
     gguf-py
+    # conversion entry points are dead without gguf-py
+    convert_hf_to_gguf.py
+    convert_hf_to_gguf_update.py
+    convert_llama_ggml_to_gguf.py
+    convert_lora_to_gguf.py
 )
 
 WT="$(mktemp -d "${TMPDIR:-/tmp}/llamalib-prune.XXXXXX")"
