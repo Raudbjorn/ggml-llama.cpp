@@ -263,7 +263,7 @@ add_subdirectory(src)
 
 if (LLAMA_BUILD_COMMON)
     # the server needs cpp-httplib even when the downloader is stubbed out
-    if (LLAMA_DOWNLOAD OR LLAMA_BUILD_SERVER)
+    if (LLAMA_DOWNLOAD OR (LLAMA_BUILD_SERVER AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/server))
         add_subdirectory(vendor/cpp-httplib)
     endif()
     add_subdirectory(common)
