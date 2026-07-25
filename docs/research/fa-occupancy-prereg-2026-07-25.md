@@ -204,6 +204,66 @@ A paired campaign on a genuinely idle device. `scripts/perf` harness plus
 working) will run it. Required before promotion, before the deep-cell numbers can be
 trusted, and before the upstream issue and PR.
 
+## Phase 2b result - GQA packing REFUTED on the corrected baseline
+
+The packed q8 GQA kernel (`2d53f3b25`, reverted `0bb42498e` at +7.59 % d16384 /
+-1.84 % d4096) was predicted to be a victim of the occupancy cap: packing divides
+`ntiles_total` by `gqa_ratio`, and on the old baseline `parallel_blocks` had no room to
+absorb that, so a 4x K-traffic saving was cancelled by a 4x occupancy loss.
+
+The geometry half of that prediction is correct. Restoring the kernel and measuring, q8_0
+KV with the quants-first layout the packed path requires (`GGML_SYCL_FA_Q8_GQA_DIRECT=1`
+additionally requires `GGML_SYCL_Q8_KV_QUANTS_FIRST=1`):
+
+| config | `ntiles_total` | `parallel_blocks` | `blocks_total` | `work_items_total` |
+|---|---:|---:|---:|---:|
+| packing off, wg=16 | 32 | 16 | 512 | 65536 |
+| packing on, wg=16 | 8 | 16 (capped) | 128 | 16384 |
+| packing on, wg=64 | 8 | 64 | 512 | 65536 |
+
+At wg=64 the packed kernel regains the full grid while still reading a quarter of the K
+traffic. That configuration was not reachable before the occupancy fix.
+
+**The performance prediction is refuted.** Absolute numbers swung roughly 2x between passes
+from a competing user workload, so each pass is normalized against its own `base2` arm:
+
+depth 8192, ratio to `base2`:
+
+| config | pass 1 | pass 2 | pass 3 |
+|---|---:|---:|---:|
+| packing off, wg=16 | 1.298 | 1.321 | **1.345** |
+| packing on, wg=16 | 1.121 | 1.173 | 1.156 |
+| packing on, wg=64 | 0.876 | 0.974 | 0.946 |
+
+depth 16384, ratio to `base2`:
+
+| config | pass 1 | pass 2 | pass 3 |
+|---|---:|---:|---:|
+| packing off, wg=16 | 1.689 | 1.617 | **1.630** |
+| packing on, wg=16 | 1.382 | 1.327 | 1.315 |
+| packing on, wg=64 | 1.073 | 1.062 | 1.068 |
+
+Ordering is consistent across all six passes: **packing loses at every occupancy setting,
+and restoring its grid makes it worse rather than better.**
+
+The likely reason is in Phase 0's own data. Combine was 2.1 % of flash-attention time at 2
+splits. It scales with the split count, so at 64 splits it is a 64-wide reduction over
+every output element backed by 32x the `dst_tmp` scratch. Split-K overhead overtakes the
+K-traffic saving well before the grid is refilled. The same ceiling explains why wg=32
+regressed against wg=16 in the Phase 1 sweep.
+
+Consequences:
+
+- The packed GQA kernel stays reverted, now for a measured reason on a corrected baseline
+  rather than a confounded one. The working-tree restore was discarded; the candidate
+  remains in history at `2d53f3b25`.
+- Split-K is not a free lever. There is an optimum near wg=16 on this device and pushing
+  past it costs more in combine than it returns in parallelism. Any future change that
+  consumes split capacity - GQA packing, or a split-KV rewrite - has to pay for it out of
+  that same budget.
+- Correctness with the packed path enabled was clean (`0 GATE-FAIL`), so this is a
+  performance verdict, not a correctness one.
+
 ## Baseline to beat
 
 Post-P5 phase-7 held numbers, Mistral-7B-Instruct v0.1 Q4_K_M, q8_0/q8_0 KV:
