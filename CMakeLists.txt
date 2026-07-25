@@ -116,6 +116,7 @@ option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT}
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 
 # 3rd party libs
+option(LLAMA_DOWNLOAD   "llama-common: enable model download support (cpp-httplib/OpenSSL); OFF builds a stub" ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
@@ -261,8 +262,11 @@ add_subdirectory(src)
 #
 
 if (LLAMA_BUILD_COMMON)
+    # the server needs cpp-httplib even when the downloader is stubbed out
+    if (LLAMA_DOWNLOAD OR LLAMA_BUILD_SERVER)
+        add_subdirectory(vendor/cpp-httplib)
+    endif()
     add_subdirectory(common)
-    add_subdirectory(vendor/cpp-httplib)
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
@@ -270,16 +274,22 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     add_subdirectory(tests)
 endif()
 
+# EXISTS guards: the generated lib branch (scripts/prune-to-lib.sh) removes these
+# directories; a standalone checkout of that branch must still configure cleanly.
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-    add_subdirectory(pocs)
+    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+        add_subdirectory(examples)
+    endif()
+    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/pocs)
+        add_subdirectory(pocs)
+    endif()
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if (LLAMA_BUILD_APP)
+if (LLAMA_BUILD_APP AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app)
     add_subdirectory(app)
 endif()
 
@@ -316,6 +326,14 @@ install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
 if (LLAMA_BUILD_COMMON)
     install(TARGETS llama-common LIBRARY)
+    # SDK surface for the helper library: headers land under include/llama-common,
+    # plus the nlohmann headers its public headers reference. Note: shared builds
+    # only; llama-common-base is folded into the shared object and not installed.
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/common/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llama-common
+            FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/vendor/nlohmann
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 
 configure_package_config_file(

@@ -211,6 +211,7 @@ static void test(void) {
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
 
+#ifndef LLAMA_DOWNLOAD_DISABLED
     printf("test-arg-parser: test download functions\n\n");
     const char * GOOD_URL = "http://ggml.ai/";
     const char * BAD_URL  = "http://ggml.ai/404";
@@ -241,6 +242,7 @@ static void test(void) {
             printf("  expected error: %s\n\n", e.what());
         }
     }
+#endif // LLAMA_DOWNLOAD_DISABLED
 
     printf("test-arg-parser: all tests OK\n\n");
 }
