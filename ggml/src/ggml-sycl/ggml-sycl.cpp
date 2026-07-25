@@ -94,6 +94,51 @@ int g_ggml_sycl_enable_flash_attention = 1;
 int g_ggml_sycl_fa_force_vec_standard = 0;
 int g_ggml_sycl_fa_q8_gqa_tile = 0;
 
+// Resident work-groups per Xe-core, consumed by launch_fattn as max_blocks_per_sm.
+//
+// This was previously derived as max_work_group_size / max_compute_units, which
+// divides a work-item count by an execution-unit count. On an Arc A770 reporting
+// 512 compute units and a 1024 max work-group size that yields 2, so
+// blocks_per_wave = nsm * max_wg_per_cu = 64 and flash-attention decode was
+// measured launching 64 work-groups of 128 work-items - about 12.5% of the
+// device's ~65536 resident work-items - at every depth and on every route.
+//
+// Xe-HPG has 16 XVE per Xe-core and 8 hardware threads per XVE, so 128 hardware
+// threads per Xe-core. A 128-work-item work-group at SIMD16 occupies 8 of them,
+// giving 16 resident work-groups, which the P5.3 IGC inventory supports for this
+// kernel family (GRF 128, zero spill).
+//
+// Measured on A770 with Mistral-7B Q4_K_M, q8_0 KV, tg32 tokens/s, versus the
+// previous effective value of 2:
+//
+//   depth |  wg=2 |  wg=4 |  wg=8 | wg=16 | wg=32
+//       0 | 26.63 |     - | 26.80 | 26.68 |     -
+//    4096 | 18.93 | 21.39 | 22.51 | 22.62 | 22.89
+//    8192 | 14.81 | 17.84 | 19.85 | 20.74 | 20.46
+//   16384 | 10.22 | 13.46 | 15.90 | 17.49 | 16.46
+//
+// 16 wins both deep cells and 32 regresses there, so the hardware ceiling is the
+// right default rather than a clamped fraction of it. Depth 0 is unaffected
+// because parallel_blocks is clamped by ntiles_KQ at shallow depth.
+static int ggml_sycl_max_wg_per_cu() {
+    static const int value = [] {
+        const int fallback = 16;
+        const char * env = getenv("GGML_SYCL_MAX_WG_PER_CU");
+        if (env == nullptr || env[0] == '\0') {
+            return fallback;
+        }
+        char * end = nullptr;
+        const long parsed = strtol(env, &end, 10);
+        if (end == env || *end != '\0' || parsed < 1 || parsed > 1024) {
+            GGML_LOG_WARN(
+                "%s: ignoring invalid GGML_SYCL_MAX_WG_PER_CU=\"%s\", using %d\n",
+                __func__, env, fallback);
+            return fallback;
+        }
+        return (int) parsed;
+    }();
+    return value;
+}
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -155,7 +200,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.devices[gpu_index].warp_size = WARP_SIZE;
 
         info.max_work_group_sizes[gpu_index] = prop.get_max_work_group_size();
-        info.devices[gpu_index].max_wg_per_cu = info.max_work_group_sizes[gpu_index] / prop.get_max_compute_units();
+        info.devices[gpu_index].max_wg_per_cu = ggml_sycl_max_wg_per_cu();
         info.devices[gpu_index].hw_info = get_device_hw_info(&device);
 
         // Only check GPU devices; CPU devices use OpenCL and would otherwise
