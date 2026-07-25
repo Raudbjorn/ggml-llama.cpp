@@ -1277,8 +1277,23 @@ void launch_fattn(
     } else {
         const int ntiles_KQ = (K->ne[1] + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by tensor size.
 
+        // Split-K is a way to manufacture parallelism when the tile count alone
+        // cannot fill the device; it is not free. Every extra split multiplies the
+        // dst_tmp scratch and widens the combine reduction over every output
+        // element. So start at one split and let the efficiency search below grow
+        // it only while the machine is still underfilled, bounded by occupancy.
+        //
+        // Starting at max_blocks_per_sm instead makes it a floor rather than a
+        // cap. That is harmless while the value is 2, but once it reflects real
+        // occupancy it forces splits onto work that never needed them: prefill has
+        // ntiles_total = 4096 against a 512 blocks_per_wave and is already
+        // saturated, yet it was measured launching 4x the blocks and regressing
+        // 15.08% (f16 pp512) and 3.48% (q8_0 pp512) at depth 0.
+        parallel_blocks = 1;
+
         // parallel_blocks must not be larger than what the tensor size allows:
-        parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
+        const int max_parallel_blocks = std::min(max_blocks_per_sm, ntiles_KQ);
+        parallel_blocks = std::min(parallel_blocks, max_parallel_blocks);
         // todo fix the hard code change
         // parallel_blocks = ntiles_KQ;
 
@@ -1287,7 +1302,7 @@ void launch_fattn(
         const int blocks_per_wave = nsm * max_blocks_per_sm;
         int nwaves_best = 0;
         int efficiency_percent_best = 0;
-        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
+        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= max_parallel_blocks; ++parallel_blocks_test) {
             const int nblocks_total = ntiles_total * parallel_blocks_test;
             const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
             const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
