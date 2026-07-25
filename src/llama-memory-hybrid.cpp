@@ -140,6 +140,11 @@ void llama_memory_hybrid::clear(bool data) {
     mem_recr->clear(data);
 }
 
+void llama_memory_hybrid::clear_data_only() {
+    mem_attn->clear_data_only();
+    mem_recr->clear_data_only();
+}
+
 bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     // Try removing from the recurrent cache first since it may fail. If it does
     // fail, the cache will not have been mutated.
@@ -284,6 +289,12 @@ ggml_tensor * llama_memory_hybrid_context::get_turbo_rot_inverse() const {
 
 ggml_tensor * llama_memory_hybrid_context::get_turbo_innerq_scale_inv() const {
     return ctx_attn ? ctx_attn->get_turbo_innerq_scale_inv() : nullptr;
+}
+
+void llama_memory_hybrid_context::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+    if (ctx_attn) {
+        ctx_attn->turbo_innerq_publish_scale_inv(scale_inv, n, finalized);
+    }
 }
 
 const llama_memory_recurrent_context * llama_memory_hybrid_context::get_recr() const {

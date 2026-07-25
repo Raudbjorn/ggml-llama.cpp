@@ -17,7 +17,12 @@
 #include "fattn-common.hpp"
 #include "fattn-tile.hpp"
 #include "fattn-vec.hpp"
+#include "fattn-xmx.hpp"
 #include "fattn.hpp"
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
 
 
 #define FATTN_VEC_CASE(D, type_K, type_V)                                                                        \
@@ -25,9 +30,18 @@
         const bool type_K_okay = K->type == (type_K) || (K->type == GGML_TYPE_F32 && (type_K) == GGML_TYPE_F16); \
         const bool type_V_okay = V->type == (type_V) || (V->type == GGML_TYPE_F32 && (type_V) == GGML_TYPE_F16); \
         if (Q->ne[0] == (D) && type_K_okay && type_V_okay) {                                                     \
+            if constexpr ((D) == 128 && (type_K) == GGML_TYPE_Q8_0 && (type_V) == GGML_TYPE_Q8_0) {              \
+                const bool K_quants_first = ggml_sycl_tensor_is_kv_q8_quants_first(K);                                     \
+                const bool V_quants_first = ggml_sycl_tensor_is_kv_q8_quants_first(V);                                     \
+                GGML_ASSERT(K_quants_first == V_quants_first);                                                     \
+                if (K_quants_first) {                                                                             \
+                    ggml_sycl_flash_attn_ext_vec_case_q8_quants_first<D>(ctx, dst);                               \
+                    return;                                                                                      \
+                }                                                                                               \
+            }                                                                                                   \
             ggml_sycl_flash_attn_ext_vec_case<D, type_K, type_V>(ctx, dst);                                      \
             return;                                                                                              \
-        }                                                                                                        \
+        }                                                                                                       \
     }                                                                    \
 
 #define FATTN_VEC_CASES_ALL_D(type_K, type_V) \
@@ -36,21 +50,37 @@
     FATTN_VEC_CASE(256, type_K, type_V)       \
     FATTN_VEC_CASE(512, type_K, type_V)       \
 
+// Turbo blocks span 128 elements, so turbo K/V only supports head sizes that are
+// multiples of 128 (see the D % 128 gate in ggml_sycl_get_best_fattn_kernel).
+#define FATTN_VEC_CASES_TURBO_D(type_K, type_V) \
+    FATTN_VEC_CASE(128, type_K, type_V)         \
+    FATTN_VEC_CASE(256, type_K, type_V)         \
+    FATTN_VEC_CASE(512, type_K, type_V)         \
+
 static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_tensor * Q = dst->src[0];
     ggml_tensor * K = dst->src[1];
     ggml_tensor * V = dst->src[2];
 
-#ifdef GGML_SYCL_FA_ALL_QUANTS
+#ifdef GGML_SYCL_FA_ALL_QUANTS  // P3.2.2a2a first cut: leave the
+       // mixed-K flash_attn_ext_vec<...,42/43/44,...> dispatch block
+       // available, but with the macro UNDEFINED in
+       // ggml/src/ggml-sycl/common.hpp:48 by default. The runtime
+       // rejection path in ggml_sycl_get_best_fattn_kernel()
+       // (fattn.cpp:224,237) is behind #ifndef, so the macro
+       // state is the single source of truth - flipping it in
+       // common.hpp is the only edit needed to switch dispatch
+       // modes end-to-end. See ASSUMPTIONS.md:553-583 +
+       // RALPH_TASKS.md:1237-1251.
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_F16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_F16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_F16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_F16)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_F16)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_F16)
 
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
@@ -58,9 +88,9 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_Q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_Q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_Q4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_Q4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_Q4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_Q4_0)
 
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q4_1)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_1)
@@ -68,9 +98,9 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q4_1)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q4_1)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_Q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_Q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_Q4_1)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_Q4_1)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_Q4_1)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_Q4_1)
 
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q5_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q5_0)
@@ -78,9 +108,9 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q5_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q5_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_Q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_Q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_Q5_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_Q5_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_Q5_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_Q5_0)
 
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q5_1)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q5_1)
@@ -88,9 +118,9 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q5_1)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q5_1)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_Q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_Q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_Q5_1)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_Q5_1)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_Q5_1)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_Q5_1)
 
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q8_0)
@@ -98,46 +128,55 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_Q8_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_Q8_0)
 
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_F16,  GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q5_0, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q5_1, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_TURBO2_0)
 
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_F16,  GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q5_0, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q5_1, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_TURBO3_0)
 
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_TURBO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_TURBO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_TURBO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_TURBO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_F16,  GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q4_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q4_1, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q5_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q5_1, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_TURBO4_0)
 #else
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO2_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,GGML_TYPE_TURBO4_0)
+    // P3.2.2b0a1b4aab: post-auto-asymmetric K=q8_0 + V=turbo mix rows;
+    // already in the GGML_SYCL_FA_ALL_QUANTS matrix at :126/:136/:146
+    // for the macro-DEF branch, but the cheap-cut #else branch compiles
+    // only same-type K=V pairs, so the post-auto-asymmetric path needs
+    // its own row here. Dispatches require explicit -ctk q8_0 -ctv turbo
+    // (or auto-asymmetric K downgrade produces this pair at runtime).
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,GGML_TYPE_TURBO4_0)
 #endif // GGML_SYCL_FA_ALL_QUANTS
 
     GGML_ABORT("Not match KV type in vec");
@@ -148,7 +187,153 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE     =   0,
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_TILE     = 200,
+    BEST_FATTN_KERNEL_XMX      = 300,
 };
+
+struct ggml_sycl_fattn_profile_bucket {
+    uint64_t launches = 0;
+    uint64_t conversion_us = 0;
+    uint64_t conversion_bytes = 0;
+    uint64_t stage1_us = 0;
+    uint64_t combine_us = 0;
+    uint64_t gqa_ratio = 0;
+    uint64_t repeated_packed_kv_bytes = 0;
+};
+
+class ggml_sycl_fattn_profile_collector {
+public:
+    ~ggml_sycl_fattn_profile_collector() {
+        for (int route = 0; route < 2; ++route) {
+            for (int layout = 0; layout < 2; ++layout) {
+                const ggml_sycl_fattn_profile_bucket & bucket = buckets[route][layout];
+                if (bucket.launches == 0) {
+                    continue;
+                }
+                fprintf(
+                    stderr,
+                    "GGML_SYCL_FA_PROFILE: route=%s layout=%s launches=%llu "
+                    "conversion_us=%llu conversion_bytes=%llu stage1_us=%llu "
+                    "combine_us=%llu gqa=%llu repeated_packed_kv_bytes=%llu\n",
+                    route == 0 ? "VEC" : "TILE",
+                    layout == 0 ? "canonical" : "quants-first",
+                    (unsigned long long) bucket.launches,
+                    (unsigned long long) bucket.conversion_us,
+                    (unsigned long long) bucket.conversion_bytes,
+                    (unsigned long long) bucket.stage1_us,
+                    (unsigned long long) bucket.combine_us,
+                    (unsigned long long) bucket.gqa_ratio,
+                    (unsigned long long) bucket.repeated_packed_kv_bytes);
+            }
+        }
+        fflush(stderr);
+    }
+
+    void record(
+        bool tile_route,
+        bool quants_first,
+        uint64_t conversion_us,
+        uint64_t conversion_bytes,
+        uint64_t stage1_us,
+        uint64_t combine_us,
+        uint64_t gqa_ratio,
+        uint64_t repeated_packed_kv_bytes) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ggml_sycl_fattn_profile_bucket & bucket =
+            buckets[tile_route ? 1 : 0][quants_first ? 1 : 0];
+        bucket.launches++;
+        bucket.conversion_us += conversion_us;
+        bucket.conversion_bytes += conversion_bytes;
+        bucket.stage1_us += stage1_us;
+        bucket.combine_us += combine_us;
+        bucket.gqa_ratio = gqa_ratio;
+        bucket.repeated_packed_kv_bytes += repeated_packed_kv_bytes;
+    }
+
+private:
+    std::mutex mutex;
+    ggml_sycl_fattn_profile_bucket buckets[2][2] = {};
+};
+
+bool ggml_sycl_fattn_profile_enabled() {
+    static const bool enabled = [] {
+        const char * value = getenv("GGML_SYCL_FA_PROFILE");
+        return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+    }();
+    return enabled;
+}
+
+void ggml_sycl_fattn_profile_record(
+    bool tile_route,
+    bool quants_first,
+    uint64_t conversion_us,
+    uint64_t conversion_bytes,
+    uint64_t stage1_us,
+    uint64_t combine_us,
+    uint64_t gqa_ratio,
+    uint64_t repeated_packed_kv_bytes) {
+    static ggml_sycl_fattn_profile_collector collector;
+    collector.record(
+        tile_route,
+        quants_first,
+        conversion_us,
+        conversion_bytes,
+        stage1_us,
+        combine_us,
+        gqa_ratio,
+        repeated_packed_kv_bytes);
+}
+
+static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_tensor * dst) {
+    if (!ggml_sycl_fattn_profile_enabled() || route == BEST_FATTN_KERNEL_NONE) {
+        return;
+    }
+
+    int route_index = 0;
+    const char * route_name = "VEC";
+    switch (route) {
+        case BEST_FATTN_KERNEL_VEC:
+            break;
+        case BEST_FATTN_KERNEL_TILE:
+            route_index = 1;
+            route_name = "TILE";
+            break;
+        case BEST_FATTN_KERNEL_XMX:
+            route_index = 2;
+            route_name = "XMX";
+            break;
+        case BEST_FATTN_KERNEL_NONE:
+            return;
+    }
+
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+    const bool is_decode = Q->ne[1] == 1;
+    static std::atomic<bool> logged[3][2] = {};
+    if (logged[route_index][is_decode ? 0 : 1].exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+
+    const bool K_quants_first =
+        K->type == GGML_TYPE_Q8_0 && ggml_sycl_tensor_is_kv_q8_quants_first(K);
+    const bool V_quants_first =
+        V->type == GGML_TYPE_Q8_0 && ggml_sycl_tensor_is_kv_q8_quants_first(V);
+    // llama-bench suppresses GGML_LOG_INFO in JSON mode; trace output must bypass its callback.
+    fprintf(
+        stderr,
+        "GGML_SYCL_FA_ROUTE: route=%s phase=%s q_tokens=%lld head_dim=%lld gqa=%lld "
+        "type_k=%s type_v=%s k_quants_first=%d v_quants_first=%d\n",
+        route_name,
+        is_decode ? "decode" : "prefill",
+        (long long) Q->ne[1],
+        (long long) K->ne[0],
+        (long long) (Q->ne[2] / K->ne[2]),
+        ggml_type_name(K->type),
+        ggml_type_name(V->type),
+        K_quants_first ? 1 : 0,
+        V_quants_first ? 1 : 0);
+    fflush(stderr);
+}
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
     GGML_UNUSED(device);
@@ -170,6 +355,15 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
     float max_bias = 0.0f;
     memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
+
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+    // The XMX FA kernel ignores ALiBi (max_bias), logit soft-capping, attention
+    // sinks (src[4]) and multi-sequence batches (ne[3] > 1). Route any of those to
+    // the existing VEC/TILE kernels so GGML_SYCL_FA_XMX cannot silently change results.
+    const bool xmx_features_ok =
+        max_bias == 0.0f && logit_softcap == 0.0f && dst->src[4] == nullptr &&
+        Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 && (mask == nullptr || mask->ne[3] == 1);
 
     bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
     for (const ggml_tensor * t : {Q, K, V, mask}) {
@@ -211,7 +405,15 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     }
 
 #ifndef GGML_SYCL_FA_ALL_QUANTS
-    if (K->type != V->type) {
+    // P3.2.2b0a1b4aab: admit the post-auto-asymmetric K=q8_0 + V=turbo
+    // pair so Qwen3 GQA 8:1 (after the auto-asymmetric K downgrade at
+    // src/llama-kv-cache.cpp:152 fires) can reach the VEC kernel.
+    const bool k_q8_0_v_turbo =
+        (K->type == GGML_TYPE_Q8_0) &&
+        (V->type == GGML_TYPE_TURBO2_0 ||
+         V->type == GGML_TYPE_TURBO3_0 ||
+         V->type == GGML_TYPE_TURBO4_0);
+    if (K->type != V->type && !k_q8_0_v_turbo) {
         return BEST_FATTN_KERNEL_NONE;
     }
 #endif // GGML_SYCL_FA_ALL_QUANTS
@@ -242,20 +444,62 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
     // Turbo KV uses the VEC kernel exclusively: it is the only SYCL turbo FA path
     // with complete K and V dequant (need_f16 = false). VEC tiles over Q columns,
-    // so it serves both decode and prefill. TILE turbo is unsupported.
-    switch (K->type) {
-        case GGML_TYPE_TURBO2_0:
-        case GGML_TYPE_TURBO3_0:
-        case GGML_TYPE_TURBO4_0:
-            return BEST_FATTN_KERNEL_VEC;
-        default:
-            break;
+    // so it serves both decode and prefill. TILE turbo is unsupported. Turbo blocks
+    // span 128 elements, so only head sizes that are multiples of 128 are usable.
+    const bool K_turbo = K->type == GGML_TYPE_TURBO2_0 || K->type == GGML_TYPE_TURBO3_0 || K->type == GGML_TYPE_TURBO4_0;
+    const bool V_turbo = V->type == GGML_TYPE_TURBO2_0 || V->type == GGML_TYPE_TURBO3_0 || V->type == GGML_TYPE_TURBO4_0;
+    if (K_turbo || V_turbo) {
+        if (K->ne[0] % 128 != 0) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        // XMX turbo (opt-in, off by default): same turbo type on K and V, D in
+        // {128, 256}. The DPAS kernel dequants turbo blocks into its staging tiles
+        // (rotated domain, same as VEC). D=512 exceeds the 64KB SLM budget, and
+        // mixed turbo or turbo+f16 KV stay on VEC.
+        if (getenv("GGML_SYCL_FA_XMX") && xmx_features_ok && K->type == V->type && (K->ne[0] == 128 || K->ne[0] == 256)) {
+            return BEST_FATTN_KERNEL_XMX;
+        }
+        return BEST_FATTN_KERNEL_VEC;
+    }
+    const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // TILE's quantized staging uses the source-aware non-contiguous converter,
+    // so both canonical and quants-first q8_0 rows are supported here.
+    const bool force_q8_gqa_tile =
+        g_ggml_sycl_fa_q8_gqa_tile == 1 &&
+        Q->ne[1] == 1 &&
+        K->ne[0] == 128 &&
+        K->type == GGML_TYPE_Q8_0 &&
+        V->type == GGML_TYPE_Q8_0 &&
+        gqa_opt_applies &&
+        gqa_ratio >= 2;
+    if (force_q8_gqa_tile) {
+        return BEST_FATTN_KERNEL_TILE;
+    }
+    const bool force_vec_standard =
+        g_ggml_sycl_fa_force_vec_standard == 1 &&
+        Q->ne[1] == 1 &&
+        K->ne[0] == 128 &&
+        K->type == V->type &&
+        (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) &&
+        can_use_vector_kernel;
+    if (force_vec_standard) {
+        return BEST_FATTN_KERNEL_VEC;
     }
 
-    // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
-    const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
-    // Todo: Use the XMX kernel if possible:
+    // XMX (DPAS) path -- opt-in via GGML_SYCL_FA_XMX. Scope: f16 or q8_0 KV,
+    // D in {128, 256}, additive mask (ne[2]==1). The math is validated
+    // (docs/research/xmx_fa_*.cpp) and oracle-gated; off by default. D=512 is
+    // excluded (staging tiles exceed the 64KB SLM budget).
+    const bool xmx_kv_ok =
+        (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) &&
+        K->type == V->type &&
+        !ggml_sycl_tensor_is_kv_q8_quants_first(K) &&
+        !ggml_sycl_tensor_is_kv_q8_quants_first(V);
+    if (getenv("GGML_SYCL_FA_XMX") && xmx_features_ok && xmx_kv_ok && (Q->ne[0] == 128 || Q->ne[0] == 256)) {
+        return BEST_FATTN_KERNEL_XMX;
+    }
+
 
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
@@ -276,7 +520,10 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_set_device(ctx.device);
-    switch (ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst)) {
+    const best_fattn_kernel route =
+        ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst);
+    ggml_sycl_log_fattn_route_once(route, dst);
+    switch (route) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("Not support Flash-Attention");
         case BEST_FATTN_KERNEL_TILE:
@@ -285,23 +532,15 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         case BEST_FATTN_KERNEL_VEC:
             ggml_sycl_flash_attn_ext_vec(ctx, dst);
             break;
+        case BEST_FATTN_KERNEL_XMX:
+            ggml_sycl_flash_attn_ext_xmx(ctx, dst);
+            break;
     }
 }
 
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
-    const ggml_tensor * K = dst->src[1];
-    const ggml_tensor * V = dst->src[2];
-    // Turbo KV is vetoed on the SYCL FA path: the turbo VEC FA kernel is broken on
-    // the Arc A770 in two independent ways. (1) The Intel Graphics Compiler hangs
-    // translating flash_attn_ext_vec<D, TURBOx, TURBOx> to ISA (IGC 2.36.3 and
-    // 2.38.2; oneAPI 2026.0 and 2025.3 front-ends). (2) Forced to compile with
-    // -cl-opt-disable, the kernel runs but emits garbage, while f16 FA at the same
-    // -O0 stays coherent -- so it is a real kernel bug, not a compiler artifact.
-    // TurboQuant math is correct on CPU FA. Turbo runs the non-FA path; do not
-    // relax this veto until the VEC kernel is fixed or turbo moves to Vulkan.
-    if (K->type == GGML_TYPE_TURBO2_0 || K->type == GGML_TYPE_TURBO3_0 || K->type == GGML_TYPE_TURBO4_0 ||
-        V->type == GGML_TYPE_TURBO2_0 || V->type == GGML_TYPE_TURBO3_0 || V->type == GGML_TYPE_TURBO4_0) {
-        return false;
-    }
+    // Turbo KV runs on the VEC kernel. The historical veto here (IGC hang + garbage
+    // output) traced to vec_dot_fattn_vec_KQ_turbo_generic reading Q_v as a full
+    // row instead of the caller's per-thread register slice; fixed in fattn-common.hpp.
     return ggml_sycl_get_best_fattn_kernel(device, dst) != BEST_FATTN_KERNEL_NONE;
 }

@@ -1,22 +1,52 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-backend.h"
+#include "ggml-innerq.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
 #include "llama.h"
+// ggml-sycl.h includes the failure-status type that is referenced from
+// both SYCL and non-SYCL paths here; pulling it in unconditionally keeps
+// the helpers below compiling identically. The actual graph_compute
+// call sites are guarded by GGML_USE_SYCL.
+#include "ggml-sycl.h"
+
+static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_backend_sched_t sched) {
+#ifdef GGML_USE_SYCL
+    const int n_backends = ggml_backend_sched_get_n_backends(sched);
+    for (int i = 0; i < n_backends; ++i) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
+        if (!ggml_backend_is_sycl(backend)) {
+            continue;
+        }
+        const ggml_backend_sycl_failure failure = ggml_backend_sycl_consume_last_failure(backend);
+        if (failure.status != GGML_STATUS_SUCCESS) {
+            return failure;
+        }
+    }
+#else
+    GGML_UNUSED(sched);
+#endif
+    return { GGML_STATUS_SUCCESS, GGML_SYCL_FAILURE_CAUSE_NONE, 0 };
+}
+
 
 #include <cinttypes>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 //
 // llama_context
@@ -28,6 +58,98 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
         case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
     }
     throw std::runtime_error("Unsupported ctx type");
+}
+
+struct turbo_innerq_eval_capture {
+    llama_memory_context_i * mctx = nullptr;
+    ggml_backend_sched_eval_callback user_cb = nullptr;
+    void * user_ud = nullptr;
+    bool user_requested_current = false;
+    bool enabled = false;
+    bool captured = false;
+};
+
+static bool turbo_innerq_is_vcur_probe_tensor(const ggml_tensor * t) {
+    return t != nullptr && (strncmp(t->name, "Vcur_clamped", 12) == 0 || strncmp(t->name, "Vcur", 4) == 0);
+}
+
+static void turbo_innerq_capture_and_publish(const ggml_tensor * t, turbo_innerq_eval_capture * cap) {
+    if (cap == nullptr || !cap->enabled || cap->captured || !turbo_innerq_is_vcur_probe_tensor(t)) {
+        return;
+    }
+
+    if (cap->mctx == nullptr) {
+        LLAMA_LOG_INFO("%s: InnerQ capture skipped: memory context missing for %s\n",
+                       __func__, t->name);
+        return;
+    }
+
+    if (t->ne[0] != 128 || t->ne[1] < 1 || t->ne[2] < 1) {
+        LLAMA_LOG_INFO("%s: InnerQ capture skipped: unexpected probe shape for %s (%" PRId64 ", %" PRId64 ", %" PRId64 ")\n",
+                       __func__, t->name, t->ne[0], t->ne[1], t->ne[2]);
+        return;
+    }
+
+    const int64_t n_heads = t->ne[1];
+    const int64_t n_tokens = std::min<int64_t>(t->ne[2], 256);
+    const size_t row_size = ggml_row_size(t->type, t->ne[0]);
+    const size_t nbytes = size_t((n_tokens - 1) * t->nb[2] + (n_heads - 1) * t->nb[1] + row_size);
+    std::vector<uint8_t> raw(nbytes);
+    ggml_backend_tensor_get(t, raw.data(), 0, nbytes);
+
+    const auto * traits = ggml_get_type_traits(t->type);
+    if (t->type != GGML_TYPE_F32 && traits->to_float == nullptr) {
+        LLAMA_LOG_INFO("%s: InnerQ capture skipped: no to_float for type %d on %s\n",
+                       __func__, (int) t->type, t->name);
+        return;
+    }
+
+    const int64_t head_dim = t->ne[0];
+    const int64_t n_probe = n_heads * n_tokens;
+    std::vector<float> probe(n_probe * head_dim);
+
+    for (int64_t tok = 0; tok < n_tokens; ++tok) {
+        for (int64_t head = 0; head < n_heads; ++head) {
+            const char * src = reinterpret_cast<const char *>(raw.data()) + tok * t->nb[2] + head * t->nb[1];
+            float * dst = probe.data() + (tok * n_heads + head) * head_dim;
+            if (t->type == GGML_TYPE_F32) {
+                memcpy(dst, src, head_dim * sizeof(float));
+            } else {
+                traits->to_float(src, dst, head_dim);
+            }
+        }
+    }
+
+    float scale_inv[llama_turbo_innerq_runtime_snapshot::N_CHANNELS];
+    ggml_innerq_compute_k_squared_profile(probe.data(), (int) n_probe, (int) head_dim, scale_inv);
+    cap->mctx->turbo_innerq_publish_scale_inv(scale_inv, llama_turbo_innerq_runtime_snapshot::N_CHANNELS, true);
+    LLAMA_LOG_INFO("%s: InnerQ publish_scale_inv issued from %s (n_probe=%" PRId64 ")\n",
+                   __func__, t->name, n_probe);
+    cap->captured = true;
+}
+
+static bool turbo_innerq_eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
+    auto * cap = static_cast<turbo_innerq_eval_capture *>(user_data);
+    const bool internal_need = cap && cap->enabled && !cap->captured && turbo_innerq_is_vcur_probe_tensor(t);
+
+    if (ask) {
+        const bool user_need = cap && cap->user_cb ? cap->user_cb(t, true, cap->user_ud) : false;
+        if (internal_need) {
+            LLAMA_LOG_INFO("%s: InnerQ callback requested %s (%" PRId64 ", %" PRId64 ", %" PRId64 ")\n",
+                           __func__, t->name, t->ne[0], t->ne[1], t->ne[2]);
+            cap->user_requested_current = user_need;
+        }
+        return internal_need || user_need;
+    }
+
+    if (internal_need) {
+        turbo_innerq_capture_and_publish(t, cap);
+        const bool call_user = cap->user_requested_current;
+        cap->user_requested_current = false;
+        return call_user && cap->user_cb ? cap->user_cb(t, false, cap->user_ud) : true;
+    }
+
+    return cap && cap->user_cb ? cap->user_cb(t, false, cap->user_ud) : true;
 }
 
 llama_context::llama_context(
@@ -685,10 +807,22 @@ void llama_context::sched_reserve() {
 
 void llama_context::synchronize() {
     if (!sched) {
+        // Nothing to sync; the last compute-path status stands.
+        // Don't overwrite a previous non-success result.
         return;
     }
 
     ggml_backend_sched_synchronize(sched.get());
+    const ggml_backend_sycl_failure sync_failure = llama_backend_sched_consume_sycl_failure(sched.get());
+    if (sync_failure.status != GGML_STATUS_SUCCESS) {
+        last_sync_status = sync_failure.status;
+        LLAMA_LOG_ERROR("%s: backend synchronize failed, status: %d cause: %d raw_code: %d\n",
+                __func__, last_sync_status, (int) sync_failure.cause, sync_failure.raw_code);
+        return;
+    }
+    // Sync succeeded; keep the last compute-path status. Overwriting
+    // with SUCCESS here would clear a previous non-success result from
+    // graph_compute_async and let getters like llama_get_logits() proceed.
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -1303,6 +1437,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
+        last_sync_status = ret;
         return nullptr;
     }
 
@@ -1321,6 +1456,21 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         // that the previous compute is still reading.
         if (cparams.pipeline_parallel) {
             ggml_backend_sched_synchronize(sched.get());
+            const ggml_backend_sycl_failure sync_failure = llama_backend_sched_consume_sycl_failure(sched.get());
+            const ggml_status sync_status = sync_failure.status;
+            last_sync_status = sync_status;
+            if (sync_status != GGML_STATUS_SUCCESS) {
+                const int abort_reason = sync_failure.cause == GGML_SYCL_FAILURE_CAUSE_DEVICE_LOST
+                    ? GGML_INNERQ_ABORT_DEVICE_LOST
+                    : GGML_INNERQ_ABORT_NONE;
+                if (mctx) {
+                    mctx->on_graph_compute_failure(sync_status, abort_reason);
+                }
+                LLAMA_LOG_ERROR("%s: failed to synchronize reused graph, compute status: %d cause: %d raw_code: %d\n",
+                        __func__, sync_status, (int) sync_failure.cause, sync_failure.raw_code);
+                ret = sync_status;
+                return nullptr;
+            }
         }
 
         n_reused++;
@@ -1339,15 +1489,55 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
             ret = GGML_STATUS_FAILED;
+            last_sync_status = ret;
             return nullptr;
         }
 
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
+            last_sync_status = ret;
             return nullptr;
         }
     }
+
+    // InnerQ capture enablement: route through the same env-var
+    // semantics as ggml_innerq_state_decide so the contract stays in
+    // one place. decide() itself is the policy gate (it adds the
+    // model_fp/kv_quant/head_dim checks); this is just the env-var
+    // half. Empty/0 values are treated as disabled, matching
+    // ggml_innerq_state_decide.
+    const bool innerq_env_enabled = []() {
+        const char * env = getenv("LLAMA_ENABLE_INNERQ");
+        return env != nullptr && env[0] != '\0' && env[0] != '0';
+    }();
+    turbo_innerq_eval_capture innerq_cap = {
+        /* .mctx                   = */ mctx,
+        /* .user_cb                = */ cparams.cb_eval,
+        /* .user_ud                = */ cparams.cb_eval_user_data,
+        /* .user_requested_current = */ false,
+        /* .enabled                = */ innerq_env_enabled,
+        /* .captured               = */ false,
+    };
+    const bool use_eval_wrapper = innerq_cap.enabled || innerq_cap.user_cb != nullptr;
+    ggml_backend_sched_set_eval_callback(sched.get(),
+        use_eval_wrapper ? turbo_innerq_eval_callback : nullptr,
+        use_eval_wrapper ? &innerq_cap : nullptr);
+
+    struct sched_eval_callback_restore {
+        ggml_backend_sched_t sched = nullptr;
+        ggml_backend_sched_eval_callback cb = nullptr;
+        void * user_data = nullptr;
+        ~sched_eval_callback_restore() {
+            if (sched) {
+                ggml_backend_sched_set_eval_callback(sched, cb, user_data);
+            }
+        }
+    } restore_eval_cb = {
+        /* .sched     = */ sched.get(),
+        /* .cb        = */ cparams.cb_eval,
+        /* .user_data = */ cparams.cb_eval_user_data,
+    };
 
     // set the input data for the input tensors
     {
@@ -1360,7 +1550,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
 
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    last_sync_status = status;
     if (status != GGML_STATUS_SUCCESS) {
+        if (mctx) {
+            mctx->on_graph_compute_failure(status, GGML_INNERQ_ABORT_NONE);
+        }
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
         return nullptr;
@@ -3562,7 +3756,9 @@ llama_context * llama_init_from_model(
     if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
         (params.type_k == GGML_TYPE_TURBO2_0 || params.type_k == GGML_TYPE_TURBO3_0 || params.type_k == GGML_TYPE_TURBO4_0 ||
          params.type_v == GGML_TYPE_TURBO2_0 || params.type_v == GGML_TYPE_TURBO3_0 || params.type_v == GGML_TYPE_TURBO4_0)) {
-        LLAMA_LOG_WARN("%s: turbo cache types perform best with flash_attn — falling back to MUL_MAT attention\n", __func__);
+        const bool v_is_turbo = params.type_v == GGML_TYPE_TURBO2_0 || params.type_v == GGML_TYPE_TURBO3_0 || params.type_v == GGML_TYPE_TURBO4_0;
+        LLAMA_LOG_WARN("%s: turbo cache types perform best with flash_attn - falling back to MUL_MAT attention%s\n",
+            __func__, v_is_turbo ? " (V is dequantized to F32 at attention time)" : "");
     }
 
     if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
@@ -3680,42 +3876,49 @@ void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
 }
 
-float * llama_get_logits(llama_context * ctx) {
+template<typename T, typename F>
+static T llama_sync_then_or(llama_context * ctx, T failure_value, F && fn) {
     ctx->synchronize();
+    if (ctx->last_sync_status != GGML_STATUS_SUCCESS) {
+        return failure_value;
+    }
 
-    return ctx->get_logits();
+    return fn();
+}
+
+
+float * llama_get_logits(llama_context * ctx) {
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_logits();
+    });
 }
 
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    float * res = nullptr;
-
-    res = ctx->get_sampled_logits_ith(i);
-
-    if (!res) {
-        res = ctx->get_logits_ith(i);
-    }
-
-    return res;
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        float * res = ctx->get_sampled_logits_ith(i);
+        if (!res) {
+            res = ctx->get_logits_ith(i);
+        }
+        return res;
+    });
 }
 
 float * llama_get_embeddings(llama_context * ctx) {
-    ctx->synchronize();
-
-    return ctx->get_embeddings();
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_embeddings();
+    });
 }
 
 float * llama_get_embeddings_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return ctx->get_embeddings_ith(i);
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_embeddings_ith(i);
+    });
 }
 
 float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
-    ctx->synchronize();
-
-    return ctx->get_embeddings_seq(seq_id);
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_embeddings_seq(seq_id);
+    });
 }
 
 void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
@@ -3735,21 +3938,21 @@ llama_memory_t llama_get_memory(const struct llama_context * ctx) {
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {
-    ctx->synchronize();
-
-    return ctx->get_embeddings_nextn();
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_embeddings_nextn();
+    });
 }
 
 float * llama_get_embeddings_nextn_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return ctx->get_embeddings_nextn_ith(i);
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_embeddings_nextn_ith(i);
+    });
 }
 
 float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
-    ctx->synchronize();
-
-    return ctx->get_embeddings_layer_inp(lid);
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_embeddings_layer_inp(lid);
+    });
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
@@ -3757,45 +3960,45 @@ bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler *
 }
 
 llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return ctx->get_sampled_token_ith(i);
+    return llama_sync_then_or<llama_token>(ctx, LLAMA_TOKEN_NULL, [&] {
+        return ctx->get_sampled_token_ith(i);
+    });
 }
 
 float * llama_get_sampled_probs_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return ctx->get_sampled_probs_ith(i);
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_sampled_probs_ith(i);
+    });
 }
 
 float * llama_get_sampled_logits_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return ctx->get_sampled_logits_ith(i);
+    return llama_sync_then_or<float *>(ctx, nullptr, [&] {
+        return ctx->get_sampled_logits_ith(i);
+    });
 }
 
 llama_token * llama_get_sampled_candidates_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return const_cast<llama_token *>(ctx->get_sampled_candidates_ith(i));
+    return llama_sync_then_or<llama_token *>(ctx, nullptr, [&] {
+        return const_cast<llama_token *>(ctx->get_sampled_candidates_ith(i));
+    });
 }
 
 uint32_t llama_get_sampled_candidates_count_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return static_cast<uint32_t>(ctx->get_sampled_candidates_count(i));
+    return llama_sync_then_or<uint32_t>(ctx, 0, [&] {
+        return static_cast<uint32_t>(ctx->get_sampled_candidates_count(i));
+    });
 }
 
 uint32_t llama_get_sampled_logits_count_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return static_cast<uint32_t>(ctx->get_sampled_logits_count(i));
+    return llama_sync_then_or<uint32_t>(ctx, 0, [&] {
+        return static_cast<uint32_t>(ctx->get_sampled_logits_count(i));
+    });
 }
 
 uint32_t llama_get_sampled_probs_count_ith(llama_context * ctx, int32_t i) {
-    ctx->synchronize();
-
-    return static_cast<uint32_t>(ctx->get_sampled_probs_count(i));
+    return llama_sync_then_or<uint32_t>(ctx, 0, [&] {
+        return static_cast<uint32_t>(ctx->get_sampled_probs_count(i));
+    });
 }
 
 struct ggml_cgraph * llama_graph_reserve(
@@ -3849,6 +4052,15 @@ void llama_memory_clear(llama_memory_t mem, bool data) {
     }
 
     mem->clear(data);
+}
+
+// Dispatch through the llama_memory_i virtual; non-overriding memory types use its virtual default.
+void llama_memory_clear_data_only(llama_memory_t mem) {
+    if (!mem) {
+        return;
+    }
+
+    mem->clear_data_only();
 }
 
 bool llama_memory_seq_rm(
@@ -3974,20 +4186,23 @@ size_t llama_state_get_size(llama_context * ctx) {
 }
 
 size_t llama_state_get_data(llama_context * ctx, uint8_t * dst, size_t size) {
-    ctx->synchronize();
-
-    return ctx->state_get_data(dst, size);
+    return llama_sync_then_or<size_t>(ctx, 0, [&] {
+        return ctx->state_get_data(dst, size);
+    });
 }
 
 // Sets the state reading from the specified source address
 size_t llama_state_set_data(llama_context * ctx, const uint8_t * src, size_t size) {
-    ctx->synchronize();
-
-    return ctx->state_set_data(src, size);
+    return llama_sync_then_or<size_t>(ctx, 0, [&] {
+        return ctx->state_set_data(src, size);
+    });
 }
 
 bool llama_state_load_file(llama_context * ctx, const char * path_session, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
     ctx->synchronize();
+    if (ctx->last_sync_status != GGML_STATUS_SUCCESS) {
+        return false;
+    }
 
     try {
         return ctx->state_load_file(path_session, tokens_out, n_token_capacity, n_token_count_out);
@@ -3999,6 +4214,9 @@ bool llama_state_load_file(llama_context * ctx, const char * path_session, llama
 
 bool llama_state_save_file(llama_context * ctx, const char * path_session, const llama_token * tokens, size_t n_token_count) {
     ctx->synchronize();
+    if (ctx->last_sync_status != GGML_STATUS_SUCCESS) {
+        return false;
+    }
 
     try {
         return ctx->state_save_file(path_session, tokens, n_token_count);
@@ -4025,18 +4243,21 @@ size_t llama_state_seq_get_size_ext(llama_context * ctx, llama_seq_id seq_id, ll
 }
 
 size_t llama_state_seq_get_data_ext(llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    ctx->synchronize();
-
-    return ctx->state_seq_get_data(seq_id, dst, size, flags);
+    return llama_sync_then_or<size_t>(ctx, 0, [&] {
+        return ctx->state_seq_get_data(seq_id, dst, size, flags);
+    });
 }
 size_t llama_state_seq_set_data_ext(llama_context * ctx, const uint8_t * src, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    ctx->synchronize();
-
-    return ctx->state_seq_set_data(seq_id, src, size, flags);
+    return llama_sync_then_or<size_t>(ctx, 0, [&] {
+        return ctx->state_seq_set_data(seq_id, src, size, flags);
+    });
 }
 
 size_t llama_state_seq_save_file(llama_context * ctx, const char * filepath, llama_seq_id seq_id, const llama_token * tokens, size_t n_token_count) {
     ctx->synchronize();
+    if (ctx->last_sync_status != GGML_STATUS_SUCCESS) {
+        return 0;
+    }
 
     try {
         return ctx->state_seq_save_file(seq_id, filepath, tokens, n_token_count);
@@ -4048,6 +4269,9 @@ size_t llama_state_seq_save_file(llama_context * ctx, const char * filepath, lla
 
 size_t llama_state_seq_load_file(llama_context * ctx, const char * filepath, llama_seq_id dest_seq_id, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
     ctx->synchronize();
+    if (ctx->last_sync_status != GGML_STATUS_SUCCESS) {
+        return 0;
+    }
 
     try {
         return ctx->state_seq_load_file(dest_seq_id, filepath, tokens_out, n_token_capacity, n_token_count_out);

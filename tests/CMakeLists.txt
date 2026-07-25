@@ -144,6 +144,45 @@ if (NOT WIN32)
     )
 endif()
 
+# Linux-only: skip cleanly when any required tool is missing.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat grep hostname
+        find cut sed sort tail env dirname mktemp rm mkdir ln cat chmod mv cp)
+    foreach (P45A_DEP ${P45A_DEPS})
+        find_program(P45A_TEST_${P45A_DEP} NAMES ${P45A_DEP})
+    endforeach()
+    set(P45A_FOUND TRUE)
+    foreach (P45A_DEP ${P45A_DEPS})
+        if (NOT P45A_TEST_${P45A_DEP})
+            set(P45A_FOUND FALSE)
+        endif()
+    endforeach()
+    if (P45A_FOUND)
+        execute_process(
+            COMMAND ${P45A_TEST_git} rev-parse --show-toplevel
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+            OUTPUT_VARIABLE P45A_GIT_TOPLEVEL
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE P45A_GIT_TOPLEVEL_RESULT
+        )
+        get_filename_component(P45A_SOURCE_ROOT "${PROJECT_SOURCE_DIR}" REALPATH)
+        if (P45A_GIT_TOPLEVEL_RESULT EQUAL 0)
+            get_filename_component(P45A_GIT_ROOT "${P45A_GIT_TOPLEVEL}" REALPATH)
+        endif()
+        if (NOT P45A_GIT_TOPLEVEL_RESULT EQUAL 0 OR NOT P45A_GIT_ROOT STREQUAL P45A_SOURCE_ROOT)
+            set(P45A_FOUND FALSE)
+        endif()
+    endif()
+    if (P45A_FOUND)
+        llama_test_cmd(
+            ${P45A_TEST_bash}
+            NAME test-validate-dense-turbo4-capacity
+            WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+            ARGS ${CMAKE_CURRENT_SOURCE_DIR}/test-validate-dense-turbo4-capacity.sh
+        )
+    endif()
+endif()
+
 if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
@@ -192,6 +231,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # llama_build_and_test(test-double-float.cpp) # SLOW
 
     llama_build_and_test(test-llama-archs.cpp)
+    llama_build(test-kv-cache-adaptive-mode.cpp)
+    llama_test(test-kv-cache-adaptive-mode)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
@@ -201,6 +242,8 @@ llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURC
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
+llama_build(test-turbo-innerq-runtime.cpp)
+llama_test(test-turbo-innerq-runtime)
 
 if (GGML_SYCL)
     add_executable(test-sycl-turbo test-sycl-turbo.cpp)

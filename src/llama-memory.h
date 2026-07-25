@@ -70,9 +70,29 @@ struct llama_memory_context_i {
     virtual ggml_tensor * get_turbo_rot_forward() const { return nullptr; }
     virtual ggml_tensor * get_turbo_rot_inverse() const { return nullptr; }
 
-    // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization
-    // Returns nullptr when InnerQ is not active. Override in KV cache contexts.
+    // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization.
+    // Returns nullptr when InnerQ is not active. Today the SYCL path still
+    // uses identity/no-op plumbing until runtime abort/retry state is wired.
     virtual ggml_tensor * get_turbo_innerq_scale_inv() const { return nullptr; }
+
+    // TurboQuant InnerQ: publish a newly-measured scale_inv snapshot back to
+    // the concrete memory context. Hybrid contexts should forward to their
+    // attention-side child.
+    virtual void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+        (void) scale_inv;
+        (void) n;
+        (void) finalized;
+    }
+
+    // P3.2.3.3b2b1a/b3: narrow failure hook. Called when graph_compute() or
+    // an adjacent backend sync path returns non-success to seed state for a
+    // later attempt. `abort_reason` is backend-neutral: device-lost style
+    // causes may be forwarded here, but NaN/PPL/policy causes must come from
+    // their own gates.
+    virtual void on_graph_compute_failure(ggml_status status, int abort_reason = 0) {
+        (void) status;
+        (void) abort_reason;
+    }
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;
@@ -115,6 +135,8 @@ struct llama_memory_i {
 
     // if data == true, the data buffers will also be cleared together with the metadata
     virtual void clear(bool data) = 0;
+    // Default = clear(true); llama_kv_cache overrides to preserve InnerQ calibration.
+    virtual void clear_data_only() { clear(true); }
 
     virtual bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) = 0;
     virtual void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) = 0;

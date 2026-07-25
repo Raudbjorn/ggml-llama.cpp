@@ -57,7 +57,10 @@ namespace fs = std::filesystem;
 static std::string path_str(const fs::path & path) {
     try {
 #if defined(__cpp_lib_char8_t)
-        // C++20 and later: u8string() returns std::u8string
+        // C++20+ char_traits<char8_t>: u8string() returns std::u8string.
+        const std::u8string u8str = path.u8string();
+        return std::string(u8str.begin(), u8str.end());
+#else
         // C++17: u8string() returns std::string
         return path.u8string();
 #endif
@@ -502,18 +505,8 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
 #endif
 
     ggml_backend_load_best("blas", silent, dir_path);
-    ggml_backend_load_best("zendnn", silent, dir_path);
-    ggml_backend_load_best("cann", silent, dir_path);
-    ggml_backend_load_best("cuda", silent, dir_path);
-    ggml_backend_load_best("hip", silent, dir_path);
-    ggml_backend_load_best("metal", silent, dir_path);
-    ggml_backend_load_best("rpc", silent, dir_path);
     ggml_backend_load_best("sycl", silent, dir_path);
     ggml_backend_load_best("vulkan", silent, dir_path);
-    ggml_backend_load_best("virtgpu", silent, dir_path);
-    ggml_backend_load_best("opencl", silent, dir_path);
-    ggml_backend_load_best("hexagon", silent, dir_path);
-    ggml_backend_load_best("musa", silent, dir_path);
     ggml_backend_load_best("openvino", silent, dir_path);
     ggml_backend_load_best("cpu", silent, dir_path);
     // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend

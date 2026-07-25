@@ -14,6 +14,7 @@
 #include <assert.h>
 #include <atomic>
 #include <cinttypes>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -29,8 +30,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <regex>
+#include <string_view>
 
 #include <sycl/sycl.hpp>
+#if __has_include(<unified-runtime/ur_api.h>)
+#include <unified-runtime/ur_api.h>
+#define GGML_SYCL_HAS_UR_API 1
+#else
+#define GGML_SYCL_HAS_UR_API 0
+#endif
 #include <sycl/backend.hpp>
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO
 #include <level_zero/ze_api.h>
@@ -83,6 +91,8 @@ int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
 int g_ggml_sycl_enable_level_zero = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
+int g_ggml_sycl_fa_force_vec_standard = 0;
+int g_ggml_sycl_fa_q8_gqa_tile = 0;
 
 
 static ggml_sycl_device_info ggml_sycl_init() {
@@ -283,6 +293,8 @@ static void ggml_check_sycl() try {
 #else
         g_ggml_sycl_enable_flash_attention = 0;
 #endif
+        g_ggml_sycl_fa_force_vec_standard = get_sycl_env("GGML_SYCL_FA_FORCE_VEC_STANDARD", 0);
+        g_ggml_sycl_fa_q8_gqa_tile = get_sycl_env("GGML_SYCL_FA_Q8_GQA_TILE", 0);
 
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
@@ -302,7 +314,7 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_GRAPH: no\n");
 #endif
-#if defined(GGML_SYCL_DNNL)
+#if GGML_SYCL_DNNL
         GGML_LOG_INFO("  GGML_SYCL_DNNL: yes\n");
 #else
         GGML_LOG_INFO("  GGML_SYCL_DNNL: no\n");
@@ -351,6 +363,10 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FLASH_ATTN: %d disabled by compile flag\n",
             g_ggml_sycl_enable_flash_attention);
 #endif
+        GGML_LOG_INFO("  GGML_SYCL_FA_FORCE_VEC_STANDARD: %d\n",
+            g_ggml_sycl_fa_force_vec_standard);
+        GGML_LOG_INFO("  GGML_SYCL_FA_Q8_GQA_TILE: %d\n",
+            g_ggml_sycl_fa_q8_gqa_tile);
 
 /* NOT REMOVE, keep it for next optimize for XMX.
 #if defined(SYCL_USE_XMX)
@@ -465,6 +481,13 @@ struct ggml_backend_sycl_buffer_context {
 };
 
 static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_type_t buft);
+struct ggml_backend_sycl_device_context;
+static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev);
+static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_backend(ggml_backend_t backend);
+static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx);
+static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx);
+static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_context * dev_ctx, const sycl::exception & exc);
+
 
 static bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
     return buffer->buft->iface.get_name == ggml_backend_sycl_buffer_type_get_name;
@@ -501,7 +524,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
     }
 
     if (!g_ggml_sycl_disable_optimize) {
-        // set reorder extra buffer based on supported type
+        // Quantized tensors carry backend-owned layout/reorder metadata.
         switch (tensor->type) {
             case GGML_TYPE_Q4_0:
             case GGML_TYPE_Q8_0:
@@ -2474,7 +2497,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
         if (src0->type != GGML_TYPE_F16) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
                                                  " : converting src0 to fp16");
-            const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src0->type, dst);
+            const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src0->type, src0);
             GGML_ASSERT(to_fp16_sycl != nullptr);
             size_t ne = row_diff*ne00;
             src0_as_f16.alloc(ne);
@@ -2488,7 +2511,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
         if (src1->type != GGML_TYPE_F16) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
                                                  " : converting src1 to fp16");
-            const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, dst);
+            const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, src1);
             GGML_ASSERT(to_fp16_sycl != nullptr);
             size_t ne = src1_ncols*ne10;
             src1_as_f16.alloc(ne);
@@ -3364,13 +3387,13 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
         // oneDNN handles strided data and does not need overhead of ggml_get_to_fp16_nc_sycl
         const int64_t ne_src1 = src1->nb[last_str] * src1->ne[last_dim] / type_size_src1;
         src1_f16_alloc.alloc(ne_src1);
-        const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, dst);
+        const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, src1);
         GGML_ASSERT(to_fp16_sycl != nullptr);
         to_fp16_sycl(src1_f16, src1_f16_alloc.get(), ne_src1, queue);
 # else
         const int64_t ne_src1 = ggml_nelements(src1);
         src1_f16_alloc.alloc(ne_src1);
-        const to_fp16_nc_sycl_t to_fp16_nc_sycl = ggml_get_to_fp16_nc_sycl(src1->type);
+        const to_fp16_nc_sycl_t to_fp16_nc_sycl = ggml_get_to_fp16_nc_sycl(src1->type, src1);
         GGML_ASSERT(to_fp16_nc_sycl != nullptr);
         to_fp16_nc_sycl(src1_f16, src1_f16_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, queue);
 #endif
@@ -4519,7 +4542,7 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
+static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, ggml_backend_sycl_device_context * dev_ctx, struct ggml_tensor * dst) try {
     if (!g_sycl_loaded) return false;
 
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_sycl_split(dst->src[0]->buffer)) {
@@ -4838,7 +4861,8 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
 } catch (sycl::exception & e) {
     std::cerr << e.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::cerr << "Error OP "<<ggml_op_name(dst->op)<< std::endl;
-    std::exit(1);
+    ggml_backend_sycl_record_failed_exception(dev_ctx, e);
+    return false;
 }
 
 GGML_API void ggml_backend_sycl_get_device_description(int device, char *description,
@@ -4890,49 +4914,52 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
 static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
                                                ggml_tensor *tensor,
                                                const void *data, size_t offset,
-                                               size_t size) try {
+                                               size_t size) {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
-    GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
-    const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR(
-        (stream)->memcpy((char *)tensor->data + offset, data, size)));
-}
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+    try {
+        GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
+        const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            (stream)->memcpy((char *)tensor->data + offset, data, size)));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
+        GGML_LOG_ERROR("%s: SYCL set_tensor_async failed: %s\n", __func__, exc.what());
+    }
 }
 
 static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
                                                const ggml_tensor *tensor,
                                                void *data, size_t offset,
-                                               size_t size) try {
+                                               size_t size) {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
-    GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
-    const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
-        data, (const char *)tensor->data + offset, size)));
-}
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+    try {
+        GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
+        const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+        SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
+            data, (const char *)tensor->data + offset, size)));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
+        GGML_LOG_ERROR("%s: SYCL get_tensor_async failed: %s\n", __func__, exc.what());
+    }
 }
 
 static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend,
                                                const ggml_tensor *src,
-                                               ggml_tensor *dst) try {
+                                               ggml_tensor *dst) {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     bool is_cpy_supported                = dst->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) &&
                             ggml_backend_buffer_is_sycl(src->buffer);
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
@@ -4945,35 +4972,36 @@ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend,
         error codes. The original code was commented out and a warning string
         was inserted. You need to rewrite this code.
         */
-        const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-        SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
-            dst->data, src->data, ggml_nbytes(dst))));
-        return true;
+        try {
+            const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+            SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
+                dst->data, src->data, ggml_nbytes(dst))));
+            return true;
+        } catch (sycl::exception const & exc) {
+            ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
+            GGML_LOG_ERROR("%s: SYCL cpy_tensor_async failed: %s\n", __func__, exc.what());
+            return false;
+        }
     }
 
     return false;
 }
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
-}
 
-static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
+static void ggml_backend_sycl_synchronize(ggml_backend_t backend) {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
-    const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR((stream)->wait()));
-
-    GGML_UNUSED(backend);
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+ 
+    try {
+        const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+        SYCL_CHECK(CHECK_TRY_ERROR((stream)->wait()));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
+        GGML_LOG_ERROR("%s: SYCL synchronize failed: %s\n", __func__, exc.what());
+    }
 }
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
-}
 
-static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_backend_sycl_device_context * dev_ctx, ggml_cgraph * cgraph) {
     ggml_sycl_set_main_device(sycl_ctx->device);
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -4992,12 +5020,166 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
 #endif
-        bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
+        bool ok = ggml_sycl_compute_forward(*sycl_ctx, dev_ctx, node);
         if (!ok) {
-            GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+            GGML_LOG_ERROR("%s: error: op failed or unsupported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+            return GGML_STATUS_FAILED;
         }
-        GGML_ASSERT(ok);
     }
+    return GGML_STATUS_SUCCESS;
+}
+
+static bool ggml_sycl_rope_fusion_profile_enabled() {
+    const char * value = getenv("GGML_SYCL_ROPE_FUSION_PROFILE");
+    return value != nullptr && strcmp(value, "1") == 0;
+}
+
+struct ggml_sycl_rope_fusion_profile {
+    std::atomic<uint64_t> graph_calls             = 0;
+    std::atomic<uint64_t> rope_nodes              = 0;
+    std::atomic<uint64_t> structural_matches      = 0;
+    std::atomic<uint64_t> eligible_matches        = 0;
+    std::atomic<uint64_t> decode_eligible_matches = 0;
+    std::atomic<uint64_t> batched_eligible_matches = 0;
+    std::atomic<uint64_t> eligible_index_rows     = 0;
+    std::atomic<uint64_t> reject_ne3              = 0;
+    std::atomic<uint64_t> reject_set_rows_type    = 0;
+    std::atomic<uint64_t> reject_index_type       = 0;
+    std::atomic<uint64_t> reject_view_shape       = 0;
+    std::atomic<uint64_t> reject_rope_mode        = 0;
+
+    ~ggml_sycl_rope_fusion_profile() {
+        if (!ggml_sycl_rope_fusion_profile_enabled()) {
+            return;
+        }
+        fprintf(
+            stderr,
+            "GGML_SYCL_ROPE_FUSION_PROFILE: graph_calls=%" PRIu64 " rope_nodes=%" PRIu64
+            " structural_matches=%" PRIu64 " eligible_matches=%" PRIu64
+            " decode_eligible_matches=%" PRIu64 " batched_eligible_matches=%" PRIu64
+            " eligible_index_rows=%" PRIu64 " reject_ne3=%" PRIu64
+            " reject_set_rows_type=%" PRIu64 " reject_index_type=%" PRIu64
+            " reject_view_shape=%" PRIu64 " reject_rope_mode=%" PRIu64 "\n",
+            graph_calls.load(), rope_nodes.load(), structural_matches.load(), eligible_matches.load(),
+            decode_eligible_matches.load(), batched_eligible_matches.load(), eligible_index_rows.load(),
+            reject_ne3.load(), reject_set_rows_type.load(), reject_index_type.load(),
+            reject_view_shape.load(), reject_rope_mode.load());
+    }
+};
+
+static ggml_sycl_rope_fusion_profile & ggml_sycl_rope_fusion_profile_data() {
+    static ggml_sycl_rope_fusion_profile profile;
+    return profile;
+}
+
+static bool ggml_sycl_rope_view_set_rows_eligible(
+        const ggml_cgraph * cgraph, int node_idx, ggml_sycl_rope_fusion_profile & profile) {
+    const ggml_tensor * rope     = cgraph->nodes[node_idx + 0];
+    const ggml_tensor * view     = cgraph->nodes[node_idx + 1];
+    const ggml_tensor * set_rows = cgraph->nodes[node_idx + 2];
+
+    if (rope->src[0]->ne[3] != 1) {
+        profile.reject_ne3.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (set_rows->type != GGML_TYPE_F32 && set_rows->type != GGML_TYPE_F16) {
+        profile.reject_set_rows_type.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (set_rows->src[1]->type != GGML_TYPE_I64) {
+        profile.reject_index_type.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (!ggml_is_contiguous(view) || view->ne[0] != rope->ne[0] * rope->ne[1]) {
+        profile.reject_view_shape.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    const int mode = ((const int32_t *) rope->op_params)[2];
+    if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX && mode != GGML_ROPE_TYPE_MROPE) {
+        profile.reject_rope_mode.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    return true;
+}
+
+static void ggml_sycl_profile_rope_fusion(const ggml_cgraph * cgraph) {
+    if (!ggml_sycl_rope_fusion_profile_enabled()) {
+        return;
+    }
+
+    ggml_sycl_rope_fusion_profile & profile = ggml_sycl_rope_fusion_profile_data();
+    profile.graph_calls.fetch_add(1, std::memory_order_relaxed);
+    for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
+        if (cgraph->nodes[node_idx]->op == GGML_OP_ROPE) {
+            profile.rope_nodes.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (node_idx + 2 >= cgraph->n_nodes ||
+            !ggml_can_fuse_subgraph(
+                cgraph, node_idx, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, { node_idx + 2 }) ||
+            !ggml_check_edges(cgraph, node_idx, { { 1, 0, 0 }, { 2, 0, 1 } })) {
+            continue;
+        }
+        profile.structural_matches.fetch_add(1, std::memory_order_relaxed);
+        if (!ggml_sycl_rope_view_set_rows_eligible(cgraph, node_idx, profile)) {
+            continue;
+        }
+        const uint64_t index_rows = ggml_nelements(cgraph->nodes[node_idx + 2]->src[1]);
+        profile.eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        profile.eligible_index_rows.fetch_add(index_rows, std::memory_order_relaxed);
+        if (index_rows == 1) {
+            profile.decode_eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            profile.batched_eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+static bool ggml_sycl_graph_profile_enabled() {
+    const char * value = getenv("GGML_SYCL_GRAPH_PROFILE");
+    return value != nullptr && strcmp(value, "1") == 0;
+}
+
+struct ggml_sycl_graph_profile {
+    std::atomic<uint64_t> graph_calls       = 0;
+    std::atomic<uint64_t> direct_calls      = 0;
+    std::atomic<uint64_t> nodes             = 0;
+    std::atomic<uint64_t> prepare_us        = 0;
+    std::atomic<uint64_t> record_us         = 0;
+    std::atomic<uint64_t> finalize_calls    = 0;
+    std::atomic<uint64_t> finalize_us       = 0;
+    std::atomic<uint64_t> update_calls      = 0;
+    std::atomic<uint64_t> update_fallbacks  = 0;
+    std::atomic<uint64_t> update_us         = 0;
+    std::atomic<uint64_t> submit_us         = 0;
+    std::atomic<uint64_t> wait_us           = 0;
+    std::atomic<uint64_t> direct_enqueue_us = 0;
+
+    ~ggml_sycl_graph_profile() {
+        if (!ggml_sycl_graph_profile_enabled()) {
+            return;
+        }
+        fprintf(
+            stderr,
+            "GGML_SYCL_GRAPH_PROFILE: graph_calls=%" PRIu64 " direct_calls=%" PRIu64
+            " nodes=%" PRIu64 " prepare_us=%" PRIu64 " record_us=%" PRIu64
+            " finalize_calls=%" PRIu64 " finalize_us=%" PRIu64
+            " update_calls=%" PRIu64 " update_fallbacks=%" PRIu64
+            " update_us=%" PRIu64 " submit_us=%" PRIu64
+            " wait_us=%" PRIu64 " direct_enqueue_us=%" PRIu64 "\n",
+            graph_calls.load(), direct_calls.load(), nodes.load(), prepare_us.load(), record_us.load(),
+            finalize_calls.load(), finalize_us.load(), update_calls.load(), update_fallbacks.load(),
+            update_us.load(), submit_us.load(), wait_us.load(), direct_enqueue_us.load());
+    }
+};
+
+static ggml_sycl_graph_profile & ggml_sycl_graph_profile_data() {
+    static ggml_sycl_graph_profile profile;
+    return profile;
+}
+
+static uint64_t ggml_sycl_elapsed_us(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count();
 }
 
 #ifdef GGML_SYCL_GRAPH
@@ -5041,10 +5223,45 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
     }
     return true;
 }
+static void ggml_sycl_graph_prepare_fattn_buffers(
+        ggml_backend_sycl_context * sycl_ctx, const ggml_cgraph * cgraph) {
+    size_t k_f16_elems = 0;
+    size_t v_f16_elems = 0;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_FLASH_ATTN_EXT) {
+            continue;
+        }
+
+        const ggml_tensor * k = node->src[1];
+        const ggml_tensor * v = node->src[2];
+        if (k->type != GGML_TYPE_F16) {
+            k_f16_elems = std::max(k_f16_elems, (size_t) ggml_nelements(k));
+        }
+        if (v->type != GGML_TYPE_F16) {
+            v_f16_elems = std::max(v_f16_elems, (size_t) ggml_nelements(v));
+        }
+    }
+
+    ggml_sycl_fattn_kv_buffers & buffers = sycl_ctx->fattn_buffers();
+    if (k_f16_elems > 0) {
+        buffers.K.ensure_half(k_f16_elems);
+    }
+    if (v_f16_elems > 0) {
+        buffers.V.ensure_half(v_f16_elems);
+    }
+}
+
 #endif
 
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+    ggml_backend_sycl_clear_pending_status(dev_ctx);
+    ggml_sycl_profile_rope_fusion(cgraph);
+    const bool graph_profile_enabled = ggml_sycl_graph_profile_enabled();
+    ggml_sycl_graph_profile * graph_profile =
+        graph_profile_enabled ? &ggml_sycl_graph_profile_data() : nullptr;
 
 #ifdef GGML_SYCL_GRAPH
     bool use_sycl_graph = !g_ggml_sycl_disable_graph && check_graph_compatibility(cgraph);
@@ -5052,74 +5269,146 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         const bool graph_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_limited_graph);
         if (!graph_support) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] can not use graphs on device:%d\n", sycl_ctx->device);
-            ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
-            return GGML_STATUS_SUCCESS;
+            const auto direct_start = std::chrono::steady_clock::now();
+            const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
+            if (graph_profile != nullptr) {
+                graph_profile->direct_calls.fetch_add(1, std::memory_order_relaxed);
+                graph_profile->direct_enqueue_us.fetch_add(
+                    ggml_sycl_elapsed_us(direct_start), std::memory_order_relaxed);
+            }
+            if (status != GGML_STATUS_SUCCESS) {
+                ggml_backend_sycl_record_failed_status(dev_ctx);
+            }
+            return status;
+        }
+
+        // Scratch allocation may wait on the queue. Grow it before recording;
+        // waiting while a queue is being captured is forbidden by oneAPI.
+        const auto prepare_start = std::chrono::steady_clock::now();
+        ggml_sycl_graph_prepare_fattn_buffers(sycl_ctx, cgraph);
+        if (graph_profile != nullptr) {
+            graph_profile->prepare_us.fetch_add(
+                ggml_sycl_elapsed_us(prepare_start), std::memory_order_relaxed);
         }
 
         sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
 
+        const auto record_start = std::chrono::steady_clock::now();
         model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
-        ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+        const ggml_status graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
         model_sycl_graph.end_recording();
+        if (graph_profile != nullptr) {
+            graph_profile->graph_calls.fetch_add(1, std::memory_order_relaxed);
+            graph_profile->nodes.fetch_add(cgraph->n_nodes, std::memory_order_relaxed);
+            graph_profile->record_us.fetch_add(
+                ggml_sycl_elapsed_us(record_start), std::memory_order_relaxed);
+        }
+        if (graph_status != GGML_STATUS_SUCCESS) {
+            ggml_backend_sycl_record_failed_status(dev_ctx);
+            return graph_status;
+        }
 
         const bool graph_update_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_graph);
+        const auto finalize_update_start = std::chrono::steady_clock::now();
         if (!sycl_ctx->exec_graph || !graph_update_support) {
             auto exec_graph = graph_update_support ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{}) :
                                                      model_sycl_graph.finalize();
             sycl_ctx->exec_graph = std::make_unique<
                 sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+            if (graph_profile != nullptr) {
+                graph_profile->finalize_calls.fetch_add(1, std::memory_order_relaxed);
+                graph_profile->finalize_us.fetch_add(
+                    ggml_sycl_elapsed_us(finalize_update_start), std::memory_order_relaxed);
+            }
         } else {
             try {
                 sycl_ctx->exec_graph->update(model_sycl_graph);
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] update success\n");
+                if (graph_profile != nullptr) {
+                    graph_profile->update_calls.fetch_add(1, std::memory_order_relaxed);
+                    graph_profile->update_us.fetch_add(
+                        ggml_sycl_elapsed_us(finalize_update_start), std::memory_order_relaxed);
+                }
             } catch (sycl::exception const & e) {
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] Exception when updating graph, %s\n", e.what());
                 auto exec_graph = model_sycl_graph.finalize({sycl_ex::property::graph::updatable{}});
                 sycl_ctx->exec_graph = std::make_unique<
                     sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+                if (graph_profile != nullptr) {
+                    graph_profile->update_calls.fetch_add(1, std::memory_order_relaxed);
+                    graph_profile->update_fallbacks.fetch_add(1, std::memory_order_relaxed);
+                    graph_profile->update_us.fetch_add(
+                        ggml_sycl_elapsed_us(finalize_update_start), std::memory_order_relaxed);
+                }
             }
         }
-
-        sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+        const auto submit_start = std::chrono::steady_clock::now();
+        try {
+            sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+            if (graph_profile != nullptr) {
+                graph_profile->submit_us.fetch_add(
+                    ggml_sycl_elapsed_us(submit_start), std::memory_order_relaxed);
+            }
+            const auto wait_start = std::chrono::steady_clock::now();
+            sycl_ctx->stream()->wait();
+            if (graph_profile != nullptr) {
+                graph_profile->wait_us.fetch_add(
+                    ggml_sycl_elapsed_us(wait_start), std::memory_order_relaxed);
+            }
+        } catch (sycl::exception const & e) {
+            GGML_LOG_ERROR("%s: SYCL graph launch/wait failed: %s\n", __func__, e.what());
+            ggml_backend_sycl_record_failed_exception(dev_ctx, e);
+            return GGML_STATUS_FAILED;
+        }
     } else
 #endif
     {
-        ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+        const auto direct_start = std::chrono::steady_clock::now();
+        const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
+        if (graph_profile != nullptr) {
+            graph_profile->direct_calls.fetch_add(1, std::memory_order_relaxed);
+            graph_profile->direct_enqueue_us.fetch_add(
+                ggml_sycl_elapsed_us(direct_start), std::memory_order_relaxed);
+        }
+        if (status != GGML_STATUS_SUCCESS) {
+            ggml_backend_sycl_record_failed_status(dev_ctx);
+            return status;
+        }
     }
     return GGML_STATUS_SUCCESS;
 }
 
-static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_event_t event)
-try
-{
-    ggml_backend_sycl_context *sycl_ctx =
-        (ggml_backend_sycl_context *)backend->context;
-
-    sycl::event *sycl_event = static_cast<sycl::event *>(event->context);
-
-    const queue_ptr &stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    // Record the current state of the queue
-    SYCL_CHECK(CHECK_TRY_ERROR(*sycl_event = stream->ext_oneapi_submit_barrier()));
+static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
+    ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+ 
+    try {
+        sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
+        const queue_ptr & stream = sycl_ctx->stream(sycl_ctx->device, 0);
+        // Record the current state of the queue
+        SYCL_CHECK(CHECK_TRY_ERROR(*sycl_event = stream->ext_oneapi_submit_barrier()));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
+        GGML_LOG_ERROR("%s: SYCL event record failed: %s\n", __func__, exc.what());
+    }
 }
-catch (sycl::exception const &exc)
-{
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-              << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
-}
-
-static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_event_t event) try {
+ 
+static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
-    sycl::event* sycl_event = static_cast<sycl::event*>(event->context);
-
-    if (ggml_backend_is_sycl(backend)) {
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
-    } else
-        GGML_ABORT("fatal error");
-} catch (sycl::exception const& exc) {
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-              << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+ 
+    try {
+        sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
+ 
+        if (ggml_backend_is_sycl(backend)) {
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
+        } else {
+            GGML_ABORT("fatal error");
+        }
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
+        GGML_LOG_ERROR("%s: SYCL event wait failed: %s\n", __func__, exc.what());
+    }
 }
 
 static ggml_backend_i ggml_backend_sycl_interface = {
@@ -5164,7 +5453,88 @@ struct ggml_backend_sycl_device_context {
     std::string name;
     std::string description;
     int op_offload_min_batch_size;
+    std::atomic<int> pending_status = GGML_STATUS_SUCCESS;
+    std::atomic<int> pending_cause  = GGML_SYCL_FAILURE_CAUSE_NONE;
+    std::atomic<int> pending_raw_code = 0;
 };
+ 
+static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev) {
+    return dev ? static_cast<ggml_backend_sycl_device_context *>(dev->context) : nullptr;
+}
+ 
+static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_backend(ggml_backend_t backend) {
+    if (backend == nullptr || !ggml_backend_is_sycl(backend)) {
+        return nullptr;
+    }
+ 
+    return ggml_backend_sycl_device_context_from_device(backend->device);
+}
+ 
+static ggml_backend_sycl_failure_cause ggml_backend_sycl_classify_exception(const sycl::exception & exc) {
+    const int raw_code = exc.code().value();
+    const std::string_view category_name(exc.code().category().name());
+    const bool is_ur_category =
+        category_name == "ur_result_t" ||
+        category_name == "unified-runtime" ||
+        category_name == "unified_runtime";
+
+#if GGML_SYCL_HAS_UR_API
+    if (is_ur_category && (raw_code == UR_RESULT_ERROR_DEVICE_LOST || raw_code == UR_RESULT_ERROR_DEVICE_REQUIRES_RESET)) {
+        return GGML_SYCL_FAILURE_CAUSE_DEVICE_LOST;
+    }
+#else
+    GGML_UNUSED(raw_code);
+    GGML_UNUSED(is_ur_category);
+#endif
+
+    return GGML_SYCL_FAILURE_CAUSE_OTHER;
+}
+ 
+static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx) {
+    if (dev_ctx != nullptr) {
+        dev_ctx->pending_status.store(GGML_STATUS_SUCCESS);
+        dev_ctx->pending_cause.store(GGML_SYCL_FAILURE_CAUSE_NONE);
+        dev_ctx->pending_raw_code.store(0);
+    }
+}
+ 
+static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx) {
+    if (dev_ctx != nullptr && dev_ctx->pending_status.load() == GGML_STATUS_SUCCESS) {
+        dev_ctx->pending_status.store(GGML_STATUS_FAILED);
+        dev_ctx->pending_cause.store(GGML_SYCL_FAILURE_CAUSE_OTHER);
+        dev_ctx->pending_raw_code.store(0);
+    }
+}
+ 
+static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_context * dev_ctx, const sycl::exception & exc) {
+    if (dev_ctx != nullptr) {
+        dev_ctx->pending_status.store(GGML_STATUS_FAILED);
+        dev_ctx->pending_cause.store(ggml_backend_sycl_classify_exception(exc));
+        dev_ctx->pending_raw_code.store(exc.code().value());
+    }
+}
+ 
+extern "C" ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml_backend_t backend) {
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+    if (dev_ctx == nullptr) {
+        return {
+            GGML_STATUS_SUCCESS,
+            GGML_SYCL_FAILURE_CAUSE_NONE,
+            0,
+        };
+    }
+ 
+    ggml_backend_sycl_failure out = {
+        static_cast<ggml_status>(dev_ctx->pending_status.exchange(GGML_STATUS_SUCCESS)),
+        static_cast<ggml_backend_sycl_failure_cause>(dev_ctx->pending_cause.exchange(GGML_SYCL_FAILURE_CAUSE_NONE)),
+        dev_ctx->pending_raw_code.exchange(0),
+    };
+    return out;
+}
+ 
+extern "C" ggml_status ggml_backend_sycl_consume_last_status(ggml_backend_t backend) {
+    return ggml_backend_sycl_consume_last_failure(backend).status;
+}
 
 static const char * ggml_backend_sycl_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *)dev->context;
@@ -5446,6 +5816,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 if(src0_type == GGML_TYPE_Q4_1 && src1_type == GGML_TYPE_Q4_1) {
                     return true;
                 }
+                if ((src0_type == GGML_TYPE_TURBO2_0 || src0_type == GGML_TYPE_TURBO3_0 ||
+                     src0_type == GGML_TYPE_TURBO4_0) && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
                 return false;
             }
         case GGML_OP_REPEAT_BACK:
@@ -5573,9 +5947,13 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return op->src[0]->ne[0] <= SYCL_SOLVE_TRI_MAX_N && op->src[1]->ne[0] <= SYCL_SOLVE_TRI_MAX_K;
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_sycl_flash_attn_ext_supported(device, op);
-        case GGML_OP_TURBO_WHT:
+        case GGML_OP_TURBO_WHT: {
+            int wht_group_size;
+            memcpy(&wht_group_size, op->op_params + sizeof(int), sizeof(int));
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
-                   op->src[0]->ne[0] % 32 == 0;
+                   (wht_group_size == 32 || wht_group_size == 64 || wht_group_size == 128) &&
+                   op->src[0]->ne[0] % wht_group_size == 0;
+        }
         default:
             return false;
     }
@@ -5646,16 +6024,18 @@ static void ggml_backend_sycl_device_event_free(ggml_backend_dev_t dev, ggml_bac
 }
 
 
-static void ggml_backend_sycl_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) try {
-  GGML_UNUSED(dev);
-  GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
-
-  sycl::event *sycl_event = static_cast<sycl::event *>(event->context);
-  SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
-} catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+static void ggml_backend_sycl_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    GGML_UNUSED(dev);
+    GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_device(dev);
+ 
+    try {
+        sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
+    } catch (sycl::exception const & exc) {
+        ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
+        GGML_LOG_ERROR("%s: SYCL device event synchronize failed: %s\n", __func__, exc.what());
+    }
 }
 
 static const ggml_backend_device_i ggml_backend_sycl_device_interface = {

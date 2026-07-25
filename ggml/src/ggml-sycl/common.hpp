@@ -45,7 +45,13 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #define GGML_COMMON_IMPL_SYCL
 #define SYCL_FLASH_ATTN //remove it to disable FLASH_ATTENTION in building.
 #define SYCL_FAST_FP16  //don't change. remove it will break fattn-tile.hpp building
-#define GGML_SYCL_FA_ALL_QUANTS //define it to enable all quantization types in flash attention. undefine it to only support F16, Q4_0 and Q8_0 in flash attention.
+// GGML_SYCL_FA_ALL_QUANTS: default OFF. Defining this enables the
+// full mixed-K flash_attn_ext_vec<...,42/43,44,...> dispatch matrix
+// (see ASSUMPTIONS.md:553-583 and RALPH_TASKS.md:1237-1251).
+// Leave commented to keep the restricted default dispatch set in
+// fattn.cpp. To re-enable the full mixed-K FA matrix, uncomment the
+// line below.
+//#define GGML_SYCL_FA_ALL_QUANTS
 
 /* suppress warning spam */
 #pragma clang diagnostic push
@@ -62,6 +68,8 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
+extern int g_ggml_sycl_fa_force_vec_standard;
+extern int g_ggml_sycl_fa_q8_gqa_tile;
 
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
@@ -116,6 +124,10 @@ extern int g_ggml_sycl_enable_flash_attention;
 #endif
 #ifndef GGML_SYCL_MMV_Y
 #define GGML_SYCL_MMV_Y 1
+#endif
+
+#ifndef GGML_SYCL_MMVQ_NUM_SUBGROUPS
+#define GGML_SYCL_MMVQ_NUM_SUBGROUPS 16
 #endif
 
 typedef sycl::queue *queue_ptr;
@@ -316,6 +328,9 @@ struct ggml_tensor_extra_gpu {
   optimize_feature optimized_feature;
 };
 
+static inline bool ggml_sycl_tensor_is_kv_q8_quants_first(const ggml_tensor * tensor) {
+    return ggml_tensor_is_kv_q8_quants_first(tensor);
+}
 extern int g_ggml_sycl_enable_level_zero;
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);

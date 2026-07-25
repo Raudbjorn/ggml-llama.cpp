@@ -180,6 +180,76 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
 
+if (GGML_SYCL_DEVICE_ARCH)
+    set(LLAMA_SYCL_BUILD_MODE "AOT")
+else()
+    set(LLAMA_SYCL_BUILD_MODE "JIT")
+endif()
+set(LLAMA_BUILD_COMMIT_FULL_RESULT 1)
+if (Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --show-toplevel
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE LLAMA_GIT_TOPLEVEL
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE LLAMA_GIT_TOPLEVEL_RESULT
+    )
+    get_filename_component(LLAMA_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
+    if (LLAMA_GIT_TOPLEVEL_RESULT EQUAL 0)
+        get_filename_component(LLAMA_GIT_ROOT "${LLAMA_GIT_TOPLEVEL}" REALPATH)
+    endif()
+    if (LLAMA_GIT_TOPLEVEL_RESULT EQUAL 0 AND LLAMA_GIT_ROOT STREQUAL LLAMA_SOURCE_ROOT)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            OUTPUT_VARIABLE LLAMA_BUILD_COMMIT_FULL
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE LLAMA_BUILD_COMMIT_FULL_RESULT
+        )
+        foreach(LLAMA_GIT_METADATA_NAME HEAD index packed-refs logs/HEAD)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path "${LLAMA_GIT_METADATA_NAME}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE LLAMA_GIT_METADATA_FILE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            get_filename_component(LLAMA_GIT_METADATA_FILE "${LLAMA_GIT_METADATA_FILE}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            if (EXISTS "${LLAMA_GIT_METADATA_FILE}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_METADATA_FILE}")
+            endif()
+        endforeach()
+
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} symbolic-ref -q HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            OUTPUT_VARIABLE LLAMA_GIT_HEAD_REF
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE LLAMA_GIT_HEAD_REF_RESULT
+        )
+        if (LLAMA_GIT_HEAD_REF_RESULT EQUAL 0)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path "${LLAMA_GIT_HEAD_REF}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE LLAMA_GIT_HEAD_REF_FILE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            get_filename_component(LLAMA_GIT_HEAD_REF_FILE "${LLAMA_GIT_HEAD_REF_FILE}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            if (EXISTS "${LLAMA_GIT_HEAD_REF_FILE}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_HEAD_REF_FILE}")
+            endif()
+        endif()
+    endif()
+endif()
+if (NOT LLAMA_BUILD_COMMIT_FULL_RESULT EQUAL 0)
+    set(LLAMA_BUILD_COMMIT_FULL "unknown")
+endif()
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build-metadata.json"
+    CONTENT "{\n  \"source_sha\": \"${LLAMA_BUILD_COMMIT_FULL}\",\n  \"build_mode\": \"${LLAMA_SYCL_BUILD_MODE}\",\n  \"sycl_device_arch\": \"${GGML_SYCL_DEVICE_ARCH}\"\n}\n"
+)
+
 #
 # build the library
 #
