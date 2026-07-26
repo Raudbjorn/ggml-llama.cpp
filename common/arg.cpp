@@ -25,6 +25,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
@@ -359,6 +360,20 @@ static bool spec_types_is_default(const common_params & params) {
     return params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE};
 }
 
+static std::string common_models_handler_get_hf_token(const common_params & params) {
+    if (!params.hf_token.empty()) {
+        return params.hf_token;
+    }
+
+    const char * token = std::getenv("HF_TOKEN");
+    if (token != nullptr && token[0] != '\0') {
+        return token;
+    }
+
+    token = std::getenv("HUGGING_FACE_HUB_TOKEN");
+    return token != nullptr ? token : "";
+}
+
 common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex) {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
@@ -386,7 +401,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
         }
     }
 
-    opts.bearer_token    = params.hf_token;
+    opts.bearer_token    = common_models_handler_get_hf_token(params);
     opts.offline         = params.offline;
     opts.download_mtp    = spec_type_draft_mtp;
     opts.download_eagle3 = spec_type_draft_eagle3;
@@ -695,8 +710,35 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     }
 
+    // Identify options supplied on the command line before applying environment
+    // values so each CLI option replaces its own environment-backed value.
+    std::set<const common_arg *> cli_options;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg.compare(0, 2, "--") == 0) {
+            std::replace(arg.begin(), arg.end(), '_', '-');
+        }
+
+        const auto it = arg_to_options.find(arg);
+        if (it == arg_to_options.end()) {
+            continue;
+        }
+
+        const common_arg * opt = it->second.first;
+        cli_options.insert(opt);
+        if (opt->handler_string || opt->handler_int) {
+            ++i;
+        } else if (opt->handler_str_str) {
+            i += 2;
+        }
+    }
+
+
     // handle environment variables
     for (auto & opt : ctx_arg.options) {
+        if (cli_options.count(&opt) != 0) {
+            continue;
+        }
         std::string value;
         if (opt.get_value_from_env(value)) {
             try {
@@ -805,6 +847,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     // parse all CLI args now, so that -hf is available below for remote preset resolution
     parse_cli_args();
 
+
     postprocess_cpu_params(params.cpuparams,       nullptr);
     postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
 
@@ -858,6 +901,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.cors_origins = "localhost";
     }
 
+    if (params.cors_origins == "*" && params.cors_credentials) {
+        LOG_WRN("CORS credentials are disabled when the allowed origin is '*'\n");
+        params.cors_credentials = false;
+    }
+
     // pad tensor_buft_overrides for llama_params_fit:
     const size_t ntbo = llama_max_tensor_buft_overrides();
     while (params.tensor_buft_overrides.size() < ntbo) {
@@ -875,6 +923,15 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
         ));
     }
+
+    if (params.warn_unknown_env) {
+        const std::vector<std::string> unknown_env_vars =
+            find_unknown_env_vars(ctx_arg.options, common_get_process_environment());
+        for (const std::string & name : unknown_env_vars) {
+            LOG_WRN("unknown environment variable: %s\n", name.c_str());
+        }
+    }
+
 
     return true;
 }
@@ -1229,6 +1286,37 @@ bool common_arg_utils::is_falsey(const std::string & value) {
 
 bool common_arg_utils::is_autoy(const std::string & value) {
     return value == "auto" || value == "-1";
+}
+
+std::vector<std::string> common_arg_utils::find_unknown_env_vars(
+        const std::vector<common_arg> & options,
+        const std::vector<std::string> & environment) {
+    auto normalize_name = [](std::string name) {
+#ifdef _WIN32
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+            return static_cast<char>(std::toupper(c));
+        });
+#endif
+        return name;
+    };
+
+    std::set<std::string> known_names;
+    for (const common_arg & option : options) {
+        for (const std::string & name : option.get_env()) {
+            known_names.insert(normalize_name(name));
+        }
+    }
+
+    std::set<std::string> unknown_names;
+    for (const std::string & entry : environment) {
+        const size_t separator = entry.find('=');
+        const std::string name = normalize_name(entry.substr(0, separator));
+        if (string_starts_with(name, "LLAMA_ARG_") && known_names.count(name) == 0) {
+            unknown_names.insert(name);
+        }
+    }
+
+    return {unknown_names.begin(), unknown_names.end()};
 }
 
 // Simple CSV parser that handles quoted fields and escaped quotes
@@ -2926,7 +3014,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_HF_FILE_V"));
     add_opt(common_arg(
         {"-hft", "--hf-token"}, "TOKEN",
-        "Hugging Face access token (default: value from HF_TOKEN environment variable)",
+        "Hugging Face access token (precedence: --hf-token, HF_TOKEN, then HUGGING_FACE_HUB_TOKEN)",
         [](common_params & params, const std::string & value) {
             params.hf_token = value;
         }
@@ -3219,7 +3307,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--no-cors-credentials"},
         string_format(
             "whether to allow credentials for CORS (default: %s)\n"
-            "note: if this is enabled and --cors-origins is set to * (default), the Origin header will be echoed back, and credentials will always be allowed",
+            "wildcard CORS origin ('*') forces credentials off",
         params.cors_credentials ? "enabled" : "disabled"),
         [](common_params & params, bool value) {
             params.cors_credentials = value;
@@ -3254,6 +3342,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.ui_mcp_proxy = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
+    add_opt(common_arg(
+        {"--ui-mcp-proxy-allow"}, "HOST[,HOST]",
+        "direct targets with non-global numeric, local, or metadata hosts are blocked by default; "
+        "this option adds exact normalized host exceptions (DNS names are case-insensitive with one trailing dot ignored)\n"
+        "note: automatic redirect destinations and DNS answers are not validated or pinned",
+        [](common_params & params, const std::string & value) {
+            std::vector<std::string> hosts;
+            for (const auto & candidate : parse_csv_row(value)) {
+                const std::string host = string_strip(candidate);
+                if (!host.empty()) {
+                    hosts.push_back(host);
+                }
+            }
+            params.ui_mcp_proxy_allow = std::move(hosts);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY_ALLOW"));
     add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
@@ -3307,7 +3411,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--api-key"}, "KEY",
         "API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)",
         [](common_params & params, const std::string & value) {
-            for (const auto & key : parse_csv_row(value)) {
+            for (const auto & candidate : parse_csv_row(value)) {
+                const std::string key = string_strip(candidate);
                 if (!key.empty()) {
                     params.api_keys.push_back(key);
                 }
@@ -3324,6 +3429,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             std::string key;
             while (std::getline(key_file, key)) {
+                key = string_strip(key);
                 if (!key.empty() && key[0] != '#') {
                     params.api_keys.push_back(key);
                 }
@@ -3724,6 +3830,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_LOG_COLORS"));
+    add_opt(common_arg(
+        {"--warn-unknown-env"},
+        "opt-in warning for unrecognized LLAMA_ARG_* environment variable names; values are never logged (default: disabled)",
+        [](common_params & params) {
+            params.warn_unknown_env = true;
+        }
+    ).set_env("LLAMA_ARG_WARN_UNKNOWN_ENV"));
     add_opt(common_arg(
         {"-v", "--verbose", "--log-verbose"},
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",

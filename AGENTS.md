@@ -163,6 +163,18 @@ export GGML_SYCL_DISABLE_GRAPHS=1          # default
 # GGML_SYCL_Q8_KV_QUANTS_FIRST=1           # q8_0 quants-first layout
 ```
 
+`LLAMA_ARG_*` parsing remains in `llama-common`; unknown-name diagnostics are
+opt-in (`--warn-unknown-env`) and log names only, never values. With
+`LLAMA_DOWNLOAD=OFF`, downloader and token environment variables have no
+network effect. Server and UI executables and their runtime surfaces are absent
+from the generated `lib` branch, while server option definitions remain
+available through `llama-common` parser examples. After an explicit parameter,
+token precedence is `HF_TOKEN` then
+`HUGGING_FACE_HUB_TOKEN`; endpoint precedence is `MODEL_ENDPOINT` then
+`HF_ENDPOINT`. The `lib` branch is generated from `master` and must never be
+edited directly. Server-only GCP behavior: when `AIP_MODE=PREDICTION`,
+`AIP_HTTP_PORT` overrides the CLI port.
+
 ### GPU Discipline (mandatory before timing runs)
 
 ```bash

@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstring>
+#include <cwchar>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -54,6 +55,13 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#endif
+#endif
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+extern char ** environ;
 #endif
 
 #if defined(__linux__)
@@ -75,6 +83,55 @@ common_time_meas::~common_time_meas() {
     if (t_start_us >= 0) {
         t_acc += ggml_time_us() - t_start_us;
     }
+}
+
+#ifdef _WIN32
+static std::string wide_to_utf8(const wchar_t * ws) {
+    if (!ws || !*ws) {
+        return {};
+    }
+
+    const int len = static_cast<int>(std::wcslen(ws));
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, ws, len, nullptr, 0, nullptr, nullptr);
+    if (bytes == 0) {
+        return {};
+    }
+
+    std::string utf8(bytes, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws, len, utf8.data(), bytes, nullptr, nullptr);
+
+    return utf8;
+}
+#endif
+
+std::vector<std::string> common_get_process_environment() {
+    std::vector<std::string> env;
+
+#ifdef _WIN32
+    LPWCH env_block = GetEnvironmentStringsW();
+    if (!env_block) {
+        return env;
+    }
+    for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
+        env.emplace_back(wide_to_utf8(e));
+    }
+    FreeEnvironmentStringsW(env_block);
+#else
+#if defined(__APPLE__)
+    char *** process_environment_ptr = _NSGetEnviron();
+    char ** process_environment = process_environment_ptr == nullptr ? nullptr : *process_environment_ptr;
+#else
+    char ** process_environment = environ;
+#endif
+    if (process_environment == nullptr) {
+        return env;
+    }
+    for (char ** e = process_environment; *e != nullptr; e++) {
+        env.emplace_back(*e);
+    }
+#endif
+
+    return env;
 }
 
 //

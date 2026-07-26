@@ -27,6 +27,18 @@ server_http_context::server_http_context()
 
 server_http_context::~server_http_context() = default;
 
+static bool api_key_equals(const std::string & lhs, const std::string & rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+
+    volatile unsigned char mismatch = 0;
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        mismatch |= static_cast<unsigned char>(lhs[i]) ^ static_cast<unsigned char>(rhs[i]);
+    }
+    return mismatch == 0;
+}
+
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
     if (req.path == "/health"
@@ -230,8 +242,10 @@ bool server_http_context::init(const common_params & params) {
         }
 
         // validate the API key
-        if (std::find(api_keys.begin(), api_keys.end(), req_api_key) != api_keys.end()) {
-            return true; // API key is valid
+        for (const auto & api_key : api_keys) {
+            if (api_key_equals(api_key, req_api_key)) {
+                return true; // API key is valid
+            }
         }
 
         // API key is invalid or not provided
@@ -277,9 +291,9 @@ bool server_http_context::init(const common_params & params) {
 
     // register server middlewares
     srv->set_pre_routing_handler([&params, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
-        if (params.cors_credentials && params.cors_origins == "*") {
-            // special case: echo back the Origin header to allow any origin to access the server with credentials
-            res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        const bool cors_credentials = params.cors_credentials && params.cors_origins != "*";
+        if (params.cors_origins == "*") {
+            res.set_header("Access-Control-Allow-Origin", "*");
         } else if (params.cors_origins == "localhost") {
             // special case: only reflect the Origin header if it is a localhost origin
             std::string origin = req.get_header_value("Origin");
@@ -291,9 +305,12 @@ bool server_http_context::init(const common_params & params) {
         } else {
             res.set_header("Access-Control-Allow-Origin", params.cors_origins);
         }
+        if (cors_credentials && req.method != "OPTIONS") {
+            res.set_header("Access-Control-Allow-Credentials", "true");
+        }
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {
-            res.set_header("Access-Control-Allow-Credentials", params.cors_credentials ? "true" : "false");
+            res.set_header("Access-Control-Allow-Credentials", cors_credentials ? "true" : "false");
             res.set_header("Access-Control-Allow-Methods",     params.cors_methods);
             res.set_header("Access-Control-Allow-Headers",     params.cors_headers);
             res.set_content("", "text/html"); // blank response, no data

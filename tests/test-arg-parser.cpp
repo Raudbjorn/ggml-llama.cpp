@@ -2,16 +2,83 @@
 #include "common.h"
 #include "download.h"
 #include "llama.h"
+#include "log.h"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <sstream>
+#include <random>
 #include <unordered_set>
 
 #undef NDEBUG
 #include <cassert>
 
+struct env_var_snapshot {
+    std::string name;
+    bool was_set;
+    std::string value;
+
+    explicit env_var_snapshot(const char * name) : name(name) {
+        const char * current = getenv(name);
+        was_set = current != nullptr;
+        if (current != nullptr) {
+            value = current;
+        }
+    }
+
+    ~env_var_snapshot() {
+        set(was_set ? value.c_str() : nullptr);
+    }
+
+    void set(const char * new_value) const {
+#ifdef _WIN32
+        assert(_putenv_s(name.c_str(), new_value != nullptr ? new_value : "") == 0);
+#else
+        if (new_value != nullptr) {
+            assert(setenv(name.c_str(), new_value, true) == 0);
+        } else {
+            assert(unsetenv(name.c_str()) == 0);
+        }
+#endif
+    }
+};
+
+static void test_unknown_env_classifier(void) {
+    std::vector<common_arg> options = {
+        common_arg(
+            {"--known"},
+            {"--no-known"},
+            "test option",
+            [](common_params &, bool) {
+            }
+        ).set_env("LLAMA_ARG_KNOWN"),
+    };
+    const std::vector<std::string> environment = {
+        "LLAMA_ARG_kNoWn=on",
+        "LLAMA_ARG_NO_KNOWN=on",
+        "PATH=/tmp",
+        "llama_arg_beta=secret=must-not-leak",
+        "LLAMA_ARG_ZETA=another-secret",
+        "LLAMA_ARG_zeta=third-secret",
+        "LLAMA_ARG_ALPHA=value",
+    };
+
+    const std::vector<std::string> unknown =
+        common_arg_utils::find_unknown_env_vars(options, environment);
+#ifdef _WIN32
+    assert((unknown == std::vector<std::string>{"LLAMA_ARG_ALPHA", "LLAMA_ARG_BETA", "LLAMA_ARG_ZETA"}));
+#else
+    assert((unknown == std::vector<std::string>{
+        "LLAMA_ARG_ALPHA", "LLAMA_ARG_ZETA", "LLAMA_ARG_kNoWn", "LLAMA_ARG_zeta"}));
+#endif
+}
+
 static void test(void) {
+    test_unknown_env_classifier();
+
     common_params params;
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
@@ -85,6 +152,77 @@ static void test(void) {
 
     std::vector<std::string> argv;
 
+    {
+        env_var_snapshot warn_unknown_env("LLAMA_ARG_WARN_UNKNOWN_ENV");
+        env_var_snapshot typo_env("LLAMA_ARG_TYPO");
+        warn_unknown_env.set("1");
+        typo_env.set("secret");
+
+        const std::filesystem::path log_path = std::filesystem::temp_directory_path() /
+            ("llama-test-arg-parser-" + std::to_string(std::random_device{}()) + ".log");
+        common_log_set_file(common_log_main(), log_path.string().c_str());
+
+        common_params invalid_params;
+        argv = {"binary_name", "-m", "model.gguf", "--prompt-cache-all", "--interactive"};
+        assert(false == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), invalid_params, LLAMA_EXAMPLE_COMPLETION));
+
+        common_log_flush(common_log_main());
+        common_log_set_file(common_log_main(), nullptr);
+
+        {
+            std::ifstream log_file(log_path);
+            const std::string log_contents(
+                (std::istreambuf_iterator<char>(log_file)),
+                std::istreambuf_iterator<char>());
+            assert(log_contents.find("LLAMA_ARG_TYPO") == std::string::npos);
+        }
+
+        common_log_set_file(common_log_main(), log_path.string().c_str());
+
+        common_params valid_params;
+        argv = {"binary_name", "-m", "model.gguf"};
+        assert(true == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), valid_params, LLAMA_EXAMPLE_COMMON));
+
+        common_log_flush(common_log_main());
+        common_log_set_file(common_log_main(), nullptr);
+
+        {
+            std::ifstream log_file(log_path);
+            const std::string log_contents(
+                (std::istreambuf_iterator<char>(log_file)),
+                std::istreambuf_iterator<char>());
+            assert(log_contents.find("LLAMA_ARG_TYPO") != std::string::npos);
+            assert(log_contents.find("secret") == std::string::npos);
+        }
+        std::filesystem::remove(log_path);
+    }
+
+    {
+        env_var_snapshot warn_unknown_env("LLAMA_ARG_WARN_UNKNOWN_ENV");
+        warn_unknown_env.set(nullptr);
+
+        common_params default_params;
+        argv = {"binary_name", "-m", "model.gguf"};
+        assert(true == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), default_params, LLAMA_EXAMPLE_COMMON));
+        assert(!default_params.warn_unknown_env);
+
+        common_params cli_params;
+        argv = {"binary_name", "-m", "model.gguf", "--warn-unknown-env"};
+        assert(true == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), cli_params, LLAMA_EXAMPLE_COMMON));
+        assert(cli_params.warn_unknown_env);
+
+        warn_unknown_env.set("1");
+        common_params env_params;
+        argv = {"binary_name", "-m", "model.gguf"};
+        assert(true == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), env_params, LLAMA_EXAMPLE_COMMON));
+        assert(env_params.warn_unknown_env);
+    }
+
     printf("test-arg-parser: test invalid usage\n\n");
 
     // missing value
@@ -156,10 +294,40 @@ static void test(void) {
     assert(params.lora_adapters[2].path == "file3\"3\".gguf");
     assert(params.lora_adapters[3].path == "file4\".gguf");
 
+    argv = {"binary_name", "--api-key", "\" first-key \",\"   \",second-key,\"third-key \""};
+    params.api_keys.clear();
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
+    assert(params.api_keys.size() == 3);
+    assert(params.api_keys[0] == "first-key");
+    assert(params.api_keys[1] == "second-key");
+    assert(params.api_keys[2] == "third-key");
+
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
     printf("test-arg-parser: skip on windows build\n");
 #else
+    {
+        env_var_snapshot api_key("LLAMA_API_KEY");
+        env_var_snapshot api_key_file("LLAMA_ARG_API_KEY_FILE");
+        const auto key_file = std::filesystem::temp_directory_path() /
+                              ("llama-api-keys-" + std::to_string(std::random_device{}()) + ".txt");
+
+        setenv("LLAMA_ARG_API_KEY_FILE", key_file.string().c_str(), true);
+        setenv("LLAMA_API_KEY", "stale-env-key", true);
+        {
+            std::ofstream output(key_file);
+            output << "file-key\n";
+        }
+
+        argv = {"binary_name", "--api-key", "cli-key"};
+        params.api_keys.clear();
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
+        assert(params.api_keys.size() == 2);
+        assert(params.api_keys[0] == "file-key");
+        assert(params.api_keys[1] == "cli-key");
+        assert(std::filesystem::remove(key_file));
+    }
+
     printf("test-arg-parser: test environment variables (valid + invalid usages)\n\n");
 
     setenv("LLAMA_ARG_THREADS", "blah", true);
@@ -210,6 +378,55 @@ static void test(void) {
     assert(params.model.path == "overwritten.gguf");
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
+
+    {
+        env_var_snapshot hf_token("HF_TOKEN");
+        env_var_snapshot hub_token("HUGGING_FACE_HUB_TOKEN");
+        env_var_snapshot misspelled_hub_token("HUGGINGFACE_HUB_TOKEN");
+
+        hf_token.set(nullptr);
+        hub_token.set(nullptr);
+        misspelled_hub_token.set(nullptr);
+
+        printf("test-arg-parser: test Hugging Face token precedence\n\n");
+
+        hub_token.set("fallback-token");
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "fallback-token");
+        }
+
+        hf_token.set("");
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "fallback-token");
+        }
+
+        hf_token.set("hf-token");
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "hf-token");
+        }
+
+        {
+            common_params token_params;
+            token_params.hf_token = "explicit-token";
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "explicit-token");
+        }
+
+        hf_token.set(nullptr);
+        hub_token.set(nullptr);
+        misspelled_hub_token.set("misspelled-token");
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token.empty());
+        }
+    }
 
 #ifndef LLAMA_DOWNLOAD_DISABLED
     printf("test-arg-parser: test download functions\n\n");
