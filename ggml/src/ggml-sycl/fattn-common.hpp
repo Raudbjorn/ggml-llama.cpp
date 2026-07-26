@@ -648,7 +648,9 @@ static __dpct_inline__ void dequantize_V_q8_0(const void * __restrict__ vx, void
     const int     iqs = i0 % QK8_0;
 
     static_assert(ne % 2 == 0, "bad ne");
-    int8_t qs[ne];
+    // Same destination-alignment requirement as the quants-first path below: the
+    // 2-byte copy stores through short *, which int8_t[] does not guarantee.
+    alignas(4) int8_t qs[ne];
     ggml_sycl_memcpy_1<ne, 2>(qs, x[ib].qs + iqs);
 
 #ifdef GGML_SYCL_F16
@@ -686,7 +688,9 @@ static __dpct_inline__ void dequantize_V_q8_0_quants_first(
     // multiple of 4 and the quants-first payload is dword-aligned here. The explicit 4
     // documents that and fails to compile if ne ever stops being a multiple of it.
     static_assert(ne % 4 == 0, "quants-first V load assumes dword-aligned runs");
-    int8_t qs[ne];
+    // ggml_sycl_memcpy_1 stores through the aligned type, so the destination needs
+    // the same alignment as the source; int8_t[] is only byte-aligned by default.
+    alignas(4) int8_t qs[ne];
     ggml_sycl_memcpy_1<ne, 4>(qs, quants + ib * QK8_0 + iqs);
 
 #ifdef GGML_SYCL_F16
