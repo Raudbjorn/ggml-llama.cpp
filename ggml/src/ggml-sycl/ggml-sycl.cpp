@@ -5597,8 +5597,8 @@ static bool ggml_sycl_rope_view_set_rows_eligible(
 // structurally matched but 0% production-eligible because SET_ROWS destinations
 // were q8_0.
 static bool ggml_sycl_ffn_fusion_profile_enabled() {
-    const char * value = getenv("GGML_SYCL_FFN_FUSION_PROFILE");
-    return value != nullptr && strcmp(value, "1") == 0;
+    static const bool enabled = ggml_sycl_get_env("GGML_SYCL_FFN_FUSION_PROFILE", 0) != 0;
+    return enabled;
 }
 
 struct ggml_sycl_ffn_fusion_profile {
@@ -5722,13 +5722,7 @@ static void ggml_sycl_profile_ffn_fusion(const ggml_cgraph * cgraph) {
 // known-bad pre-fix commit b5ef0a84b, so it cannot promote the fixed kernel.
 // Set GGML_SYCL_FFN_FUSION=1 to enable it for a new validation campaign.
 static bool ggml_sycl_ffn_fusion_enabled() {
-    static const bool enabled = [] {
-        const char * value = getenv("GGML_SYCL_FFN_FUSION");
-        if (value == nullptr || value[0] == '\0') {
-            return false;
-        }
-        return !(value[0] == '0' && value[1] == '\0');
-    }();
+    static const bool enabled = ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 0) != 0;
     return enabled;
 }
 
