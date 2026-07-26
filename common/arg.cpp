@@ -901,6 +901,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.cors_origins = "localhost";
     }
 
+    if (params.cors_origins == "*" && params.cors_credentials) {
+        LOG_WRN("CORS credentials are disabled when the allowed origin is '*'\n");
+        params.cors_credentials = false;
+    }
+
     // pad tensor_buft_overrides for llama_params_fit:
     const size_t ntbo = llama_max_tensor_buft_overrides();
     while (params.tensor_buft_overrides.size() < ntbo) {
@@ -3302,7 +3307,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--no-cors-credentials"},
         string_format(
             "whether to allow credentials for CORS (default: %s)\n"
-            "note: if this is enabled and --cors-origins is set to * (default), the Origin header will be echoed back, and credentials will always be allowed",
+            "wildcard CORS origin ('*') forces credentials off",
         params.cors_credentials ? "enabled" : "disabled"),
         [](common_params & params, bool value) {
             params.cors_credentials = value;

@@ -146,24 +146,93 @@ def test_openai_library_correct_api_key():
     assert len(res.choices) == 1
 
 
-@pytest.mark.parametrize("origin,cors_header,cors_header_value", [
-    ("localhost", "Access-Control-Allow-Origin", "localhost"),
-    ("web.mydomain.fr", "Access-Control-Allow-Origin", "web.mydomain.fr"),
-    ("origin", "Access-Control-Allow-Credentials", "true"),
-    ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
-    ("web.mydomain.fr", "Access-Control-Allow-Headers", "*"),
-])
-def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
+def test_cors_default_wildcard_preflight_is_non_credentialed():
     global server
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": "https://arbitrary.example",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == "*"
+    assert res.headers["Access-Control-Allow-Credentials"] == "false"
+    assert res.headers["Access-Control-Allow-Methods"] == "GET, POST, DELETE, OPTIONS"
+    assert res.headers["Access-Control-Allow-Headers"] == "*"
+
+
+@pytest.mark.parametrize("origin", [
+    "https://one.example",
+    "https://two.example",
+])
+def test_cors_wildcard_with_credentials_is_normalized(origin: str):
+    global server
+    server.cors_origins = "*"
+    server.cors_credentials = True
     server.start()
     res = server.make_request("OPTIONS", "/completions", headers={
         "Origin": origin,
         "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "Authorization",
     })
+
     assert res.status_code == 200
-    assert cors_header in res.headers
-    assert res.headers[cors_header] == cors_header_value
+    assert res.headers["Access-Control-Allow-Origin"] == "*"
+    assert res.headers["Access-Control-Allow-Credentials"] == "false"
+
+
+def test_cors_wildcard_credentials_logs_normalization_warning(tmp_path):
+    global server
+    log_path = tmp_path / "server.log"
+    server.cors_origins = "*"
+    server.cors_credentials = True
+    server.log_path = str(log_path)
+    server.start()
+    server.stop()
+
+    assert log_path.read_text().count("CORS credentials are disabled") == 1
+
+
+def test_cors_wildcard_get_never_reflects_origin_or_allows_credentials():
+    global server
+    server.start()
+    res = server.make_request("GET", "/health", headers={
+        "Origin": "null",
+    })
+
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == "*"
+    assert "Access-Control-Allow-Credentials" not in res.headers
+
+
+def test_cors_explicit_origin_retains_credentials():
+    global server
+    server.cors_origins = "https://trusted.example"
+    server.cors_credentials = True
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": "https://trusted.example",
+        "Access-Control-Request-Method": "POST",
+    })
+
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == "https://trusted.example"
+    assert res.headers["Access-Control-Allow-Credentials"] == "true"
+
+
+def test_cors_explicitly_disabled_credentials_remain_disabled():
+    global server
+    server.cors_origins = "https://trusted.example"
+    server.cors_credentials = False
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": "https://trusted.example",
+        "Access-Control-Request-Method": "POST",
+    })
+
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == "https://trusted.example"
+    assert res.headers["Access-Control-Allow-Credentials"] == "false"
 
 
 @pytest.mark.parametrize("origin", [
@@ -178,6 +247,7 @@ def test_cors_origins_localhost_reflects(origin: str):
     global server
     server = ServerPreset.router()
     server.cors_origins = "localhost"
+    server.cors_credentials = True
     server.start()
     res = server.make_request("OPTIONS", "/completions", headers={
         "Origin": origin,
@@ -186,7 +256,7 @@ def test_cors_origins_localhost_reflects(origin: str):
     })
     assert res.status_code == 200
     assert res.headers["Access-Control-Allow-Origin"] == origin
-
+    assert res.headers["Access-Control-Allow-Credentials"] == "true"
 
 @pytest.mark.parametrize("origin", [
     "http://web.mydomain.fr",

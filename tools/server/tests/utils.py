@@ -118,6 +118,7 @@ class ServerProcess:
     gcp_compat: bool = False
     server_tools: str | None = None
     cors_origins: str | None = None
+    cors_credentials: bool | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -176,6 +177,8 @@ class ServerProcess:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
             server_args.extend(["--cors-origins", self.cors_origins])
+        if self.cors_credentials is not None:
+            server_args.append("--cors-credentials" if self.cors_credentials else "--no-cors-credentials")
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
