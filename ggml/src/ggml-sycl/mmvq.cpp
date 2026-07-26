@@ -1,5 +1,7 @@
 #include "mmvq.hpp"
 
+#include <atomic>
+
 #include "ggml.h"
 #include "common.hpp"
 #include "quants.hpp"
@@ -2761,16 +2763,44 @@ bool ggml_sycl_mul_mat_vec_q_fused_swiglu(
         return false;
     }
 
+    if (getenv("GGML_SYCL_FFN_FUSION_DEBUG") != nullptr) {
+        static std::atomic<bool> logged{ false };
+        if (!logged.exchange(true)) {
+            fprintf(stderr,
+                    "GGML_SYCL_FFN_FUSION_DEBUG: gate ne=[%ld,%ld,%ld,%ld] nb=[%zu,%zu] data=%p\n"
+                    "  up   ne=[%ld,%ld,%ld,%ld] nb=[%zu,%zu] data=%p\n"
+                    "  act  ne=[%ld,%ld,%ld,%ld] type=%s cont=%d data=%p\n"
+                    "  dst  ne=[%ld,%ld,%ld,%ld] type=%s cont=%d data=%p\n"
+                    "  gate_mm ne=[%ld,%ld] up_mm ne=[%ld,%ld]\n",
+                    (long) gate->ne[0], (long) gate->ne[1], (long) gate->ne[2], (long) gate->ne[3],
+                    gate->nb[0], gate->nb[1], gate->data,
+                    (long) up->ne[0], (long) up->ne[1], (long) up->ne[2], (long) up->ne[3],
+                    up->nb[0], up->nb[1], up->data,
+                    (long) act->ne[0], (long) act->ne[1], (long) act->ne[2], (long) act->ne[3],
+                    ggml_type_name(act->type), ggml_is_contiguous(act) ? 1 : 0, act->data,
+                    (long) dst->ne[0], (long) dst->ne[1], (long) dst->ne[2], (long) dst->ne[3],
+                    ggml_type_name(dst->type), ggml_is_contiguous(dst) ? 1 : 0, dst->data,
+                    (long) dst->src[0]->ne[0], (long) dst->src[0]->ne[1],
+                    (long) dst->src[1]->ne[0], (long) dst->src[1]->ne[1]);
+            fflush(stderr);
+        }
+    }
+
     dpct::queue_ptr stream = ctx.stream();
     const int64_t padded = GGML_PAD(ne00, MATRIX_ROW_PADDING);
 
     // Quantize the activation once and share it between both projections; the
     // unfused path pays for this twice.
+    //
+    // Must be the SoA quantizer, not quantize_q8_1. The reorder kernels read a
+    // split layout - all quants in [0, kx), all scales from kx onwards - whereas
+    // quantize_q8_1 writes interleaved block_q8_1. Using the interleaved one here
+    // made the kernel read scales out of the quant region and produced garbage.
     ggml_sycl_pool_alloc<char> act_q8_1(ctx.pool(), padded * sizeof(block_q8_1) / QK8_1);
     {
         scope_op_debug_print scope_dbg_print(__func__, "/quantize_row_q8_1_sycl", dst, 2);
-        quantize_row_q8_1_sycl<quantize_q8_1>((const float *) act->data, act_q8_1.get(),
-                                              (int) ne00, 1, (int) padded, stream);
+        quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>((const float *) act->data, act_q8_1.get(),
+                                                              (int) ne00, 1, (int) padded, stream);
     }
 
     reorder_mul_mat_vec_q4_k_q8_1_fused_swiglu_sycl(
