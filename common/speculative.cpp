@@ -1135,7 +1135,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             i_block_beg[seq_id] = batch.n_tokens;
             n_block    [seq_id] = n_block_tokens;
             for (int32_t i = 0; i < n_block_tokens; ++i) {
-                common_batch_add(batch, i == 0 ? dp.id_last : mask_token_id, n + i, { seq_id }, true);
+                // logits only for the masked positions: the read-back loop below
+                // starts at i == 1, so position 0 (id_last) is never sampled.
+                common_batch_add(batch, i == 0 ? dp.id_last : mask_token_id, n + i, { seq_id }, i > 0);
             }
         }
 
