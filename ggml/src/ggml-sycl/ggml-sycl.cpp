@@ -5656,9 +5656,7 @@ static bool ggml_sycl_ffn_fusion_eligible(
         profile.reject_src_mismatch.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
-    const ggml_glu_op glu_op = ggml_get_glu_op(glu);
-    if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU &&
-        glu_op != GGML_GLU_OP_REGLU) {
+    if (ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU) {
         profile.reject_glu_op.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
