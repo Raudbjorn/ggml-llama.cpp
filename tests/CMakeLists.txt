@@ -200,7 +200,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # needs the server-context target from tools/server; absent on the pruned lib
     # branch, and also absent whenever tools are not built (tools/server is only
     # added under LLAMA_BUILD_TOOLS), which would otherwise fail to link here.
-    if (LLAMA_BUILD_TOOLS AND LLAMA_BUILD_SERVER AND EXISTS "${PROJECT_SOURCE_DIR}/tools/server")
+    if (LLAMA_BUILD_TOOLS AND LLAMA_BUILD_SERVER AND IS_DIRECTORY "${PROJECT_SOURCE_DIR}/tools/server")
         llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
         target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
         target_link_libraries(test-chat PRIVATE server-context)
@@ -368,7 +368,7 @@ if (NOT GGML_BACKEND_DL)
 endif()
 
 # libmtmd; the mtmd target comes from tools/mtmd, absent on the pruned lib branch
-if ((LLAMA_BUILD_TOOLS OR LLAMA_BUILD_MTMD) AND EXISTS "${PROJECT_SOURCE_DIR}/tools/mtmd")
+if ((LLAMA_BUILD_TOOLS OR LLAMA_BUILD_MTMD) AND IS_DIRECTORY "${PROJECT_SOURCE_DIR}/tools/mtmd")
     set(LLAMA_TEST_NAME test-mtmd-c-api)
     llama_build_and_test(test-mtmd-c-api.c)
     target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)

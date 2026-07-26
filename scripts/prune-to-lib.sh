@@ -100,6 +100,9 @@ done
 # docs: keep only docs/research (dated evidence corpus) and the SDK guide
 if [ -d docs ]; then
     for d in docs/*; do
+        # nullglob is not set, so an empty docs/ leaves the literal "docs/*"
+        # here and git rm would abort the script under set -e.
+        [ -e "$d" ] || continue
         [ "$d" = "docs/research" ] && continue
         [ "$d" = "docs/SDK.md" ] && continue
         git rm -r -q -- "$d"

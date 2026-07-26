@@ -38,7 +38,7 @@ find_library(llama_common_LIBRARY llama-common
     HINTS ${LLAMA_LIB_DIR}
     NO_CMAKE_FIND_ROOT_PATH
 )
-if (llama_common_LIBRARY AND EXISTS "${LLAMA_INCLUDE_DIR}/llama-common" AND NOT TARGET llama-common)
+if (llama_common_LIBRARY AND IS_DIRECTORY "${LLAMA_INCLUDE_DIR}/llama-common" AND NOT TARGET llama-common)
     find_package(Threads REQUIRED)
     add_library(llama-common UNKNOWN IMPORTED GLOBAL)
     set_target_properties(llama-common
