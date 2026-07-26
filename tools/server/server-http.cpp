@@ -291,6 +291,7 @@ bool server_http_context::init(const common_params & params) {
 
     // register server middlewares
     srv->set_pre_routing_handler([&params, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
+        const bool cors_credentials = params.cors_credentials && params.cors_origins != "*";
         if (params.cors_origins == "*") {
             res.set_header("Access-Control-Allow-Origin", "*");
         } else if (params.cors_origins == "localhost") {
@@ -304,9 +305,11 @@ bool server_http_context::init(const common_params & params) {
         } else {
             res.set_header("Access-Control-Allow-Origin", params.cors_origins);
         }
+        if (cors_credentials && req.method != "OPTIONS") {
+            res.set_header("Access-Control-Allow-Credentials", "true");
+        }
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {
-            const bool cors_credentials = params.cors_credentials && params.cors_origins != "*";
             res.set_header("Access-Control-Allow-Credentials", cors_credentials ? "true" : "false");
             res.set_header("Access-Control-Allow-Methods",     params.cors_methods);
             res.set_header("Access-Control-Allow-Headers",     params.cors_headers);

@@ -219,6 +219,13 @@ def test_cors_explicit_origin_retains_credentials():
     assert res.headers["Access-Control-Allow-Origin"] == "https://trusted.example"
     assert res.headers["Access-Control-Allow-Credentials"] == "true"
 
+    actual = server.make_request("GET", "/health", headers={
+        "Origin": "https://trusted.example",
+    })
+    assert actual.status_code == 200
+    assert actual.headers["Access-Control-Allow-Origin"] == "https://trusted.example"
+    assert actual.headers["Access-Control-Allow-Credentials"] == "true"
+
 
 def test_cors_explicitly_disabled_credentials_remain_disabled():
     global server
@@ -257,6 +264,13 @@ def test_cors_origins_localhost_reflects(origin: str):
     assert res.status_code == 200
     assert res.headers["Access-Control-Allow-Origin"] == origin
     assert res.headers["Access-Control-Allow-Credentials"] == "true"
+
+    actual = server.make_request("GET", "/health", headers={
+        "Origin": origin,
+    })
+    assert actual.status_code == 200
+    assert actual.headers["Access-Control-Allow-Origin"] == origin
+    assert actual.headers["Access-Control-Allow-Credentials"] == "true"
 
 @pytest.mark.parametrize("origin", [
     "http://web.mydomain.fr",
