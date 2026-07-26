@@ -25,6 +25,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
@@ -846,6 +847,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     // parse all CLI args now, so that -hf is available below for remote preset resolution
     parse_cli_args();
 
+
     postprocess_cpu_params(params.cpuparams,       nullptr);
     postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
 
@@ -916,6 +918,15 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
         ));
     }
+
+    if (params.warn_unknown_env) {
+        const std::vector<std::string> unknown_env_vars =
+            find_unknown_env_vars(ctx_arg.options, common_get_process_environment());
+        for (const std::string & name : unknown_env_vars) {
+            LOG_WRN("unknown environment variable: %s\n", name.c_str());
+        }
+    }
+
 
     return true;
 }
@@ -1270,6 +1281,37 @@ bool common_arg_utils::is_falsey(const std::string & value) {
 
 bool common_arg_utils::is_autoy(const std::string & value) {
     return value == "auto" || value == "-1";
+}
+
+std::vector<std::string> common_arg_utils::find_unknown_env_vars(
+        const std::vector<common_arg> & options,
+        const std::vector<std::string> & environment) {
+    auto normalize_name = [](std::string name) {
+#ifdef _WIN32
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+            return static_cast<char>(std::toupper(c));
+        });
+#endif
+        return name;
+    };
+
+    std::set<std::string> known_names;
+    for (const common_arg & option : options) {
+        for (const std::string & name : option.get_env()) {
+            known_names.insert(normalize_name(name));
+        }
+    }
+
+    std::set<std::string> unknown_names;
+    for (const std::string & entry : environment) {
+        const size_t separator = entry.find('=');
+        const std::string name = normalize_name(entry.substr(0, separator));
+        if (string_starts_with(name, "LLAMA_ARG_") && known_names.count(name) == 0) {
+            unknown_names.insert(name);
+        }
+    }
+
+    return {unknown_names.begin(), unknown_names.end()};
 }
 
 // Simple CSV parser that handles quoted fields and escaped quotes
@@ -3767,6 +3809,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_LOG_COLORS"));
+    add_opt(common_arg(
+        {"--warn-unknown-env"},
+        "Warn about unrecognized LLAMA_ARG_* environment variables",
+        [](common_params & params) {
+            params.warn_unknown_env = true;
+        }
+    ).set_env("LLAMA_ARG_WARN_UNKNOWN_ENV"));
     add_opt(common_arg(
         {"-v", "--verbose", "--log-verbose"},
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",

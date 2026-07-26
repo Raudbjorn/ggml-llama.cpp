@@ -2,16 +2,20 @@
 #include "common.h"
 #include "download.h"
 #include "llama.h"
+#include "log.h"
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <sstream>
+#include <random>
 #include <unordered_set>
 
 #undef NDEBUG
 #include <cassert>
 
-#ifndef _WIN32
 struct env_var_snapshot {
     std::string name;
     bool was_set;
@@ -26,16 +30,55 @@ struct env_var_snapshot {
     }
 
     ~env_var_snapshot() {
-        if (was_set) {
-            setenv(name.c_str(), value.c_str(), true);
+        set(was_set ? value.c_str() : nullptr);
+    }
+
+    void set(const char * new_value) const {
+#ifdef _WIN32
+        assert(_putenv_s(name.c_str(), new_value != nullptr ? new_value : "") == 0);
+#else
+        if (new_value != nullptr) {
+            assert(setenv(name.c_str(), new_value, true) == 0);
         } else {
-            unsetenv(name.c_str());
+            assert(unsetenv(name.c_str()) == 0);
         }
+#endif
     }
 };
+
+static void test_unknown_env_classifier(void) {
+    std::vector<common_arg> options = {
+        common_arg(
+            {"--known"},
+            {"--no-known"},
+            "test option",
+            [](common_params &, bool) {
+            }
+        ).set_env("LLAMA_ARG_KNOWN"),
+    };
+    const std::vector<std::string> environment = {
+        "LLAMA_ARG_kNoWn=on",
+        "LLAMA_ARG_NO_KNOWN=on",
+        "PATH=/tmp",
+        "llama_arg_beta=secret=must-not-leak",
+        "LLAMA_ARG_ZETA=another-secret",
+        "LLAMA_ARG_zeta=third-secret",
+        "LLAMA_ARG_ALPHA=value",
+    };
+
+    const std::vector<std::string> unknown =
+        common_arg_utils::find_unknown_env_vars(options, environment);
+#ifdef _WIN32
+    assert((unknown == std::vector<std::string>{"LLAMA_ARG_ALPHA", "LLAMA_ARG_BETA", "LLAMA_ARG_ZETA"}));
+#else
+    assert((unknown == std::vector<std::string>{
+        "LLAMA_ARG_ALPHA", "LLAMA_ARG_ZETA", "LLAMA_ARG_kNoWn", "LLAMA_ARG_zeta"}));
 #endif
+}
 
 static void test(void) {
+    test_unknown_env_classifier();
+
     common_params params;
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
@@ -108,6 +151,77 @@ static void test(void) {
     };
 
     std::vector<std::string> argv;
+
+    {
+        env_var_snapshot warn_unknown_env("LLAMA_ARG_WARN_UNKNOWN_ENV");
+        env_var_snapshot typo_env("LLAMA_ARG_TYPO");
+        warn_unknown_env.set("1");
+        typo_env.set("secret");
+
+        const std::filesystem::path log_path = std::filesystem::temp_directory_path() /
+            ("llama-test-arg-parser-" + std::to_string(std::random_device{}()) + ".log");
+        common_log_set_file(common_log_main(), log_path.string().c_str());
+
+        common_params invalid_params;
+        argv = {"binary_name", "-m", "model.gguf", "--prompt-cache-all", "--interactive"};
+        assert(false == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), invalid_params, LLAMA_EXAMPLE_COMPLETION));
+
+        common_log_flush(common_log_main());
+        common_log_set_file(common_log_main(), nullptr);
+
+        {
+            std::ifstream log_file(log_path);
+            const std::string log_contents(
+                (std::istreambuf_iterator<char>(log_file)),
+                std::istreambuf_iterator<char>());
+            assert(log_contents.find("LLAMA_ARG_TYPO") == std::string::npos);
+        }
+
+        common_log_set_file(common_log_main(), log_path.string().c_str());
+
+        common_params valid_params;
+        argv = {"binary_name", "-m", "model.gguf"};
+        assert(true == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), valid_params, LLAMA_EXAMPLE_COMMON));
+
+        common_log_flush(common_log_main());
+        common_log_set_file(common_log_main(), nullptr);
+
+        {
+            std::ifstream log_file(log_path);
+            const std::string log_contents(
+                (std::istreambuf_iterator<char>(log_file)),
+                std::istreambuf_iterator<char>());
+            assert(log_contents.find("LLAMA_ARG_TYPO") != std::string::npos);
+            assert(log_contents.find("secret") == std::string::npos);
+        }
+        std::filesystem::remove(log_path);
+    }
+
+    {
+        env_var_snapshot warn_unknown_env("LLAMA_ARG_WARN_UNKNOWN_ENV");
+        warn_unknown_env.set(nullptr);
+
+        common_params default_params;
+        argv = {"binary_name", "-m", "model.gguf"};
+        assert(true == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), default_params, LLAMA_EXAMPLE_COMMON));
+        assert(!default_params.warn_unknown_env);
+
+        common_params cli_params;
+        argv = {"binary_name", "-m", "model.gguf", "--warn-unknown-env"};
+        assert(true == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), cli_params, LLAMA_EXAMPLE_COMMON));
+        assert(cli_params.warn_unknown_env);
+
+        warn_unknown_env.set("1");
+        common_params env_params;
+        argv = {"binary_name", "-m", "model.gguf"};
+        assert(true == common_params_parse(
+            argv.size(), list_str_to_char(argv).data(), env_params, LLAMA_EXAMPLE_COMMON));
+        assert(env_params.warn_unknown_env);
+    }
 
     printf("test-arg-parser: test invalid usage\n\n");
 

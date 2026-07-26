@@ -534,6 +534,7 @@ struct common_params {
     std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
+    bool    warn_unknown_env            = false;
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
     bool    offline                    = false;
@@ -864,6 +865,12 @@ std::string string_from(const struct llama_context * ctx, const std::vector<llam
 std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
 
 bool glob_match(const std::string & pattern, const std::string & str);
+
+//
+// Process environment utils
+//
+
+std::vector<std::string> common_get_process_environment();
 
 //
 // Filesystem utils
