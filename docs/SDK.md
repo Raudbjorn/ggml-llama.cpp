@@ -18,6 +18,20 @@ SDK builds default to providing models as local GGUF files. With
 Everything else in `llama-common` (sampling, chat templates, arg parsing)
 works unchanged.
 
+## Environment surface
+
+`LLAMA_ARG_*` option parsing remains part of `llama-common`. Diagnostics for
+unknown names are opt-in (`--warn-unknown-env`) and log names only, never
+values. With `LLAMA_DOWNLOAD=OFF`, downloader and token environment variables
+have no network effect. Server and UI executables and their runtime surfaces
+are absent from the generated `lib` branch, while server option definitions
+remain available through `llama-common` parser examples.
+
+After an explicit parameter, token precedence is `HF_TOKEN` then
+`HUGGING_FACE_HUB_TOKEN`; endpoint precedence is `MODEL_ENDPOINT` then
+`HF_ENDPOINT`. The `lib` branch is generated from `master` and must never be
+edited directly.
+
 ## Consuming the SDK
 
 ### Option 1: subproject (add_subdirectory / FetchContent)

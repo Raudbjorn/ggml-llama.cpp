@@ -3014,7 +3014,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_HF_FILE_V"));
     add_opt(common_arg(
         {"-hft", "--hf-token"}, "TOKEN",
-        "Hugging Face access token (default: value from HF_TOKEN environment variable)",
+        "Hugging Face access token (precedence: --hf-token, HF_TOKEN, then HUGGING_FACE_HUB_TOKEN)",
         [](common_params & params, const std::string & value) {
             params.hf_token = value;
         }
@@ -3344,7 +3344,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
     add_opt(common_arg(
         {"--ui-mcp-proxy-allow"}, "HOST[,HOST]",
-        "exact normalized direct-target host exceptions for the MCP CORS proxy; DNS names are matched case-insensitively with one trailing dot ignored\n"
+        "direct targets with non-global numeric, local, or metadata hosts are blocked by default; "
+        "this option adds exact normalized host exceptions (DNS names are case-insensitive with one trailing dot ignored)\n"
         "note: automatic redirect destinations and DNS answers are not validated or pinned",
         [](common_params & params, const std::string & value) {
             std::vector<std::string> hosts;
@@ -3831,7 +3832,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_LOG_COLORS"));
     add_opt(common_arg(
         {"--warn-unknown-env"},
-        "Warn about unrecognized LLAMA_ARG_* environment variables",
+        "opt-in warning for unrecognized LLAMA_ARG_* environment variable names; values are never logged (default: disabled)",
         [](common_params & params) {
             params.warn_unknown_env = true;
         }
