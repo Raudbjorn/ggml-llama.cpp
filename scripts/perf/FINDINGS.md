@@ -1,5 +1,45 @@
 # A770/SYCL spec-decode + KV-type tuning — findings (R1)
 
+## 2026-07-26 correction — the f16 exactness claim does not reproduce
+
+The 2026-07-22 entry below concludes that "the fixed suite supports global speculation with
+f16 KV" on the strength of f16 `free_prose` being target-exact at 11.46x. **That does not
+reproduce.**
+
+Re-run on the same model file (verified identical inode,
+`/mnt/mrgr/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf`), same
+repository, `REPEATS=3`, `ONLY=f16`:
+
+| prompt | target-only | ngram-mod | ngram-mod+map-k4v | exact? |
+|---|---:|---:|---:|---|
+| code_edit | 21.42 | 75.22 | 78.15 | yes, 1 hash |
+| multi_turn | 21.58 | 51.41 | 51.74 | yes, 1 hash |
+| free_prose | 21.42 | 23.14 | 23.12 | **no, 3 distinct hashes in 3 runs** |
+
+Target-only produced a single hash in every class, so plain decode remains deterministic;
+the divergence appears only when speculation varies the batch shape.
+
+Run twice, at `GGML_SYCL_MAX_WG_PER_CU=16` (the promoted flash-attention occupancy default)
+and at `2` (the previous effective value). **Results were identical at both**, which
+exonerates the occupancy change as a cause and establishes the behaviour as pre-existing.
+
+The original 11.46x figure is additionally implausible on its own terms: measured draft
+acceptance for `free_prose` is 0.615-0.680, which for ngram drafting implies roughly
+1.5-2.5x, not 11x. A warm prompt cache is the most likely explanation.
+
+### Consequence
+
+**Exactness tracks prompt class, not KV cache type.** Both f16 and q8_0 are target-exact on
+the copy-heavy classes (`code_edit`, `multi_turn`) and non-exact on `free_prose`. The
+f16/q8_0 split in the entry below is therefore not supported, and the proposal to enable
+speculation by default whenever KV is f16 is withdrawn.
+
+The surviving recommendation is the same for both KV types, and is what the q8_0 half of the
+entry below already says: promote `ngram-mod,ngram-map-k4v` only for controlled copy-heavy
+workloads, where it is worth 2.4x-3.7x and stays target-exact. Keep target-only as the
+general default. A server cannot classify an incoming prompt as copy-heavy in advance, so
+this stays an operator decision rather than an automatic one.
+
 ## 2026-07-22 P5 descendant revalidation (supersedes global q8_0 recommendation)
 
 The original R1/R2 record below is retained as historical evidence. A stricter
