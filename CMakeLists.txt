@@ -328,11 +328,17 @@ set_target_properties(llama
 
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
-if (LLAMA_BUILD_COMMON)
+# Shared builds only, and enforced rather than merely documented: with a static
+# llama-common the artifact is an ARCHIVE, so `install(TARGETS ... LIBRARY)`
+# would install no library while still installing the headers and vendored
+# nlohmann, leaving a header-only SDK surface with nothing to link against.
+# Installing ARCHIVE instead would not fix it either, since llama-common-base
+# is only folded into the shared object; a static llama-common.a would ship
+# without its objects.
+if (LLAMA_BUILD_COMMON AND BUILD_SHARED_LIBS)
     install(TARGETS llama-common LIBRARY)
     # SDK surface for the helper library: headers land under include/llama-common,
-    # plus the nlohmann headers its public headers reference. Note: shared builds
-    # only; llama-common-base is folded into the shared object and not installed.
+    # plus the nlohmann headers its public headers reference.
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/common/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llama-common
             FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")

@@ -15,8 +15,11 @@ llama_add_compile_flags()
 # add_tool_subdir tolerates pruned trees: the generated lib branch
 # (scripts/prune-to-lib.sh) keeps only a subset of the tool directories.
 function(add_tool_subdir dir)
-    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${dir})
-        add_subdirectory(${dir})
+    # IS_DIRECTORY, not EXISTS: a stray file with a tool's name must not be
+    # handed to add_subdirectory. Paths are quoted so a source tree containing
+    # spaces does not split into multiple arguments.
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${dir}")
+        add_subdirectory("${dir}")
     endif()
 endfunction()
 
