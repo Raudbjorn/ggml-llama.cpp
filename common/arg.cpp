@@ -3338,6 +3338,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
     add_opt(common_arg(
+        {"--ui-mcp-proxy-allow"}, "HOST[,HOST]",
+        "exact normalized direct-target host exceptions for the MCP CORS proxy; DNS names are matched case-insensitively with one trailing dot ignored\n"
+        "note: automatic redirect destinations and DNS answers are not validated or pinned",
+        [](common_params & params, const std::string & value) {
+            std::vector<std::string> hosts;
+            for (const auto & candidate : parse_csv_row(value)) {
+                const std::string host = string_strip(candidate);
+                if (!host.empty()) {
+                    hosts.push_back(host);
+                }
+            }
+            params.ui_mcp_proxy_allow = std::move(hosts);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY_ALLOW"));
+    add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
