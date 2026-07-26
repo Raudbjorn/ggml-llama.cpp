@@ -7,7 +7,9 @@
 - candidate env: {'GGML_SYCL_MAX_WG_PER_CU': '16'}
 - candidate_enabled: True
 - model shape: {'model_layers': 32, 'query_heads': 32, 'head_dim': 128}
-- candidate env log assertions: {'GGML_SYCL_MAX_WG_PER_CU': {'requested_value': '16', 'backend_logs_key': False, 'candidate_samples': 12, 'candidate_samples_with_requested_value': 0, 'valid': True}}
+- campaign valid: True
+- invalid diagnostics: none
+- candidate env log assertions: GGML_SYCL_MAX_WG_PER_CU=16 (not validated from backend logs; key not emitted)
 - dmesg fault hits before=0 after=0 new=0
 
 | depth | kv | metric | valid | baseline median tok/s | baseline mean | baseline stddev | baseline 95% CI | candidate median tok/s | candidate mean | candidate stddev | candidate 95% CI | paired median % | paired mean % | paired stddev | paired 95% CI | effective KV B/step | baseline effective GB/s | candidate effective GB/s | n |

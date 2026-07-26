@@ -1,5 +1,11 @@
 # Product campaign: mistral-7b-instruct-v0.1.Q4_K_M.gguf
 
+> [!CAUTION]
+> INVALID FOR PROMOTION: the raw samples report build commit `b5ef0a84b`,
+> which contains the known-bad interleaved activation quantizer. The fixed
+> kernel starts at `02f848c83`. The table is retained as historical data only
+> and does not validate the fixed kernel.
+
 - bin-dir: /mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork-fa-occupancy/build/bin
 - baseline label: baseline
 - candidate label: candidate
@@ -7,7 +13,9 @@
 - candidate env: {'GGML_SYCL_FFN_FUSION': '1'}
 - candidate_enabled: True
 - model shape: {'model_layers': 32, 'query_heads': 32, 'head_dim': 128}
-- candidate env log assertions: {'GGML_SYCL_FFN_FUSION': {'requested_value': '1', 'backend_logs_key': False, 'candidate_samples': 36, 'candidate_samples_with_requested_value': 0, 'valid': True}}
+- campaign valid: False
+- invalid diagnostics: ['sample build_commit b5ef0a84b does not match repository commit 02f848c83a8aee4bfe0ce956b64cc4b9058e2bf2']
+- candidate env log assertions: GGML_SYCL_FFN_FUSION=1 (not validated from backend logs; key not emitted)
 - dmesg fault hits before=0 after=0 new=0
 
 | depth | kv | metric | valid | baseline median tok/s | baseline mean | baseline stddev | baseline 95% CI | candidate median tok/s | candidate mean | candidate stddev | candidate 95% CI | paired median % | paired mean % | paired stddev | paired 95% CI | effective KV B/step | baseline effective GB/s | candidate effective GB/s | n |

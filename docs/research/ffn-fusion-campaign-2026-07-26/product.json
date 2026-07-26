@@ -1,5 +1,5 @@
 {
-  "all_cells_valid": true,
+  "all_cells_valid": false,
   "baseline_env": {
     "GGML_SYCL_FFN_FUSION": "0"
   },
@@ -1481,7 +1481,9 @@
   "expected_retained_per_arm": 5,
   "invalid_cell_count": 0,
   "invalid_cell_ids": [],
-  "invalid_diagnostics": [],
+  "invalid_diagnostics": [
+    "sample build_commit b5ef0a84b does not match repository commit 02f848c83a8aee4bfe0ce956b64cc4b9058e2bf2"
+  ],
   "kv_types": [
     [
       "f16",

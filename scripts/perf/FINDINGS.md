@@ -1,6 +1,6 @@
-# A770/SYCL spec-decode + KV-type tuning — findings (R1)
+# A770/SYCL spec-decode + KV-type tuning - findings (R1)
 
-## 2026-07-26 correction — the f16 exactness claim does not reproduce
+## 2026-07-26 correction - the f16 exactness claim does not reproduce
 
 The 2026-07-22 entry below concludes that "the fixed suite supports global speculation with
 f16 KV" on the strength of f16 `free_prose` being target-exact at 11.46x. **That does not

@@ -21,12 +21,28 @@ HARNESS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HARNESS)
 
 
-def bench_result(pp: float | None, tg: float | None) -> dict[str, object]:
+def bench_result(
+    pp: float | None, tg: float | None, build_commit: str | None = None
+) -> dict[str, object]:
     rows: list[dict[str, object]] = []
     if pp is not None:
-        rows.append({"n_prompt": 512, "n_gen": 0, "avg_ts": pp})
+        rows.append(
+            {
+                "n_prompt": 512,
+                "n_gen": 0,
+                "avg_ts": pp,
+                "build_commit": build_commit,
+            }
+        )
     if tg is not None:
-        rows.append({"n_prompt": 0, "n_gen": 128, "avg_ts": tg})
+        rows.append(
+            {
+                "n_prompt": 0,
+                "n_gen": 128,
+                "avg_ts": tg,
+                "build_commit": build_commit,
+            }
+        )
     return {
         "ok": True,
         "returncode": 0,
@@ -462,6 +478,200 @@ class ProductCampaignTests(unittest.TestCase):
                 self.assertGreater(len(sample["stderr"]), 5000)
                 self.assertEqual(sample["baseline_env"], {"TEST_ARM": "baseline"})
                 self.assertEqual(sample["candidate_env"], {"TEST_ARM": "candidate"})
+
+    def test_real_cell_shape_carries_build_commit_for_identity_gate(self) -> None:
+        provenance = {
+            "repository_commit": {
+                "returncode": 0,
+                "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            },
+            "llama_cli_version": {
+                "stdout": "",
+                "stderr": "version: 1 (aaaaaaaaa)\n",
+            },
+            "candidate_llama_cli_version": {
+                "stdout": "",
+                "stderr": "version: 1 (aaaaaaaaa)\n",
+            },
+        }
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+            HARNESS, "check_sole_tenancy"
+        ), mock.patch.object(
+            HARNESS, "run", return_value=bench_result(100.0, 20.0, "aaaaaaaaa")
+        ):
+            cell = HARNESS.run_product_cell(
+                bin_dir=Path(td),
+                model_path="model.gguf",
+                kv=("q8_0", "q8_0"),
+                depth=0,
+                baseline_env={},
+                candidate_env={"TEST_ARM": "candidate"},
+                repetitions=3,
+                timeout_s=5,
+                samples_dir=Path(td) / "samples",
+                cell_idx=1,
+            )
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                [cell], provenance, require_repository_match=True
+            ),
+            [],
+        )
+
+    def test_baseline_only_identity_gate_ignores_candidate_arm(self) -> None:
+        provenance = {
+            "repository_commit": {
+                "returncode": 0,
+                "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            },
+            "llama_cli_version": {
+                "stdout": "",
+                "stderr": "version: 1 (aaaaaaaaa)\n",
+            },
+            "candidate_llama_cli_version": {
+                "stdout": "",
+                "stderr": "version: 1 (aaaaaaaaa)\n",
+            },
+        }
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+            HARNESS, "check_sole_tenancy"
+        ), mock.patch.object(
+            HARNESS, "run", return_value=bench_result(100.0, 20.0, "aaaaaaaaa")
+        ):
+            cell = HARNESS.run_product_cell(
+                bin_dir=Path(td),
+                model_path="model.gguf",
+                kv=("q8_0", "q8_0"),
+                depth=0,
+                baseline_env={},
+                candidate_env=None,
+                repetitions=3,
+                timeout_s=5,
+                samples_dir=Path(td) / "samples",
+                cell_idx=1,
+            )
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                [cell], provenance, require_repository_match=True
+            ),
+            [],
+        )
+
+    def test_env_assertion_renderer_marks_unlogged_key_unvalidated(self) -> None:
+        assertions = {
+            "GGML_SYCL_FFN_FUSION": {
+                "requested_value": "1",
+                "backend_logs_key": False,
+                "candidate_samples": 36,
+                "candidate_samples_with_requested_value": 0,
+                "valid": True,
+            }
+        }
+
+        self.assertEqual(
+            HARNESS._format_candidate_env_log_assertions(assertions),
+            "GGML_SYCL_FFN_FUSION=1 "
+            "(not validated from backend logs; key not emitted)",
+        )
+
+    def test_build_commit_mismatch_is_rejected(self) -> None:
+        cells = [
+            {
+                "samples": {
+                    "baseline": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "b5ef0a84b"},
+                                "tg128": {"build_commit": "b5ef0a84b"},
+                            }
+                        }
+                    ],
+                    "candidate": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "b5ef0a84b"},
+                                "tg128": {"build_commit": "b5ef0a84b"},
+                            }
+                        }
+                    ],
+                }
+            }
+        ]
+        provenance = {
+            "repository_commit": {
+                "returncode": 0,
+                "stdout": "02f848c83a8aee4bfe0ce956b64cc4b9058e2bf2\n",
+                "stderr": "",
+            },
+            "llama_cli_version": {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "version: 10116 (b5ef0a84b)\n",
+            },
+            "candidate_llama_cli_version": {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "version: 10116 (b5ef0a84b)\n",
+            },
+        }
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                cells, provenance, require_repository_match=True
+            ),
+            [
+                "sample build_commit b5ef0a84b does not match repository "
+                "commit 02f848c83a8aee4bfe0ce956b64cc4b9058e2bf2"
+            ],
+        )
+
+    def test_separate_binary_commits_match_their_own_arm_identity(self) -> None:
+        cells = [
+            {
+                "samples": {
+                    "baseline": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "aaaaaaaaa"}
+                            }
+                        }
+                    ],
+                    "candidate": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "bbbbbbbbb"}
+                            }
+                        }
+                    ],
+                }
+            }
+        ]
+        provenance = {
+            "repository_commit": {
+                "returncode": 0,
+                "stdout": "cccccccccccccccccccccccccccccccccccccccc\n",
+                "stderr": "",
+            },
+            "llama_cli_version": {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "version: 1 (aaaaaaaaa)\n",
+            },
+            "candidate_llama_cli_version": {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "version: 2 (bbbbbbbbb)\n",
+            },
+        }
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                cells, provenance, require_repository_match=False
+            ),
+            [],
+        )
 
     def test_q8_effective_requested_kv_bandwidth_formula(self) -> None:
         layers, heads, depth, head_dim = 32, 32, 16384, 128

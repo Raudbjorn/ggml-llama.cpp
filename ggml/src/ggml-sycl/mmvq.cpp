@@ -2809,10 +2809,25 @@ bool ggml_sycl_mul_mat_vec_q_fused_swiglu(
         const ggml_tensor * gate,
         const ggml_tensor * up,
         ggml_tensor       * dst) {
-    if (gate->type != GGML_TYPE_Q4_K || up->type != GGML_TYPE_Q4_K) {
+    if (gate == nullptr || up == nullptr || dst == nullptr) {
         return false;
     }
-    if (!ctx.opt_feature.reorder || g_ggml_sycl_disable_optimize) {
+    if (gate->type != GGML_TYPE_Q4_K || up->type != GGML_TYPE_Q4_K ||
+        dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ctx.opt_feature.reorder || !g_ggml_sycl_enable_optimize) {
+        return false;
+    }
+    if (dst->op != GGML_OP_GLU || ggml_get_glu_op(dst) != GGML_GLU_OP_SWIGLU ||
+        dst->src[0] == nullptr || dst->src[1] == nullptr) {
+        return false;
+    }
+    const ggml_tensor * gate_mul = dst->src[0];
+    const ggml_tensor * up_mul   = dst->src[1];
+    if (gate_mul->op != GGML_OP_MUL_MAT || up_mul->op != GGML_OP_MUL_MAT ||
+        gate_mul->src[0] != gate || up_mul->src[0] != up ||
+        gate_mul->src[1] == nullptr || gate_mul->src[1] != up_mul->src[1]) {
         return false;
     }
     // Both projections must already be in the reordered layout.
@@ -2825,7 +2840,7 @@ bool ggml_sycl_mul_mat_vec_q_fused_swiglu(
         return false;
     }
 
-    const ggml_tensor * act = dst->src[0]->src[1];   // shared activation vector
+    const ggml_tensor * act = gate_mul->src[1];
     const int64_t ne00 = gate->ne[0];
     const int64_t nrows = gate->ne[1];
 
@@ -2884,6 +2899,7 @@ bool ggml_sycl_mul_mat_vec_q_fused_swiglu(
         gate->data, up->data, act_q8_1.get(), (float *) dst->data,
         (int) ne00, (int) nrows, stream);
     return true;
+}
 // Reorder (SoA) MoE expert GEMV: MoE expert/row/lane indexing (from mul_mat_vec_q_moe) with the
 // dense-reorder per-block reads (from mul_mat_vec_q_reorder). Each expert slice in vx_base is a
 // self-contained SoA, so nblocks = nrows*(ncols/qk) per expert and the constant expert stride holds.
