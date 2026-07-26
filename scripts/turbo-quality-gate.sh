@@ -41,7 +41,7 @@ case "${TURBO_QUALITY_STRICT:-0}" in
 esac
 
 # Per-stage tempdir for captured stdout/stderr.
-STAGE_LOG_DIR="$(mktemp -d -t turbo-gate.XXXXXX)"
+STAGE_LOG_DIR="$(mktemp -d 2>/dev/null || mktemp -d "${TMPDIR:-/tmp}/turbo-gate.XXXXXX")"
 if [ -z "$STAGE_LOG_DIR" ] || [ ! -d "$STAGE_LOG_DIR" ]; then
   echo "ERROR: failed to create temporary directory for stage logs" >&2
   exit 1
@@ -52,6 +52,27 @@ FAIL_COUNT=0
 SKIP_COUNT=0
 TIMEOUT_COUNT=0
 FAIL_MESSAGES=""
+
+# run_timeout <seconds> <cmd...> - portable wall-clock cap.
+# GNU coreutils `timeout` is not installed by default on macOS (and `gtimeout`
+# only exists when coreutils is present), yet the gate must stay portable. When
+# neither binary is found we run the command directly instead of aborting the
+# stage with "command not found"; when one IS present we use it so a device-lost
+# SYCL hang fails fast (exit 124) instead of stalling CI forever.
+TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="gtimeout"
+fi
+run_timeout() {
+    local secs="$1"; shift
+    if [ -n "$TIMEOUT_CMD" ]; then
+        "$TIMEOUT_CMD" "$secs" "$@"
+    else
+        "$@"
+    fi
+}
 
 # emit_summary: deterministic one-line per stage
 emit_summary() {
@@ -66,10 +87,12 @@ emit_summary() {
   esac
 }
 
-# stage_correctness - always uses -fa on. In strict mode, also runs a
-# second pass with LLAMA_TEST_TURBO_FA=1 to exercise the turbo-FA path.
+# stage_correctness - runs the test-sycl-turbo-correctness harness. The first
+# pass defaults LLAMA_TEST_TURBO_FA to 0 (preserves any inherited override). In
+# strict mode, also runs a second pass with LLAMA_TEST_TURBO_FA=1 to exercise
+# the turbo-FA path.
 stage_correctness() {
-  local stage_label="0.1 correctness (LLAMA_TEST_TURBO_FA=0)"
+  local stage_label="0.1 correctness (LLAMA_TEST_TURBO_FA=${LLAMA_TEST_TURBO_FA:-0})"
   local log="$STAGE_LOG_DIR/correctness-a.log"
 
   if [ "$CORRECTNESS_BIN" = "skip" ]; then
@@ -91,35 +114,50 @@ stage_correctness() {
     return
   fi
 
-  if timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" "$CORRECTNESS_BIN" >"$log" 2>&1; then
-    grep -qE '^== summary: 0 GATE-FAIL,' "$log" || {
-      FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report 0 GATE-FAIL"
-      FAIL_COUNT=$((FAIL_COUNT+1))
-      emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
-      return
-    }
+  if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" "$CORRECTNESS_BIN" >"$log" 2>&1; then
+    # Strict mode requires a fully clean run: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP.
+    # Non-strict mode only requires 0 GATE-FAIL; xfail/skip counts may be nonzero.
+    if [ "$STRICT" = "1" ]; then
+      is_strict_clean_run "$log" || {
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report a fully clean run in strict mode"
+        FAIL_COUNT=$((FAIL_COUNT+1))
+        emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL/XPASS/xfail/SKIP non-zero in strict"
+        return
+      }
+    else
+      grep -qE '^== summary: 0 GATE-FAIL,' "$log" || {
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report 0 GATE-FAIL"
+        FAIL_COUNT=$((FAIL_COUNT+1))
+        emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
+        return
+      }
+    fi
     emit_summary "$stage_label" "PASS" "$log" ""
   else
     local rc=$?
     if [ "$rc" = "124" ]; then
       TIMEOUT_COUNT=$((TIMEOUT_COUNT+1))
       emit_summary "$stage_label" "124" "$log" ""
+      return
     else
       FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness exited $rc"
       FAIL_COUNT=$((FAIL_COUNT+1))
       emit_summary "$stage_label" "FAIL" "$log" "harness exited $rc"
+      return
     fi
+    return
   fi
 
   if [ "$STRICT" = "1" ]; then
     local stage_label2="0.2 correctness (LLAMA_TEST_TURBO_FA=1)"
     local log2="$STAGE_LOG_DIR/correctness-b.log"
-    if timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
+    if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
          LLAMA_TEST_TURBO_FA=1 "$CORRECTNESS_BIN" >"$log2" 2>&1; then
-      grep -qE '^== summary: 0 GATE-FAIL,' "$log2" || {
-        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report 0 GATE-FAIL"
+      # Strict mode requires a fully clean run on the turbo-FA second pass too.
+      is_strict_clean_run "$log2" || {
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report a fully clean run in strict mode"
         FAIL_COUNT=$((FAIL_COUNT+1))
-        emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL non-zero or missing summary"
+        emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL/XPASS/xfail/SKIP non-zero in strict"
         return
       }
       emit_summary "$stage_label2" "PASS" "$log2" ""
@@ -128,24 +166,34 @@ stage_correctness() {
       if [ "$rc2" = "124" ]; then
         TIMEOUT_COUNT=$((TIMEOUT_COUNT+1))
         emit_summary "$stage_label2" "124" "$log2" ""
+        return
       else
         FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness exited $rc2"
         FAIL_COUNT=$((FAIL_COUNT+1))
         emit_summary "$stage_label2" "FAIL" "$log2" "harness exited $rc2"
+        return
       fi
     fi
   fi
 }
 
-# validate_numeric <label> <value> - sets METRIC_VALID
+# validate_numeric <label> <value> - returns 0 if numeric, 1 if missing/non-numeric
 validate_numeric() {
   local label="$1" val="$2"
   if [ -z "$val" ] || ! printf '%s' "$val" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
     echo "    [warn] $label missing or non-numeric: '$val'" >&2
-    METRIC_VALID=0
-    return
+    return 1
   fi
-  METRIC_VALID=1
+  return 0
+}
+
+# is_strict_clean_run <log> - returns 0 if the harness summary line reports
+# 0 GATE-FAIL, 0 XPASS, 0 xfail, and 0 SKIP (a fully clean run for strict mode).
+# Matches the exact format emitted by test-sycl-turbo-correctness:
+#   "== summary: 0 GATE-FAIL, 0 XPASS (promote to GATE!), 0 xfail (expected-broken), 0 SKIP =="
+is_strict_clean_run() {
+  local log="$1"
+  grep -qE '^== summary: 0 GATE-FAIL, 0 XPASS \(promote to GATE!\), 0 xfail \(expected-broken\), 0 SKIP ==' "$log"
 }
 
 # stage_ppl - perplexity check. -fa on is mandatory.
@@ -153,7 +201,9 @@ stage_ppl() {
   local stage_label="1 perplexity (turbo3 vs q8_0, -fa on)"
   local log_t="$STAGE_LOG_DIR/ppl-turbo.log"
   local log_q="$STAGE_LOG_DIR/ppl-q8.log"
-  local rc_t rc_q ppl_turbo_valid ppl_q8_valid ppl_limit
+  local rc_t rc_q ppl_limit
+
+
 
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
     if [ "$STRICT" = "1" ]; then
@@ -178,11 +228,17 @@ stage_ppl() {
     fi
     return
   fi
+  if [ ! -x "$LLAMA/llama-perplexity" ]; then
+    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
+    return
+  fi
 
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
     -ctk turbo3 -ctv turbo3 -fa on --chunks 8 -ngl 99 >"$log_t" 2>&1
   rc_t=$?
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
     -ctk q8_0 -ctv q8_0 -fa on --chunks 8 -ngl 99 >"$log_q" 2>&1
   rc_q=$?
 
@@ -203,13 +259,7 @@ stage_ppl() {
 
   PPL_TURBO=$(grep "Final" "$log_t" | grep -oE 'PPL = [0-9.]+' | grep -oE '[0-9.]+' | tail -1)
   PPL_Q8=$(grep "Final" "$log_q" | grep -oE 'PPL = [0-9.]+' | grep -oE '[0-9.]+' | tail -1)
-  METRIC_VALID=0
-  validate_numeric "PPL_TURBO" "$PPL_TURBO"
-  ppl_turbo_valid=$METRIC_VALID
-  METRIC_VALID=0
-  validate_numeric "PPL_Q8" "$PPL_Q8"
-  ppl_q8_valid=$METRIC_VALID
-  if [ "$ppl_turbo_valid" != "1" ] || [ "$ppl_q8_valid" != "1" ]; then
+  if ! validate_numeric "PPL_TURBO" "$PPL_TURBO" || ! validate_numeric "PPL_Q8" "$PPL_Q8"; then
     PRESERVE_LOGS=1
     FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: final PPL missing or non-numeric (logs=$log_t + $log_q)"
     FAIL_COUNT=$((FAIL_COUNT+1))
@@ -237,6 +287,8 @@ stage_scaling() {
   local log_q="$STAGE_LOG_DIR/scaling-q8.log"
   local rc_t rc_q ratio
 
+
+
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ] || [ -z "$WIKI" ] || [ ! -f "$WIKI" ]; then
     if [ "$STRICT" = "1" ]; then
       FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: MODEL or WIKI unset"
@@ -248,11 +300,17 @@ stage_scaling() {
     fi
     return
   fi
+  if [ ! -x "$LLAMA/llama-perplexity" ]; then
+    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
+    return
+  fi
 
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
     -ctk turbo3 -ctv turbo3 -fa on --chunks 4 -ngl 99 >"$log_t" 2>&1
   rc_t=$?
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
     -ctk q8_0 -ctv q8_0 -fa on --chunks 4 -ngl 99 >"$log_q" 2>&1
   rc_q=$?
 
@@ -274,13 +332,7 @@ stage_scaling() {
   TURBO_TPS=$(grep "prompt eval" "$log_t" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+' | tail -1)
   Q8_TPS=$(grep "prompt eval" "$log_q" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+' | tail -1)
 
-  METRIC_VALID=0
-  validate_numeric "TURBO_TPS" "$TURBO_TPS"
-  local tps_turbo_valid=$METRIC_VALID
-  METRIC_VALID=0
-  validate_numeric "Q8_TPS" "$Q8_TPS"
-  local tps_q8_valid=$METRIC_VALID
-  if [ "$tps_turbo_valid" != "1" ] || [ "$tps_q8_valid" != "1" ] || \
+  if ! validate_numeric "TURBO_TPS" "$TURBO_TPS" || ! validate_numeric "Q8_TPS" "$Q8_TPS" || \
      ! awk -v q="$Q8_TPS" 'BEGIN { exit !(q > 0) }'; then
     PRESERVE_LOGS=1
     FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: prefill t/s missing, non-numeric, or q8_0 is zero (logs=$log_t + $log_q)"
