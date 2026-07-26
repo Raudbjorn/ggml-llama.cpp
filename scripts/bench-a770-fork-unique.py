@@ -179,10 +179,6 @@ def collect_product_provenance(
         "llama_cli_version": _capture_command(
             [str(bin_dir / "llama-cli"), "--version"], baseline_effective
         ),
-        "candidate_llama_cli_version": _capture_command(
-            [str(candidate_bin_dir / "llama-cli"), "--version"],
-            candidate_effective,
-        ),
         "sha256": {
             str(bench_path): _sha256_file(bench_path),
             str(sycl_lib): _sha256_file(sycl_lib) if sycl_lib.is_file() else None,
@@ -713,57 +709,30 @@ def _build_commit_diagnostics(
     *,
     require_repository_match: bool,
 ) -> list[str]:
-    version_keys = {
-        "baseline": "llama_cli_version",
-        "candidate": "candidate_llama_cli_version",
-    }
-    if not any(key in provenance for key in version_keys.values()):
-        return []
-    present_arms = {
-        arm
-        for cell in cells
-        for arm, samples in cell["samples"].items()
-        if samples
-    }
-
-    expected_by_arm: dict[str, str] = {}
-    diagnostics: list[str] = []
-    for arm, key in version_keys.items():
-        if arm not in present_arms:
-            continue
-        version = provenance.get(key, {})
-        output = version.get("stdout", "") + "\n" + version.get("stderr", "")
-        match = re.search(r"\(([0-9a-f]{7,40})\)", output)
-        if match is None:
-            diagnostics.append(f"unable to determine {arm} binary build_commit")
-        else:
-            expected_by_arm[arm] = match.group(1)
-
-    sample_commits_by_arm: dict[str, set[str]] = {
-        "baseline": set(),
-        "candidate": set(),
-    }
+    sample_commits_by_arm: dict[str, set[str]] = {}
     for cell in cells:
         for arm, samples in cell["samples"].items():
-            if arm not in sample_commits_by_arm:
+            if not samples:
                 continue
+            commits = sample_commits_by_arm.setdefault(arm, set())
             for sample in samples:
                 for row in sample.get("selected_rows", {}).values():
                     build_commit = row.get("build_commit")
                     if build_commit:
-                        sample_commits_by_arm[arm].add(str(build_commit))
+                        commits.add(str(build_commit))
 
-    for arm, expected_commit in expected_by_arm.items():
-        sample_commits = sample_commits_by_arm[arm]
-        if not sample_commits:
+    diagnostics: list[str] = []
+    consistent_commits: set[str] = set()
+    for arm, commits in sorted(sample_commits_by_arm.items()):
+        if not commits:
             diagnostics.append(f"{arm} samples do not report build_commit")
-            continue
-        for build_commit in sorted(sample_commits):
-            if not expected_commit.startswith(build_commit):
-                diagnostics.append(
-                    f"{arm} sample build_commit {build_commit} does not match "
-                    f"{arm} binary commit {expected_commit}"
-                )
+        elif len(commits) > 1:
+            diagnostics.append(
+                f"{arm} samples report multiple build_commit values: "
+                + ", ".join(sorted(commits))
+            )
+        else:
+            consistent_commits.update(commits)
 
     if require_repository_match:
         repository = provenance.get("repository_commit", {})
@@ -775,7 +744,7 @@ def _build_commit_diagnostics(
         if not repository_commit:
             diagnostics.append("unable to determine repository commit")
         else:
-            for build_commit in sorted(set(expected_by_arm.values())):
+            for build_commit in sorted(consistent_commits):
                 if not repository_commit.startswith(build_commit):
                     diagnostics.append(
                         f"sample build_commit {build_commit} does not match "

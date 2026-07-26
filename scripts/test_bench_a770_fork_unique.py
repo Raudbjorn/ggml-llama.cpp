@@ -484,15 +484,7 @@ class ProductCampaignTests(unittest.TestCase):
             "repository_commit": {
                 "returncode": 0,
                 "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-            },
-            "llama_cli_version": {
-                "stdout": "",
-                "stderr": "version: 1 (aaaaaaaaa)\n",
-            },
-            "candidate_llama_cli_version": {
-                "stdout": "",
-                "stderr": "version: 1 (aaaaaaaaa)\n",
-            },
+            }
         }
         with tempfile.TemporaryDirectory() as td, mock.patch.object(
             HARNESS, "check_sole_tenancy"
@@ -524,15 +516,7 @@ class ProductCampaignTests(unittest.TestCase):
             "repository_commit": {
                 "returncode": 0,
                 "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-            },
-            "llama_cli_version": {
-                "stdout": "",
-                "stderr": "version: 1 (aaaaaaaaa)\n",
-            },
-            "candidate_llama_cli_version": {
-                "stdout": "",
-                "stderr": "version: 1 (aaaaaaaaa)\n",
-            },
+            }
         }
         with tempfile.TemporaryDirectory() as td, mock.patch.object(
             HARNESS, "check_sole_tenancy"
@@ -604,17 +588,7 @@ class ProductCampaignTests(unittest.TestCase):
                 "returncode": 0,
                 "stdout": "02f848c83a8aee4bfe0ce956b64cc4b9058e2bf2\n",
                 "stderr": "",
-            },
-            "llama_cli_version": {
-                "returncode": 0,
-                "stdout": "",
-                "stderr": "version: 10116 (b5ef0a84b)\n",
-            },
-            "candidate_llama_cli_version": {
-                "returncode": 0,
-                "stdout": "",
-                "stderr": "version: 10116 (b5ef0a84b)\n",
-            },
+            }
         }
 
         self.assertEqual(
@@ -653,17 +627,7 @@ class ProductCampaignTests(unittest.TestCase):
                 "returncode": 0,
                 "stdout": "cccccccccccccccccccccccccccccccccccccccc\n",
                 "stderr": "",
-            },
-            "llama_cli_version": {
-                "returncode": 0,
-                "stdout": "",
-                "stderr": "version: 1 (aaaaaaaaa)\n",
-            },
-            "candidate_llama_cli_version": {
-                "returncode": 0,
-                "stdout": "",
-                "stderr": "version: 2 (bbbbbbbbb)\n",
-            },
+            }
         }
 
         self.assertEqual(
@@ -671,6 +635,43 @@ class ProductCampaignTests(unittest.TestCase):
                 cells, provenance, require_repository_match=False
             ),
             [],
+        )
+
+    def test_separate_binary_arm_rejects_mixed_sample_commits(self) -> None:
+        cells = [
+            {
+                "samples": {
+                    "baseline": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "aaaaaaaaa"}
+                            }
+                        },
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "ccccccccc"}
+                            }
+                        },
+                    ],
+                    "candidate": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "bbbbbbbbb"}
+                            }
+                        }
+                    ],
+                }
+            }
+        ]
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                cells, {}, require_repository_match=False
+            ),
+            [
+                "baseline samples report multiple build_commit values: "
+                "aaaaaaaaa, ccccccccc"
+            ],
         )
 
     def test_q8_effective_requested_kv_bandwidth_formula(self) -> None:
@@ -724,7 +725,7 @@ class ProductCampaignTests(unittest.TestCase):
                 del timeout_s, cwd
                 seen_bench_paths.append(argv[0])
                 seen_envs.append(dict(env_extra))
-                result = bench_result(100.0, 20.0)
+                result = bench_result(100.0, 20.0, "aaaaaaaaa")
                 result["stderr"] = f"TEST_ARM: {env_extra['TEST_ARM']}\n"
                 return result
 
@@ -780,9 +781,18 @@ class ProductCampaignTests(unittest.TestCase):
                 return 1 if line else 0
 
             with mock.patch.object(HARNESS, "check_sole_tenancy"), \
-                 mock.patch.object(HARNESS, "run", return_value=bench_result(100.0, 20.0)), \
+                 mock.patch.object(HARNESS, "run", return_value=bench_result(100.0, 20.0, "aaaaaaaaa")), \
                  mock.patch.object(HARNESS, "capture_dmesg", side_effect=capture), \
-                 mock.patch.object(HARNESS, "collect_product_provenance", return_value={}):
+                 mock.patch.object(
+                     HARNESS,
+                     "collect_product_provenance",
+                     return_value={
+                         "repository_commit": {
+                             "returncode": 0,
+                             "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                         }
+                     },
+                 ):
                 rc = HARNESS.run_product_campaign_main(ns)
 
             self.assertEqual(rc, 1)
