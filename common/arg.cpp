@@ -359,6 +359,20 @@ static bool spec_types_is_default(const common_params & params) {
     return params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE};
 }
 
+static std::string common_models_handler_get_hf_token(const common_params & params) {
+    if (!params.hf_token.empty()) {
+        return params.hf_token;
+    }
+
+    const char * token = std::getenv("HF_TOKEN");
+    if (token != nullptr && token[0] != '\0') {
+        return token;
+    }
+
+    token = std::getenv("HUGGING_FACE_HUB_TOKEN");
+    return token != nullptr ? token : "";
+}
+
 common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex) {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
@@ -386,7 +400,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
         }
     }
 
-    opts.bearer_token    = params.hf_token;
+    opts.bearer_token    = common_models_handler_get_hf_token(params);
     opts.offline         = params.offline;
     opts.download_mtp    = spec_type_draft_mtp;
     opts.download_eagle3 = spec_type_draft_eagle3;

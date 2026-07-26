@@ -11,6 +11,30 @@
 #undef NDEBUG
 #include <cassert>
 
+#ifndef _WIN32
+struct env_var_snapshot {
+    std::string name;
+    bool was_set;
+    std::string value;
+
+    explicit env_var_snapshot(const char * name) : name(name) {
+        const char * current = getenv(name);
+        was_set = current != nullptr;
+        if (current != nullptr) {
+            value = current;
+        }
+    }
+
+    ~env_var_snapshot() {
+        if (was_set) {
+            setenv(name.c_str(), value.c_str(), true);
+        } else {
+            unsetenv(name.c_str());
+        }
+    }
+};
+#endif
+
 static void test(void) {
     common_params params;
 
@@ -188,6 +212,55 @@ static void test(void) {
         assert(params.api_keys[0] == "file-key");
         assert(params.api_keys[1] == "cli-key");
         assert(std::filesystem::remove(key_file));
+    }
+
+    {
+        env_var_snapshot hf_token("HF_TOKEN");
+        env_var_snapshot hub_token("HUGGING_FACE_HUB_TOKEN");
+        env_var_snapshot misspelled_hub_token("HUGGINGFACE_HUB_TOKEN");
+
+        unsetenv("HF_TOKEN");
+        unsetenv("HUGGING_FACE_HUB_TOKEN");
+        unsetenv("HUGGINGFACE_HUB_TOKEN");
+
+        printf("test-arg-parser: test Hugging Face token precedence\n\n");
+
+        setenv("HUGGING_FACE_HUB_TOKEN", "fallback-token", true);
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "fallback-token");
+        }
+
+        setenv("HF_TOKEN", "", true);
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "fallback-token");
+        }
+
+        setenv("HF_TOKEN", "hf-token", true);
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "hf-token");
+        }
+
+        {
+            common_params token_params;
+            token_params.hf_token = "explicit-token";
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "explicit-token");
+        }
+
+        unsetenv("HF_TOKEN");
+        unsetenv("HUGGING_FACE_HUB_TOKEN");
+        setenv("HUGGINGFACE_HUB_TOKEN", "misspelled-token", true);
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token.empty());
+        }
     }
     printf("test-arg-parser: test environment variables (valid + invalid usages)\n\n");
 
