@@ -33,8 +33,15 @@ def test_access_static_assets_without_api_key():
         assert res.status_code == 200, f"Expected 200 for {path}, got {res.status_code}"
 
 
-@pytest.mark.parametrize("api_key", [None, "invalid-key"])
-def test_incorrect_api_key(api_key: str):
+@pytest.mark.parametrize("api_key", [
+    None,
+    TEST_API_KEY[:-1] + "x",  # unequal, same length
+    TEST_API_KEY[:-1],        # prefix
+    TEST_API_KEY[1:],         # suffix
+    "shorter",
+    TEST_API_KEY + "-longer",
+])
+def test_incorrect_api_key(api_key: str | None):
     global server
     server.start()
     res = server.make_request("POST", "/completions", data={
@@ -71,6 +78,58 @@ def test_correct_api_key_anthropic_header():
     assert res.status_code == 200
     assert "error" not in res.body
     assert "content" in res.body
+
+def test_api_key_file_trims_entries_and_ignores_comments(tmp_path):
+    global server
+    api_key_file = tmp_path / "api-keys.txt"
+    api_key_file.write_bytes(
+        b"# comment\r\n"
+        b"  \r\n"
+        b"  file-secret-key  \r\n"
+        b"\t# indented comment"
+    )
+    server.api_key = None
+    server.api_key_file = str(api_key_file)
+    server.start()
+
+    valid = server.make_request("POST", "/completions", data={
+        "prompt": "I believe the meaning of life is",
+    }, headers={
+        "Authorization": "Bearer file-secret-key",
+    })
+    assert valid.status_code == 200
+
+    for invalid_key in ["  file-secret-key  ", "# comment", "\t# indented comment"]:
+        invalid = server.make_request("POST", "/completions", data={
+            "prompt": "I believe the meaning of life is",
+        }, headers={
+            "Authorization": f"Bearer {invalid_key}",
+        })
+        assert invalid.status_code == 401
+
+
+def test_cli_api_key_overrides_environment_without_dropping_key_file(monkeypatch, tmp_path):
+    global server
+    api_key_file = tmp_path / "api-keys.txt"
+    api_key_file.write_text("file-secret-key\n")
+    monkeypatch.setenv("LLAMA_API_KEY", "stale-env-key")
+    monkeypatch.setenv("LLAMA_ARG_API_KEY_FILE", str(api_key_file))
+    server.start()
+
+    for valid_key in [TEST_API_KEY, "file-secret-key"]:
+        valid = server.make_request("POST", "/completions", data={
+            "prompt": "I believe the meaning of life is",
+        }, headers={
+            "Authorization": f"Bearer {valid_key}",
+        })
+        assert valid.status_code == 200
+
+    stale = server.make_request("POST", "/completions", data={
+        "prompt": "I believe the meaning of life is",
+    }, headers={
+        "Authorization": "Bearer stale-env-key",
+    })
+    assert stale.status_code == 401
 
 
 def test_openai_library_correct_api_key():

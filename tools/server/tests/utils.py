@@ -89,6 +89,7 @@ class ServerProcess:
     server_slots: bool | None = False
     pooling: str | None = None
     api_key: str | None = None
+    api_key_file: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
     models_preset: str | None = None
@@ -231,6 +232,8 @@ class ServerProcess:
             server_args.extend(["--spec-type", self.spec_type])
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
+        if self.api_key_file:
+            server_args.extend(["--api-key-file", self.api_key_file])
         if self.spec_draft_n_max:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:

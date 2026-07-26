@@ -27,6 +27,18 @@ server_http_context::server_http_context()
 
 server_http_context::~server_http_context() = default;
 
+static bool api_key_equals(const std::string & lhs, const std::string & rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+
+    volatile unsigned char mismatch = 0;
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        mismatch |= static_cast<unsigned char>(lhs[i]) ^ static_cast<unsigned char>(rhs[i]);
+    }
+    return mismatch == 0;
+}
+
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
     if (req.path == "/health"
@@ -230,8 +242,10 @@ bool server_http_context::init(const common_params & params) {
         }
 
         // validate the API key
-        if (std::find(api_keys.begin(), api_keys.end(), req_api_key) != api_keys.end()) {
-            return true; // API key is valid
+        for (const auto & api_key : api_keys) {
+            if (api_key_equals(api_key, req_api_key)) {
+                return true; // API key is valid
+            }
         }
 
         // API key is invalid or not provided

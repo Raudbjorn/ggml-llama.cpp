@@ -156,10 +156,39 @@ static void test(void) {
     assert(params.lora_adapters[2].path == "file3\"3\".gguf");
     assert(params.lora_adapters[3].path == "file4\".gguf");
 
+    argv = {"binary_name", "--api-key", "\" first-key \",\"   \",second-key,\"third-key \""};
+    params.api_keys.clear();
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
+    assert(params.api_keys.size() == 3);
+    assert(params.api_keys[0] == "first-key");
+    assert(params.api_keys[1] == "second-key");
+    assert(params.api_keys[2] == "third-key");
+
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
     printf("test-arg-parser: skip on windows build\n");
 #else
+    {
+        env_var_snapshot api_key("LLAMA_API_KEY");
+        env_var_snapshot api_key_file("LLAMA_ARG_API_KEY_FILE");
+        const auto key_file = std::filesystem::temp_directory_path() /
+                              ("llama-api-keys-" + std::to_string(std::random_device{}()) + ".txt");
+
+        setenv("LLAMA_ARG_API_KEY_FILE", key_file.string().c_str(), true);
+        setenv("LLAMA_API_KEY", "stale-env-key", true);
+        {
+            std::ofstream output(key_file);
+            output << "file-key\n";
+        }
+
+        argv = {"binary_name", "--api-key", "cli-key"};
+        params.api_keys.clear();
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
+        assert(params.api_keys.size() == 2);
+        assert(params.api_keys[0] == "file-key");
+        assert(params.api_keys[1] == "cli-key");
+        assert(std::filesystem::remove(key_file));
+    }
     printf("test-arg-parser: test environment variables (valid + invalid usages)\n\n");
 
     setenv("LLAMA_ARG_THREADS", "blah", true);

@@ -695,8 +695,35 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     }
 
+    // Identify options supplied on the command line before applying environment
+    // values so each CLI option replaces its own environment-backed value.
+    std::set<const common_arg *> cli_options;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg.compare(0, 2, "--") == 0) {
+            std::replace(arg.begin(), arg.end(), '_', '-');
+        }
+
+        const auto it = arg_to_options.find(arg);
+        if (it == arg_to_options.end()) {
+            continue;
+        }
+
+        const common_arg * opt = it->second.first;
+        cli_options.insert(opt);
+        if (opt->handler_string || opt->handler_int) {
+            ++i;
+        } else if (opt->handler_str_str) {
+            i += 2;
+        }
+    }
+
+
     // handle environment variables
     for (auto & opt : ctx_arg.options) {
+        if (cli_options.count(&opt) != 0) {
+            continue;
+        }
         std::string value;
         if (opt.get_value_from_env(value)) {
             try {
@@ -3307,7 +3334,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--api-key"}, "KEY",
         "API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)",
         [](common_params & params, const std::string & value) {
-            for (const auto & key : parse_csv_row(value)) {
+            for (const auto & candidate : parse_csv_row(value)) {
+                const std::string key = string_strip(candidate);
                 if (!key.empty()) {
                     params.api_keys.push_back(key);
                 }
@@ -3324,6 +3352,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             std::string key;
             while (std::getline(key_file, key)) {
+                key = string_strip(key);
                 if (!key.empty() && key[0] != '#') {
                     params.api_keys.push_back(key);
                 }
