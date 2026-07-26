@@ -108,6 +108,47 @@ int main() {
     expect_policy("http://127.0.0.1/", {"127.0.0.10"}, false);
     expect_policy("http://localhost/", {"localhost.example"}, false);
 
+    for (const char * header : {
+            "Host",
+            "Content-Length",
+            "Transfer-Encoding",
+            "Connection",
+            "Proxy-Connection",
+            "Keep-Alive",
+            "Proxy-Authenticate",
+            "Proxy-Authorization",
+            "TE",
+            "Trailer",
+            "Upgrade",
+        }) {
+        if (!proxy_header_is_forbidden(header)) {
+            std::cerr << "expected proxy header to be blocked: " << header << std::endl;
+            return 1;
+        }
+    }
+    for (const char * header : {"Authorization", "Content-Type", "X-MCP-Token"}) {
+        if (proxy_header_is_forbidden(header)) {
+            std::cerr << "expected proxy header to be forwarded: " << header << std::endl;
+            return 1;
+        }
+    }
+
+    const std::map<std::string, std::string> request_headers = {
+        {"X-Llama-Server-Proxy-Header-Authorization", "Bearer allowed"},
+        {"X-Llama-Server-Proxy-Header-Connection", "X-Drop-Me, X-Also-Drop"},
+        {"X-Llama-Server-Proxy-Header-Content-Type", "application/json"},
+        {"X-Llama-Server-Proxy-Header-Host", "internal.example"},
+        {"X-Llama-Server-Proxy-Header-X-Also-Drop", "blocked"},
+        {"X-Llama-Server-Proxy-Header-X-Drop-Me", "blocked"},
+    };
+    const auto forwarded_headers = proxy_extract_forward_headers(request_headers);
+    if (forwarded_headers.size() != 2 ||
+        forwarded_headers.at("Authorization") != "Bearer allowed" ||
+        forwarded_headers.at("Content-Type") != "application/json") {
+        std::cerr << "proxy header filtering did not preserve only end-to-end headers" << std::endl;
+        return 1;
+    }
+
 #ifdef _WIN32
     WSACleanup();
 #endif

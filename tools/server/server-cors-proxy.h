@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -225,6 +226,65 @@ static std::string proxy_header_to_lower(std::string header) {
     return header;
 }
 
+static bool proxy_header_is_forbidden(const std::string & header) {
+    static constexpr std::array<const char *, 11> forbidden_headers = {
+        "connection",
+        "content-length",
+        "host",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    };
+    const std::string lowered = proxy_header_to_lower(header);
+    return std::find(forbidden_headers.begin(), forbidden_headers.end(), lowered) != forbidden_headers.end();
+}
+
+static std::map<std::string, std::string> proxy_extract_forward_headers(
+        const std::map<std::string, std::string> & request_headers) {
+    const std::string proxy_header_prefix = "x-llama-server-proxy-header-";
+    std::set<std::string> connection_headers;
+    for (const auto & entry : request_headers) {
+        const std::string lowered_key = proxy_header_to_lower(entry.first);
+        if (!string_starts_with(lowered_key, proxy_header_prefix)) {
+            continue;
+        }
+
+        const std::string forwarded_key = lowered_key.substr(proxy_header_prefix.size());
+        if (forwarded_key == "connection") {
+            for (const auto & token : string_split<std::string>(entry.second, ',')) {
+                const std::string lowered_token = proxy_header_to_lower(string_strip(token));
+                if (!lowered_token.empty()) {
+                    connection_headers.insert(lowered_token);
+                }
+            }
+        }
+    }
+
+    std::map<std::string, std::string> headers;
+    for (const auto & entry : request_headers) {
+        const std::string lowered_key = proxy_header_to_lower(entry.first);
+        if (!string_starts_with(lowered_key, proxy_header_prefix)) {
+            continue;
+        }
+
+        const std::string new_key = entry.first.substr(proxy_header_prefix.size());
+        const std::string lowered_new_key = lowered_key.substr(proxy_header_prefix.size());
+        if (new_key.empty() ||
+            proxy_header_is_forbidden(lowered_new_key) ||
+            connection_headers.count(lowered_new_key) != 0) {
+            continue;
+        }
+
+        headers[new_key] = entry.second;
+    }
+    return headers;
+}
+
 static server_http_res_ptr proxy_policy_error(const std::string & message) {
     auto res = std::make_unique<server_http_res>();
     res->status = 400;
@@ -256,21 +316,7 @@ static server_http_res_ptr proxy_request(
 
     SRV_INF("proxying %s request to %s://%s:%i%s\n", method.c_str(), parsed_url.scheme.c_str(), common_http_format_host(parsed_url.host).c_str(), parsed_url.port, parsed_url.path.c_str());
 
-    std::map<std::string, std::string> headers;
-    const std::string proxy_header_prefix = "x-llama-server-proxy-header-";
-    for (const auto & entry : req.headers) {
-        const std::string lowered_key = proxy_header_to_lower(entry.first);
-        if (!string_starts_with(lowered_key, proxy_header_prefix)) {
-            continue;
-        }
-
-        const std::string new_key = entry.first.substr(proxy_header_prefix.size());
-        if (new_key.empty()) {
-            continue;
-        }
-
-        headers[new_key] = entry.second;
-    }
+    const std::map<std::string, std::string> headers = proxy_extract_forward_headers(req.headers);
 
     return std::make_unique<server_http_proxy>(
             method,
