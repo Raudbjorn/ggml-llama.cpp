@@ -390,6 +390,35 @@ docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggml-org/llama.cpp:se
 docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
 ```
 
+### Production deployment
+
+`llama-server` does not load `.env` files. Supply server configuration through the shell, systemd, or the container runtime.
+
+| Setting | Command-line option | Environment variable |
+| --- | --- | --- |
+| API key | `--api-key` | `LLAMA_API_KEY` |
+| API key file | `--api-key-file` | `LLAMA_ARG_API_KEY_FILE` |
+| Hugging Face token | `--hf-token` | `HF_TOKEN` |
+| Model endpoint | None | `MODEL_ENDPOINT`, then `HF_ENDPOINT`, then `https://huggingface.co/` |
+| CORS allowlist | `--cors-origins` | `LLAMA_ARG_CORS_ORIGINS` |
+
+`LLAMA_ARG_API_KEY` and `HUGGINGFACE_HUB_TOKEN` are not accepted by `llama-server`.
+
+For non-loopback deployments, require API authentication and configure an explicit CORS origin. Keep `--ui-mcp-proxy`, `--tools`, and `--agent` disabled in untrusted environments. When enabled, `/cors-proxy` accepts arbitrary HTTP(S) destinations and has no destination-host allowlist. It is not a general-purpose reverse proxy.
+
+Request and deferred-task queues are unbounded, and `llama-server` has no queue-depth 429 policy. Exposed deployments must enforce request-body size, request rate, concurrent in-flight requests, and upstream timeouts at a trusted ingress. This is an acknowledged limitation, not in-process protection.
+
+Example using placeholder values and the SDK deployment port:
+
+```bash
+LLAMA_API_KEY='<replace-with-api-key>' \
+HF_TOKEN='<replace-with-hugging-face-token>' \
+MODEL_ENDPOINT='https://models.example.invalid/' \
+./llama-server --host 0.0.0.0 --port 8033 \
+    --hf-repo '<organization>/<model>:<quantization>' \
+    --cors-origins 'https://app.example.invalid'
+```
+
 ## Using with CURL
 
 Using [curl](https://curl.se/). On Windows, `curl.exe` should be available in the base OS.

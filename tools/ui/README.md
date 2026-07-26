@@ -117,6 +117,8 @@ This starts:
 
 The Vite dev server proxies API requests to `SERVER_ORIGIN` (with fallback to default llama-server `8080` port):
 
+The code fallback remains `http://localhost:8080`. The checked-in `.env.example` uses `http://localhost:8033` as the SDK deployment convention; copy or override it only when the backend listens there.
+
 ```typescript
 // vite.config.ts proxy configuration
 proxy: {

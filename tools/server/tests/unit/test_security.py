@@ -15,6 +15,57 @@ def create_server():
     server.api_key = TEST_API_KEY
 
 
+def test_startup_warns_about_ignored_credential_environment_variables(monkeypatch, tmp_path):
+    global server
+    ignored_api_key = "ignored-api-key-sentinel"
+    ignored_hf_token = "ignored-hf-token-sentinel"
+    monkeypatch.setenv("LLAMA_ARG_API_KEY", ignored_api_key)
+    monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", ignored_hf_token)
+    monkeypatch.delenv("LLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("LLAMA_ARG_API_KEY_FILE", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    server = ServerPreset.router()
+    log_path = tmp_path / "server.log"
+    server.log_path = str(log_path)
+    server.start()
+    server.stop()
+    startup_log = log_path.read_text()
+
+    assert "LLAMA_ARG_API_KEY is ignored" in startup_log
+    assert "LLAMA_API_KEY, LLAMA_ARG_API_KEY_FILE, --api-key, or --api-key-file" in startup_log
+    assert "HUGGINGFACE_HUB_TOKEN is ignored" in startup_log
+    assert "HF_TOKEN or --hf-token" in startup_log
+    assert ignored_api_key not in startup_log
+    assert ignored_hf_token not in startup_log
+
+
+def test_startup_does_not_warn_when_supported_credentials_are_configured(monkeypatch, tmp_path):
+    global server
+    credential_values = [
+        "ignored-api-key-sentinel",
+        "ignored-hf-token-sentinel",
+        "supported-api-key-sentinel",
+        "supported-hf-token-sentinel",
+    ]
+    monkeypatch.setenv("LLAMA_ARG_API_KEY", credential_values[0])
+    monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", credential_values[1])
+    monkeypatch.setenv("LLAMA_API_KEY", credential_values[2])
+    monkeypatch.delenv("LLAMA_ARG_API_KEY_FILE", raising=False)
+    monkeypatch.setenv("HF_TOKEN", credential_values[3])
+
+    server = ServerPreset.router()
+    log_path = tmp_path / "server.log"
+    server.log_path = str(log_path)
+    server.start()
+    server.stop()
+    startup_log = log_path.read_text()
+
+    assert "LLAMA_ARG_API_KEY is ignored" not in startup_log
+    assert "HUGGINGFACE_HUB_TOKEN is ignored" not in startup_log
+    for credential_value in credential_values:
+        assert credential_value not in startup_log
+
 @pytest.mark.parametrize("endpoint", ["/health", "/models"])
 def test_access_public_endpoint(endpoint: str):
     global server

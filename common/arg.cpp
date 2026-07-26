@@ -805,6 +805,15 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     // parse all CLI args now, so that -hf is available below for remote preset resolution
     parse_cli_args();
 
+    if (ctx_arg.ex == LLAMA_EXAMPLE_SERVER) {
+        if (std::getenv("LLAMA_ARG_API_KEY") != nullptr && params.api_keys.empty()) {
+            LOG_WRN("LLAMA_ARG_API_KEY is ignored; use LLAMA_API_KEY, LLAMA_ARG_API_KEY_FILE, --api-key, or --api-key-file\n");
+        }
+        if (std::getenv("HUGGINGFACE_HUB_TOKEN") != nullptr && params.hf_token.empty()) {
+            LOG_WRN("HUGGINGFACE_HUB_TOKEN is ignored by llama-server; use HF_TOKEN or --hf-token\n");
+        }
+    }
+
     postprocess_cpu_params(params.cpuparams,       nullptr);
     postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
 
