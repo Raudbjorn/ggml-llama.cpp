@@ -328,54 +328,6 @@ static void test(void) {
         assert(std::filesystem::remove(key_file));
     }
 
-    {
-        env_var_snapshot hf_token("HF_TOKEN");
-        env_var_snapshot hub_token("HUGGING_FACE_HUB_TOKEN");
-        env_var_snapshot misspelled_hub_token("HUGGINGFACE_HUB_TOKEN");
-
-        unsetenv("HF_TOKEN");
-        unsetenv("HUGGING_FACE_HUB_TOKEN");
-        unsetenv("HUGGINGFACE_HUB_TOKEN");
-
-        printf("test-arg-parser: test Hugging Face token precedence\n\n");
-
-        setenv("HUGGING_FACE_HUB_TOKEN", "fallback-token", true);
-        {
-            common_params token_params;
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token == "fallback-token");
-        }
-
-        setenv("HF_TOKEN", "", true);
-        {
-            common_params token_params;
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token == "fallback-token");
-        }
-
-        setenv("HF_TOKEN", "hf-token", true);
-        {
-            common_params token_params;
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token == "hf-token");
-        }
-
-        {
-            common_params token_params;
-            token_params.hf_token = "explicit-token";
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token == "explicit-token");
-        }
-
-        unsetenv("HF_TOKEN");
-        unsetenv("HUGGING_FACE_HUB_TOKEN");
-        setenv("HUGGINGFACE_HUB_TOKEN", "misspelled-token", true);
-        {
-            common_params token_params;
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token.empty());
-        }
-    }
     printf("test-arg-parser: test environment variables (valid + invalid usages)\n\n");
 
     setenv("LLAMA_ARG_THREADS", "blah", true);
@@ -426,6 +378,55 @@ static void test(void) {
     assert(params.model.path == "overwritten.gguf");
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
+
+    {
+        env_var_snapshot hf_token("HF_TOKEN");
+        env_var_snapshot hub_token("HUGGING_FACE_HUB_TOKEN");
+        env_var_snapshot misspelled_hub_token("HUGGINGFACE_HUB_TOKEN");
+
+        hf_token.set(nullptr);
+        hub_token.set(nullptr);
+        misspelled_hub_token.set(nullptr);
+
+        printf("test-arg-parser: test Hugging Face token precedence\n\n");
+
+        hub_token.set("fallback-token");
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "fallback-token");
+        }
+
+        hf_token.set("");
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "fallback-token");
+        }
+
+        hf_token.set("hf-token");
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "hf-token");
+        }
+
+        {
+            common_params token_params;
+            token_params.hf_token = "explicit-token";
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token == "explicit-token");
+        }
+
+        hf_token.set(nullptr);
+        hub_token.set(nullptr);
+        misspelled_hub_token.set("misspelled-token");
+        {
+            common_params token_params;
+            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
+            assert(handler.opts.bearer_token.empty());
+        }
+    }
 
 #ifndef LLAMA_DOWNLOAD_DISABLED
     printf("test-arg-parser: test download functions\n\n");
