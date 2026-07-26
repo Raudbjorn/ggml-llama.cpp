@@ -204,6 +204,82 @@ A paired campaign on a genuinely idle device. `scripts/perf` harness plus
 working) will run it. Required before promotion, before the deep-cell numbers can be
 trusted, and before the upstream issue and PR.
 
+## Phase 1 PROMOTION EVIDENCE - paired campaign under sole tenancy
+
+Run 2026-07-25 against `53f390a91` on an idle A770 (`renderD128`; `renderD129` is the AMD
+Raphael iGPU that drives the desktop). Environment-only A/B on a single binary, so there is
+no build-identity confound. Six launches per arm, sample zero discarded, arms alternated,
+five retained pairs per cell.
+
+Mistral-7B-Instruct v0.1 Q4_K_M, `GGML_SYCL_MAX_WG_PER_CU` 2 versus 16:
+
+| depth | KV | pp512 delta | tg128 delta | tg128 wg=2 | tg128 wg=16 |
+|---:|---|---:|---:|---:|---:|
+| 0 | f16/f16 | +0.47 % | +1.62 % | 23.78 | 24.16 |
+| 0 | q8_0/q8_0 | +0.57 % | +0.08 % | 24.51 | 24.53 |
+| 4096 | f16/f16 | +0.08 % | **+45.76 %** | 14.82 | 21.59 |
+| 4096 | q8_0/q8_0 | +0.05 % | **+18.42 %** | 17.87 | 21.16 |
+| 8192 | f16/f16 | -0.03 % | **+84.84 %** | 10.76 | 19.89 |
+| 8192 | q8_0/q8_0 | -0.02 % | **+38.53 %** | 13.94 | 19.31 |
+| 16384 | f16/f16 | +0.03 % | **+145.96 %** | 6.95 | 17.10 |
+| 16384 | q8_0/q8_0 | +0.03 % | **+68.50 %** | 9.84 | 16.58 |
+
+Meta-Llama-3.1-8B-Instruct-heretic Q4_K_M, independent confirmation:
+
+| depth | KV | pp512 delta | tg128 delta | tg128 wg=2 | tg128 wg=16 |
+|---:|---|---:|---:|---:|---:|
+| 0 | f16/f16 | -0.44 % | +1.66 % | 22.98 | 23.36 |
+| 0 | q8_0/q8_0 | -0.75 % | -0.11 % | 23.67 | 23.65 |
+| 4096 | f16/f16 | +0.03 % | **+44.13 %** | 14.44 | 20.82 |
+
+Findings:
+
+1. **Prefill is neutral.** Every `pp512` delta lies within +/-0.6 %, against -15.08 % before
+   the split-K fix. The geometry invariance argument is now backed by measurement.
+2. **The shallow guard passes.** Depth 0 is neutral to slightly positive on both metrics,
+   which is what the `ntiles_KQ` clamp predicts.
+3. **Decode gains grow with depth**, consistent with an occupancy limit whose cost rises as
+   each work-group's serial KV walk lengthens.
+4. Baseline reproduces the post-P5 held campaign: q8_0 d8192 `tg128` 13.94 here against
+   14.12 there.
+
+### A framing correction
+
+The long-standing "q8_0 KV decode is 30.82 % behind f16 VEC" figure comes from a
+**forced-VEC** comparison. Under default routing f16 goes to TILE and q8_0 to VEC, and at
+the wg=2 baseline q8_0 VEC (13.94 at d8192) actually *beats* f16 TILE (10.76). The
+occupancy fix lifts f16 TILE by 84.84 % and closes the gap to near parity, 19.89 against
+19.31. The deep-context problem was therefore worse for the f16 default route than for
+q8_0, the opposite of the framing carried through the earlier research.
+
+### Promotion gates
+
+| Gate | Result |
+|---|---|
+| >= +3 % paired median tg128 | met at every depth >= 4096, up to +145.96 % |
+| Positive paired lower bound | yes on all improving cells |
+| No protected cell below -2 % | worst across both models is -0.75 % |
+| Correctness | `0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP` |
+| New i915/xe fault, hang, reset | none |
+
+**Recommendation: promote.** `max_wg_per_cu = 16` with split-K growing from one becomes the
+default; `GGML_SYCL_MAX_WG_PER_CU` stays as a documented diagnostic override, following the
+P5 pattern for `GGML_SYCL_MMV_Y` and `GGML_SYCL_MMVQ_NUM_SUBGROUPS`.
+
+### Coverage gap
+
+Three llama31 cells (q8_0 d4096, and both KV types at d8192 and d16384) are outstanding.
+Every completed llama31 cell tracks its mistral counterpart within about 2 percentage
+points, so these are confirmatory rather than load-bearing.
+
+### Note on tenancy
+
+Three separate holder classes interrupted this campaign: editor and IDE GPU processes, a
+user `llama-server` at `-ngl 99`, and KDE `kioworker` thumbnail helpers spawned by open
+Dolphin windows. The thumbnailers were the most disruptive because they reappear whenever a
+directory is browsed. A clean campaign needs the desktop file manager closed, not just
+inference servers stopped.
+
 ## Phase 2b result - GQA packing REFUTED on the corrected baseline
 
 The packed q8 GQA kernel (`2d53f3b25`, reverted `0bb42498e` at +7.59 % d16384 /
