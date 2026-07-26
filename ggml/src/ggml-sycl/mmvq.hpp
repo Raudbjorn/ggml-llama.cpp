@@ -40,4 +40,14 @@ bool ggml_sycl_mul_mat_vec_q_id(
     size_t             src1_row_stride,      // 0 = shared src1, else per-expert stride in bytes
     dpct::queue_ptr    stream);
 
+// Fused dense FFN: ffn_gate MUL_MAT + ffn_up MUL_MAT + SwiGLU in one kernel.
+// `gate` and `up` are the two weight tensors; `dst` is the GLU node, whose
+// src[0]->src[1] is the shared activation. Returns false when the shape is not
+// handled, in which case the caller must fall back to the unfused path.
+bool ggml_sycl_mul_mat_vec_q_fused_swiglu(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor * gate,
+    const ggml_tensor * up,
+    ggml_tensor       * dst);
+
 #endif // GGML_SYCL_MMVQ_HPP

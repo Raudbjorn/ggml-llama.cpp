@@ -5046,6 +5046,9 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) {
     }
 }
 
+static bool ggml_sycl_try_fuse_ffn_swiglu(
+    ggml_backend_sycl_context & ctx, const ggml_cgraph * cgraph, int node_idx);
+
 static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_backend_sycl_device_context * dev_ctx, ggml_cgraph * cgraph) {
     ggml_sycl_set_main_device(sycl_ctx->device);
 
@@ -5065,6 +5068,12 @@ static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_contex
             }
         }
 #endif
+        // Fused dense FFN consumes this MUL_MAT, the next MUL_MAT and the GLU.
+        if (node->op == GGML_OP_MUL_MAT && ggml_sycl_try_fuse_ffn_swiglu(*sycl_ctx, cgraph, i)) {
+            i += 2;
+            continue;
+        }
+
         bool ok = ggml_sycl_compute_forward(*sycl_ctx, dev_ctx, node);
         if (!ok) {
             GGML_LOG_ERROR("%s: error: op failed or unsupported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
@@ -5281,6 +5290,62 @@ static void ggml_sycl_profile_ffn_fusion(const ggml_cgraph * cgraph) {
             profile.batched_eligible_matches.fetch_add(1, std::memory_order_relaxed);
         }
     }
+}
+
+static bool ggml_sycl_ffn_fusion_enabled() {
+    static const bool enabled = [] {
+        const char * value = getenv("GGML_SYCL_FFN_FUSION");
+        return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+    }();
+    return enabled;
+}
+
+// Attempt to execute (ffn_gate MUL_MAT, ffn_up MUL_MAT, GLU) at node_idx as a
+// single fused kernel. Returns true if the three nodes were consumed.
+//
+// ggml_can_fuse_subgraph with {node_idx + 2} as the only declared output is what
+// makes this safe: it establishes that the two MUL_MAT results feed nothing
+// outside the subgraph, so skipping their individual writes cannot lose data.
+static bool ggml_sycl_try_fuse_ffn_swiglu(
+        ggml_backend_sycl_context & ctx, const ggml_cgraph * cgraph, int node_idx) {
+    if (!ggml_sycl_ffn_fusion_enabled()) {
+        return false;
+    }
+    if (node_idx + 2 >= cgraph->n_nodes ||
+        !ggml_can_fuse_subgraph(
+            cgraph, node_idx, { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU }, { node_idx + 2 })) {
+        return false;
+    }
+
+    ggml_tensor * first  = cgraph->nodes[node_idx];
+    ggml_tensor * second = cgraph->nodes[node_idx + 1];
+    ggml_tensor * glu    = cgraph->nodes[node_idx + 2];
+
+    // ggml_swiglu_split(gate, up) passes gate as src[0] and up as src[1]; accept
+    // either emission order for the two producers.
+    const bool ordered = glu->src[0] == first && glu->src[1] == second;
+    const bool swapped = glu->src[0] == second && glu->src[1] == first;
+    if (!ordered && !swapped) {
+        return false;
+    }
+    if (ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU) {
+        return false;
+    }
+
+    ggml_tensor * gate = ordered ? first : second;
+    ggml_tensor * up   = ordered ? second : first;
+
+    if (gate->src[1] != up->src[1]) {
+        return false;
+    }
+    if (gate->src[0]->type != up->src[0]->type || gate->type != up->type) {
+        return false;
+    }
+    if (!ggml_are_same_shape(gate, up) || !ggml_is_contiguous(gate) || !ggml_is_contiguous(up)) {
+        return false;
+    }
+
+    return ggml_sycl_mul_mat_vec_q_fused_swiglu(ctx, gate->src[0], up->src[0], glu);
 }
 
 static void ggml_sycl_profile_rope_fusion(const ggml_cgraph * cgraph) {
