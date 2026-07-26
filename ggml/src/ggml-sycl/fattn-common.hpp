@@ -69,7 +69,27 @@ void ggml_sycl_fattn_profile_record(
     uint64_t stage1_us,
     uint64_t combine_us,
     uint64_t gqa_ratio,
-    uint64_t repeated_packed_kv_bytes);
+    uint64_t repeated_packed_kv_bytes,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm);
+
+// Sync-free launch-geometry record. Covers every route and KV type, unlike the
+// timing profile which synchronizes the queue and stays limited to q8 decode.
+void ggml_sycl_fattn_profile_record_geometry(
+    bool tile_route,
+    bool decode,
+    const char * type_k,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm,
+    uint64_t stream_k);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -1257,17 +1277,30 @@ void launch_fattn(
     } else {
         const int ntiles_KQ = (K->ne[1] + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by tensor size.
 
+        // Split-K is a way to manufacture parallelism when the tile count alone
+        // cannot fill the device; it is not free. Every extra split multiplies the
+        // dst_tmp scratch and widens the combine reduction over every output
+        // element. So start at one split and let the efficiency search below grow
+        // it only while the machine is still underfilled, bounded by occupancy.
+        //
+        // Starting at max_blocks_per_sm instead makes it a floor rather than a
+        // cap. That is harmless while the value is 2, but once it reflects real
+        // occupancy it forces splits onto work that never needed them: prefill has
+        // ntiles_total = 4096 against a 512 blocks_per_wave and is already
+        // saturated, yet it was measured launching 4x the blocks and regressing
+        // 15.08% (f16 pp512) and 3.48% (q8_0 pp512) at depth 0.
+        parallel_blocks = 1;
+
         // parallel_blocks must not be larger than what the tensor size allows:
-        parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
-        // todo fix the hard code change
-        // parallel_blocks = ntiles_KQ;
+        const int max_parallel_blocks = std::min(max_blocks_per_sm, ntiles_KQ);
+        parallel_blocks = std::min(parallel_blocks, max_parallel_blocks);
 
         // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
         // Test whether parallel_blocks can be set to a higher value for better efficiency.
         const int blocks_per_wave = nsm * max_blocks_per_sm;
         int nwaves_best = 0;
         int efficiency_percent_best = 0;
-        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
+        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= max_parallel_blocks; ++parallel_blocks_test) {
             const int nblocks_total = ntiles_total * parallel_blocks_test;
             const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
             const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
@@ -1292,6 +1325,25 @@ void launch_fattn(
             dst_tmp.alloc(parallel_blocks*ggml_nelements(KQV));
             dst_tmp_meta.alloc(parallel_blocks*ggml_nrows(KQV));
         }
+    }
+
+    // Launch geometry is a pure function of device properties and tensor shapes, so
+    // unlike the timing profile above it needs no queue synchronization and is not
+    // restricted to q8 decode. Recording it for every route is what makes the VEC and
+    // TILE grids directly comparable.
+    if (ggml_sycl_fattn_profile_enabled()) {
+        ggml_sycl_fattn_profile_record_geometry(
+            tile_route,
+            Q->ne[1] == 1,
+            ggml_type_name(K->type),
+            (uint64_t) parallel_blocks,
+            (uint64_t) ntiles_total,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
+                block_dim.x * block_dim.y * block_dim.z,
+            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) nsm,
+            (uint64_t) stream_k);
     }
 
     float scale         = 1.0f;
@@ -1394,6 +1446,16 @@ void launch_fattn(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 profile_after_combine - profile_after_stage1).count(),
             gqa_ratio,
-            packed_kv_bytes * (gqa_ratio - 1));
+            packed_kv_bytes * (gqa_ratio - 1),
+            // Launch geometry: blocks_total and work_items_total are the realized
+            // grid for both the stream-k and split-k paths, so they can be compared
+            // directly against device residency.
+            (uint64_t) parallel_blocks,
+            (uint64_t) ntiles_total,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
+                block_dim.x * block_dim.y * block_dim.z,
+            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) nsm);
     }
 }

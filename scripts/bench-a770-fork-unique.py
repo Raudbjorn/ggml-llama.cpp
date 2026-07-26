@@ -681,6 +681,78 @@ def _candidate_env_log_assertions(
     return assertions, all_valid
 
 
+def _format_candidate_env_log_assertions(
+    assertions: dict[str, dict[str, Any]],
+) -> str:
+    if not assertions:
+        return "none"
+    rendered: list[str] = []
+    for key in sorted(assertions):
+        assertion = assertions[key]
+        requested_value = assertion["requested_value"]
+        if not assertion["backend_logs_key"]:
+            status = "not validated from backend logs; key not emitted"
+        else:
+            status = (
+                "validated in "
+                f"{assertion['candidate_samples_with_requested_value']}/"
+                f"{assertion['candidate_samples']} candidate samples; "
+                f"valid={assertion['valid']}"
+            )
+        rendered.append(f"{key}={requested_value} ({status})")
+    return "; ".join(rendered)
+
+
+def _build_commit_diagnostics(
+    cells: list[dict[str, Any]],
+    provenance: dict[str, Any],
+    *,
+    require_repository_match: bool,
+) -> list[str]:
+    sample_commits_by_arm: dict[str, set[str]] = {}
+    for cell in cells:
+        for arm, samples in cell["samples"].items():
+            if not samples:
+                continue
+            commits = sample_commits_by_arm.setdefault(arm, set())
+            for sample in samples:
+                for row in sample.get("selected_rows", {}).values():
+                    build_commit = row.get("build_commit")
+                    if build_commit:
+                        commits.add(str(build_commit))
+
+    diagnostics: list[str] = []
+    consistent_commits: set[str] = set()
+    for arm, commits in sorted(sample_commits_by_arm.items()):
+        if not commits:
+            diagnostics.append(f"{arm} samples do not report build_commit")
+        elif len(commits) > 1:
+            diagnostics.append(
+                f"{arm} samples report multiple build_commit values: "
+                + ", ".join(sorted(commits))
+            )
+        else:
+            consistent_commits.update(commits)
+
+    if require_repository_match:
+        repository = provenance.get("repository_commit", {})
+        repository_commit = (
+            repository.get("stdout", "").strip()
+            if repository.get("returncode") == 0
+            else ""
+        )
+        if not repository_commit:
+            diagnostics.append("unable to determine repository commit")
+        else:
+            for build_commit in sorted(consistent_commits):
+                if not repository_commit.startswith(build_commit):
+                    diagnostics.append(
+                        f"sample build_commit {build_commit} does not match "
+                        f"repository commit {repository_commit}"
+                    )
+    return diagnostics
+
+
 def _write_product_summary_md(summary: dict[str, Any], md_path: Path) -> None:
     lines = [
         f"# Product campaign: {summary['model_name']}",
@@ -692,7 +764,9 @@ def _write_product_summary_md(summary: dict[str, Any], md_path: Path) -> None:
         f"- candidate env: {summary['candidate_env']}",
         f"- candidate_enabled: {summary['candidate_enabled']}",
         f"- model shape: {summary['model_shape']}",
-        f"- candidate env log assertions: {summary['candidate_env_log_assertions']}",
+        f"- campaign valid: {summary['all_cells_valid']}",
+        f"- invalid diagnostics: {summary['invalid_diagnostics'] or 'none'}",
+        f"- candidate env log assertions: {_format_candidate_env_log_assertions(summary['candidate_env_log_assertions'])}",
         f"- dmesg fault hits before={summary['dmesg_before_hits']} after={summary['dmesg_after_hits']} new={len(summary['dmesg_new_matches'])}",
         "",
         "| depth | kv | metric | valid | baseline median tok/s | baseline mean | baseline stddev | baseline 95% CI | candidate median tok/s | candidate mean | candidate stddev | candidate 95% CI | paired median % | paired mean % | paired stddev | paired 95% CI | effective KV B/step | baseline effective GB/s | candidate effective GB/s | n |",
@@ -821,6 +895,7 @@ def run_product_cell(
                 "fa_route_records": route_records,
                 "fa_profile_records": profile_records,
                 "graph_profile_records": graph_profile_records,
+                "selected_rows": rows,
             }
             sample_path = samples_dir / (
                 f"cell{cell_idx:02d}_{kv[0]}_{kv[1]}_d{depth}"
@@ -1056,7 +1131,20 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
         if dmesg_new_matches:
             invalid_diagnostics.append(f"{len(dmesg_new_matches)} new i915/xe fault line(s) after campaign")
 
-    all_valid = not invalid_cell_ids and env_logs_valid and not dmesg_new_matches and dmesg_after_n >= 0
+    build_commit_diagnostics = _build_commit_diagnostics(
+        cells,
+        provenance,
+        require_repository_match=bin_dir == candidate_bin_dir,
+    )
+    invalid_diagnostics.extend(build_commit_diagnostics)
+
+    all_valid = (
+        not invalid_cell_ids
+        and env_logs_valid
+        and not build_commit_diagnostics
+        and not dmesg_new_matches
+        and dmesg_after_n >= 0
+    )
     summary = {
         "model_name": model.name, "model_path": str(model), "bin_dir": str(bin_dir),
         "candidate_bin_dir": str(candidate_bin_dir),
