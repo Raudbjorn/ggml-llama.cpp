@@ -197,9 +197,14 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-integration.cpp)
     llama_build_and_test(test-llama-grammar.cpp)
     llama_build_and_test(test-batch-alloc.cpp)
-    llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
-    target_link_libraries(test-chat PRIVATE server-context)
+    # needs the server-context target from tools/server; absent on the pruned lib
+    # branch, and also absent whenever tools are not built (tools/server is only
+    # added under LLAMA_BUILD_TOOLS), which would otherwise fail to link here.
+    if (LLAMA_BUILD_TOOLS AND LLAMA_BUILD_SERVER AND IS_DIRECTORY "${PROJECT_SOURCE_DIR}/tools/server")
+        llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+        target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
+        target_link_libraries(test-chat PRIVATE server-context)
+    endif()
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
@@ -329,6 +334,10 @@ llama_build_and_test(test-thread-safety.cpp ARGS -m "${MODEL_DEST}" -ngl 99 -p "
 set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 llama_build_and_test(test-arg-parser.cpp)
+if (NOT LLAMA_DOWNLOAD)
+    # the network section exercises the real downloader; stubbed out in SDK builds
+    target_compile_definitions(test-arg-parser PRIVATE LLAMA_DOWNLOAD_DISABLED)
+endif()
 
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
@@ -358,11 +367,13 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-col2im-1d.cpp)
 endif()
 
-# libmtmd
-set(LLAMA_TEST_NAME test-mtmd-c-api)
-llama_build_and_test(test-mtmd-c-api.c)
-target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
-unset(LLAMA_TEST_NAME)
+# libmtmd; the mtmd target comes from tools/mtmd, absent on the pruned lib branch
+if ((LLAMA_BUILD_TOOLS OR LLAMA_BUILD_MTMD) AND IS_DIRECTORY "${PROJECT_SOURCE_DIR}/tools/mtmd")
+    set(LLAMA_TEST_NAME test-mtmd-c-api)
+    llama_build_and_test(test-mtmd-c-api.c)
+    target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+    unset(LLAMA_TEST_NAME)
+endif()
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)

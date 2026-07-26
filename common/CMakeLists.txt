@@ -53,6 +53,20 @@ endif()
 
 set(TARGET llama-common)
 
+# LLAMA_DOWNLOAD=OFF swaps the network-backed downloader for a stub so that
+# llama-common carries no cpp-httplib/OpenSSL dependency (SDK builds).
+if (LLAMA_DOWNLOAD)
+    set(LLAMA_COMMON_DOWNLOAD_SOURCES
+        download.cpp
+        hf-cache.cpp
+        http.h
+    )
+else()
+    set(LLAMA_COMMON_DOWNLOAD_SOURCES
+        download-stub.cpp
+    )
+endif()
+
 add_library(${TARGET}
     arg.cpp
     arg.h
@@ -71,13 +85,10 @@ add_library(${TARGET}
     console.h
     debug.cpp
     debug.h
-    download.cpp
     download.h
     fit.cpp
     fit.h
-    hf-cache.cpp
     hf-cache.h
-    http.h
     imatrix-loader.cpp
     imatrix-loader.h
     json-schema-to-grammar.cpp
@@ -114,6 +125,7 @@ add_library(${TARGET}
     jinja/string.h
     jinja/caps.cpp
     jinja/caps.h
+    ${LLAMA_COMMON_DOWNLOAD_SOURCES}
     )
 
 set_target_properties(${TARGET} PROPERTIES
@@ -133,7 +145,9 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC  llama-common-base)
-target_link_libraries(${TARGET} PRIVATE cpp-httplib)
+if (LLAMA_DOWNLOAD)
+    target_link_libraries(${TARGET} PRIVATE cpp-httplib)
+endif()
 
 if (LLAMA_LLGUIDANCE)
     include(ExternalProject)

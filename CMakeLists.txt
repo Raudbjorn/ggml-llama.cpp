@@ -116,6 +116,7 @@ option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT}
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 
 # 3rd party libs
+option(LLAMA_DOWNLOAD   "llama-common: enable model download support (cpp-httplib/OpenSSL); OFF builds a stub" ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
@@ -261,8 +262,15 @@ add_subdirectory(src)
 #
 
 if (LLAMA_BUILD_COMMON)
+    # the server needs cpp-httplib even when the downloader is stubbed out.
+    # LLAMA_BUILD_TOOLS is part of the condition because tools/server is only
+    # added under it (see add_subdirectory(tools) below), so without it there
+    # is no server target and pulling in cpp-httplib would drag find_package
+    # (OpenSSL) back into an SDK configure for nothing.
+    if (LLAMA_DOWNLOAD OR (LLAMA_BUILD_TOOLS AND LLAMA_BUILD_SERVER AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tools/server"))
+        add_subdirectory(vendor/cpp-httplib)
+    endif()
     add_subdirectory(common)
-    add_subdirectory(vendor/cpp-httplib)
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
@@ -270,16 +278,25 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     add_subdirectory(tests)
 endif()
 
+# IS_DIRECTORY guards: the generated lib branch (scripts/prune-to-lib.sh) removes
+# these directories; a standalone checkout of that branch must still configure
+# cleanly. IS_DIRECTORY rather than EXISTS so a stray file cannot satisfy the
+# guard, and the paths are quoted so a source tree containing spaces or
+# semicolons cannot word-split the condition.
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-    add_subdirectory(pocs)
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+        add_subdirectory(examples)
+    endif()
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/pocs")
+        add_subdirectory(pocs)
+    endif()
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if (LLAMA_BUILD_APP)
+if (LLAMA_BUILD_APP AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/app")
     add_subdirectory(app)
 endif()
 
@@ -314,8 +331,22 @@ set_target_properties(llama
 
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
-if (LLAMA_BUILD_COMMON)
+# Shared builds only, and enforced rather than merely documented: with a static
+# llama-common the artifact is an ARCHIVE, so `install(TARGETS ... LIBRARY)`
+# would install no library while still installing the headers and vendored
+# nlohmann, leaving a header-only SDK surface with nothing to link against.
+# Installing ARCHIVE instead would not fix it either, since llama-common-base
+# is only folded into the shared object; a static llama-common.a would ship
+# without its objects.
+if (LLAMA_BUILD_COMMON AND BUILD_SHARED_LIBS)
     install(TARGETS llama-common LIBRARY)
+    # SDK surface for the helper library: headers land under include/llama-common,
+    # plus the nlohmann headers its public headers reference.
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/common/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llama-common
+            FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/vendor/nlohmann
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 
 configure_package_config_file(
