@@ -5292,10 +5292,16 @@ static void ggml_sycl_profile_ffn_fusion(const ggml_cgraph * cgraph) {
     }
 }
 
+// Default ON since the 2026-07-26 paired campaign: +4.66% to +7.60% tg128 across
+// depths 0/4096/16384 on both KV types, with token output bit-identical to the
+// unfused path. Set GGML_SYCL_FFN_FUSION=0 to disable.
 static bool ggml_sycl_ffn_fusion_enabled() {
     static const bool enabled = [] {
         const char * value = getenv("GGML_SYCL_FFN_FUSION");
-        return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+        if (value == nullptr || value[0] == '\0') {
+            return true;
+        }
+        return !(value[0] == '0' && value[1] == '\0');
     }();
     return enabled;
 }
