@@ -28,7 +28,7 @@ Converted to ms/token, the marginal cost per KV row is almost perfectly linear:
 
 Llama-3.1-8B reproduces it at 3.711 and 3.659 us. The fit is
 
-```
+```text
 per-token time ~= 40.41 ms + 3.67 us * depth
 ```
 
@@ -47,11 +47,19 @@ flash-attention change, however good, because making attention free gains 0.58% 
 Every FA candidate in this project's history shows the same deep-win/shallow-lose shape, and
 that shape is Amdahl's law, not a tuning failure.
 
-**Gate adopted for this round, disjunctive and depth-weighted:** >=5% at 8192 and 16384, with
-depth 0 and 4096 held to a -2% no-regression guard rather than an improvement bar. This is
-also how P5.5 and P5.11 were actually adjudicated. The harness's own promotion rule (>=+3%
-median, paired 95% lower bound above 0, -2% guard on protected cells) remains the merge gate;
-candidates landing in the 3-5% band are surfaced, not discarded.
+**Gate adopted for this round, disjunctive and depth-weighted.** This is the single authoritative
+definition; every kill criterion in this document and in the campaign report refers back to it.
+
+- **Promotion depths, improvement bar:** >=5% at **8192 and 16384**.
+- **Protected depths, -2% no-regression guard:** **0, 2048 and 4096**. These carry a guard rather
+  than an improvement bar, because section 1's arithmetic makes an improvement bar unreachable
+  there for attention work.
+- **Measurement set:** all five depths - 0, 2048, 4096, 8192, 16384 - are benched. The guard
+  cannot be evaluated on a cell that was not measured.
+
+This is also how P5.5 and P5.11 were actually adjudicated. The harness's own promotion rule
+(>=+3% median, paired 95% lower bound above 0, -2% guard on protected cells) remains the merge
+gate; candidates landing in the 3-5% band are surfaced, not discarded.
 
 ### 1.1 Where the other 40.4 ms goes - and the number that reframes the programme
 
@@ -422,10 +430,11 @@ exist. Producing them is the gate.
 
 ### 4.2 Load-width probe
 
-`scripts/perf/probe-q8-load-width.sh` - compile-only, no GPU execution. Both q8_0 KV paths
-fetch their 4-byte quant words through `ggml_sycl_memcpy_1<N, 2>`, whose second template
-argument is the literal per-copy width, not a hint: `ggml/src/ggml-sycl/common.hpp` dispatches
-on `nb_per_cpy`, and 2 emits two 16-bit loads per dword.
+`scripts/perf/probe-q8-load-width.sh` - compile-only, no GPU execution. **Before this round**,
+both q8_0 KV paths fetched their 4-byte quant words through `ggml_sycl_memcpy_1<N, 2>`, whose
+second template argument is the literal per-copy width, not a hint:
+`ggml/src/ggml-sycl/common.hpp` dispatches on `nb_per_cpy`, and 2 emits two 16-bit loads per
+dword. The canonical path still does and must; the quants-first path is now `<N, 4>`.
 
 - Canonical AoS (`fattn-common.hpp:298`, `:649`) **must keep the 2**. `qs` sits at offset 2 of a
   34-byte block, so the address is `base + ib*34 + 2 + 4*iqs`, which is congruent to 2 mod 4 for
@@ -455,6 +464,14 @@ to LLVM IR, `llvm-spirv --spirv-ext=+SPV_INTEL_subgroups` (the default set omits
 sub-group shuffles in the reductions then yield an empty module), then `ocloc compile -device
 acm-g10 -spirv_input` under `IGC_ShaderDumpEnable`.
 
+Captured evidence is committed under `scripts/perf/results/round2-load-width-probe/`; each
+summary records its own `repo HEAD`, dirty-file count and toolchain versions. The full IGC ISA
+dumps are about 11 MB per arm and are **not** committed - re-generate them with the script if
+they are needed.
+
+**Arm 1, the load-width question, measured at `028084d00`** (`baseline-summary.txt`,
+`widened-summary.txt`):
+
 | quants-first D=128 kernels | `load.ugm.d16*` | `load.ugm.d32*` | ISA bytes |
 |---|---:|---:|---:|
 | baseline (`, 2`) | 512 | 622 | 11,249,087 |
@@ -464,10 +481,21 @@ The LLVM IR genuinely differs (distinct module hashes, `OCL_asm385b9afb...` vers
 `OCL_asm542956a3...`) and the generated code shrank about 2%, so the change reached the compiled
 path. **The load-message counts are identical.** IGC was already merging the adjacent 16-bit
 copies, and the 512 remaining `d16u32` loads are genuine `sycl::half` fetches - the per-group
-scales, the mask, and Q - not split dwords.
+scales, the mask, and Q - not split dwords. The canonical q8_0 instance (all D values) showed
+2129 `d16*` of 4798 total ugm loads at the same commit; that is the AoS path and must stay at
+alignment 2 regardless.
 
-For reference, the canonical q8_0 instance (all D values) shows 2129 `d16*` of 4798 total ugm
-loads; those are the AoS path and must stay at alignment 2 regardless.
+**Arm 2, the destination-alignment fix, measured at `9f57709cf`** (`noalignas-summary.txt`,
+`alignas-summary.txt`): identical counts with and without `alignas(4)` - canonical 4258 `d16*` of
+9594, quants-first 1024 `d16*` of 2270. IGC was already over-aligning the staging arrays, so the
+fix removes a reliance on that without changing generated code.
+
+**The two arms are not comparable to each other, only within themselves.** `9f57709cf` sits after
+this branch was rebased onto master, which pulled in `61eed0aac` (upstream sync, renumbers
+fork-private ggml type ids); that changes how many kernels the instance TU emits, which is why the
+absolute counts roughly double between the arms. Each arm is an internally same-tree A/B, which is
+the only comparison this probe supports. Any future re-run must re-establish its own baseline
+rather than compare against the numbers above.
 
 **Verdict: no performance change is expected or claimed from this edit.** It is retained purely
 as hygiene - the alignment argument now states the invariant the layout actually guarantees, and
@@ -507,11 +535,14 @@ that decide the cutover. Six launches per arm, repetition 0 discarded. Precondit
 `ONEAPI_DEVICE_SELECTOR=level_zero:0`, sole tenancy of `/dev/dri/renderD128` via `fuser -v`,
 clean dmesg delta.
 
-**Pre-registered kill criterion for the cutover, stated before any run.** Rejected if either
-depth 0 or depth 2048 paired median regresses by more than -2% on any fleet model, or the 8k and
-16k gains fail to reproduce at >=5% on the newly fetched stock Q4_K_M files. A regression
-confined to depth 0 with the deep gains intact is not an automatic kill; it is the
-depth-conditioned-route question, reported and escalated rather than quietly promoted.
+**Pre-registered kill criterion for the cutover, stated before any run.** Applying the gate of
+section 1 unchanged: rejected if any protected depth - **0, 2048 or 4096** - regresses by more
+than -2% paired median on any fleet model, or if the promotion depths 8192 and 16384 fail to
+reproduce at >=5% on the newly fetched stock Q4_K_M files. Depth 4096 already has a measured
++8.25/+8.01% from P5.11 and is expected to clear its guard comfortably; depths 0 and 2048 are the
+cells that do not yet exist. A regression confined to depth 0 with the deep gains intact is not an
+automatic kill; it is the depth-conditioned-route question, reported and escalated rather than
+quietly promoted.
 
 **Determinism.** The layout change does not alter reduction order or split-K partitioning, so
 output is expected to be bit-identical between the two arms for a given model. Any divergence
@@ -579,9 +610,9 @@ low - condition the rejection on fused-path eligibility.
   oneDNN `micro_sdpa` all store quantized KV with grouped scales rather than per-block interleave.
 - **Local gate probe.** The depth 0 and depth 2048 paired cells, which P5.11 never measured. See
   section 5 for the exact `llama-bench` invocation.
-- **Pre-registered kill criterion.** Rejected if depth 0 or depth 2048 regresses more than -2% on
-  any fleet model, or if the 8k/16k gains fail to reproduce at >=5% on the newly fetched stock
-  Q4_K_M files.
+- **Pre-registered kill criterion.** The section 1 gate, unchanged: rejected if any protected
+  depth - 0, 2048 or 4096 - regresses more than -2% on any fleet model, or if the promotion depths
+  8192 and 16384 fail to reproduce at >=5% on the newly fetched stock Q4_K_M files.
 - **Determinism.** Layout only. No change to reduction order or split-K partitioning, so output
   should be bit-identical between arms; the server-state gate is a sharp instrument here, and any
   divergence is a defect rather than expected numerical drift.

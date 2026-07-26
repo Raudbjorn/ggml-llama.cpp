@@ -29,7 +29,7 @@ back, so bytes on disk stay canonical `block_q8_0` in both directions.
 
 Held-binary paired benchmarks fit
 
-```
+```text
 per-token time ~= 40.41 ms + 3.67 us * depth
 ```
 
@@ -38,8 +38,11 @@ conjunctive ">=5% at every depth" gate cannot be cleared by any attention change
 attention free gains 0.58% at depth 0. Every FA candidate in this project's history shows the same
 deep-win/shallow-lose shape; that shape is Amdahl's law, not a tuning failure.
 
-The gate adopted for this round is therefore disjunctive: **>=5% at 8192 and 16384, with depth 0
-and 4096 held to a -2% no-regression guard.**
+The gate adopted for this round is therefore disjunctive: **>=5% at the promotion depths 8192 and
+16384, with the protected depths 0, 2048 and 4096 held to a -2% no-regression guard.** All five
+depths are benched, since a guard cannot be evaluated on an unmeasured cell. The authoritative
+definition lives in section 1 of the candidate artifact; this report does not restate it
+differently.
 
 The corollary is larger than the gate change. About 40.4 ms of every token is spent outside
 attention, at 106 GB/s effective against a 560 GB/s part - **19% of the bandwidth roofline**. A
@@ -70,22 +73,22 @@ kernel enqueues per token) and **about 18.2 ms is unaccounted for**.
 
 ## 4. What must be measured before this is trusted
 
-**The default flip is not yet gated.** P5.11 reported only depths 4096, 8192 and 16384. The
-disjunctive gate requires the -2% no-regression check at **depth 0 and depth 2048**, and those
-cells do not exist. Producing them is the merge gate for this branch.
+**The default flip is not yet gated.** The protected depths are 0, 2048 and 4096. P5.11 measured
+only 4096 (at +8.25/+8.01%, comfortably inside its guard) along with the two promotion depths, so
+**depths 0 and 2048 are the missing cells**, and producing them is the merge gate for this branch.
 
-```
+```sh
 scripts/bench-a770-fork-unique.py    # paired A/B, opt-out vs default
 # depths 0, 2048, 4096, 8192, 16384; 6 launches per arm, repetition 0 discarded
 # preconditions: ONEAPI_DEVICE_SELECTOR=level_zero:0, sole tenancy of /dev/dri/renderD128
 ```
 
-Pre-registered kill criterion, stated before any run: rejected if depth 0 or depth 2048 regresses
-more than -2% on any fleet model, or if the 8k and 16k gains fail to reproduce at >=5% on the
-newly fetched stock Q4_K_M files. Correctness gates: `ctest -R test-sycl-turbo-correctness` at
-`0 GATE-FAIL`, the forced-TILE 4:1 and 8:1 quants-first cells, and
-`scripts/perf/server_state_roundtrip.py` at all 8 assertions. With the opt-out set, output must
-match the pre-change build.
+Pre-registered kill criterion, stated before any run: rejected if any protected depth - 0, 2048 or
+4096 - regresses more than -2% on any fleet model, or if the promotion depths 8192 and 16384 fail
+to reproduce at >=5% on the newly fetched stock Q4_K_M files. Correctness gates:
+`ctest -R test-sycl-turbo-correctness` at `0 GATE-FAIL`, the forced-TILE 4:1 and 8:1 quants-first
+cells, and `scripts/perf/server_state_roundtrip.py` at all 8 assertions. With the opt-out set,
+output must match the pre-change build.
 
 The validation fleet was completed this round: stock `Meta-Llama-3.1-8B-Instruct` Q4_K_M and
 `Qwen3-Coder-30B-A3B-Instruct` Q4_K_M were fetched and verified (`general.file_type = 15`; GQA

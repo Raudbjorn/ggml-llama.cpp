@@ -637,10 +637,13 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
     // Turbo copies for the kernel under test.
     auto k_q = quantize_host(kv_type, k_f32, d, n_kv * nh_kv);
     auto v_q = quantize_host(kv_type, v_f32, d, n_kv * nh_kv);
+    // Mirror the runtime default in llama_kv_cache: quants-first is on unless the
+    // env var explicitly opts out with 0. Keeping the old opt-in test here would
+    // leave the shipped default layout unexercised by the correctness gate.
     const char * quants_first_env = getenv("GGML_SYCL_Q8_KV_QUANTS_FIRST");
+    const bool quants_first_opted_out = quants_first_env != nullptr && quants_first_env[0] == '0';
     const bool q8_quants_first =
-        kv_type == GGML_TYPE_Q8_0 && d == 128 &&
-        quants_first_env != nullptr && quants_first_env[0] != '\0' && quants_first_env[0] != '0';
+        kv_type == GGML_TYPE_Q8_0 && d == 128 && !quants_first_opted_out;
     if (q8_quants_first) {
         q8_kv_quants_first_host(k_q);
         q8_kv_quants_first_host(v_q);

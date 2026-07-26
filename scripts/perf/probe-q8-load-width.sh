@@ -2,14 +2,17 @@
 # Compile-only probe: count LSC load message widths in the D=128 q8_0 flash-attention
 # VEC kernels for Xe-HPG (acm-g10). No GPU execution, no benchmark.
 #
-# Purpose. Both the canonical and the quants-first q8_0 KV paths fetch their 4-byte
-# quant words through ggml_sycl_memcpy_1<N, 2>, whose alignment argument is the literal
-# per-copy width (see ggml/src/ggml-sycl/common.hpp, the nb_per_cpy dispatch): an
-# argument of 2 emits two 16-bit loads per dword rather than one 32-bit load.
+# Purpose. Before this probe was written, both the canonical and the quants-first q8_0
+# KV paths fetched their 4-byte quant words through ggml_sycl_memcpy_1<N, 2>. That
+# alignment argument is the literal per-copy width, not a hint (see
+# ggml/src/ggml-sycl/common.hpp, the nb_per_cpy dispatch): an argument of 2 emits two
+# 16-bit loads per dword rather than one 32-bit load. That <N, 2> form describes the
+# pre-change baseline, not the final state of both sites.
 #
 # The canonical AoS layout must keep the 2: block_q8_0 is 34 bytes with qs at offset 2,
 # so 4-byte alignment alternates across blocks. The quants-first layout has a 136-byte
-# group stride and every payload offset is a multiple of 4, so its loads can be widened.
+# group stride and every payload offset is a multiple of 4, so its loads could be
+# widened, and now are: that path is <N, 4> at HEAD.
 #
 # Usage:
 #   scripts/perf/probe-q8-load-width.sh <build-dir> <label> [out-dir]
@@ -94,22 +97,24 @@ summarize() {
     local d="$DUMP/$tag"
     echo "---- $tag ----"
     # SIMD16 entries are the VEC kernels (reqd_sub_group_size(16) in fattn-common.hpp).
-    local asms
-    asms=$(find "$d" -name '*simd16*entry*.asm' 2>/dev/null)
-    if [ -z "$asms" ]; then
+    # Collect into an array via NUL-delimited find so paths containing whitespace survive.
+    local -a asms=()
+    while IFS= read -r -d '' f; do asms+=("$f"); done \
+        < <(find "$d" -name '*simd16*entry*.asm' -print0 2>/dev/null)
+    if [ ${#asms[@]} -eq 0 ]; then
         echo "  no simd16 entry dumps; falling back to all .asm"
-        asms=$(find "$d" -name '*.asm' 2>/dev/null)
+        while IFS= read -r -d '' f; do asms+=("$f"); done \
+            < <(find "$d" -name '*.asm' -print0 2>/dev/null)
     fi
-    [ -n "$asms" ] || { echo "  no ISA dumps found"; return 0; }
+    [ ${#asms[@]} -gt 0 ] || { echo "  no ISA dumps found"; return 0; }
     # Xe-HPG LSC mnemonics look like: load.ugm.d16u32.a64.ca.ca / load.ugm.d32x4.a64.ca.ca
-    # d16u32 is the narrow form emitted by ggml_sycl_memcpy_1<N, 2>: a 16-bit fetch
+    # d16u32 is the narrow form emitted by an alignment-2 copy: a 16-bit fetch
     # zero-extended into a 32-bit destination, two per dword.
     echo "  global (ugm) load data types:"
-    # shellcheck disable=SC2086
-    grep -ohE 'load\.ugm\.d[0-9]+[a-z0-9]*' $asms 2>/dev/null \
+    grep -ohE 'load\.ugm\.d[0-9]+[a-z0-9]*' "${asms[@]}" 2>/dev/null \
         | sed 's/^load\.ugm\.//' | sort | uniq -c | sort -rn | sed 's/^/    /' || echo "    (none matched)"
-    echo "  narrow (d16*) global loads: $(grep -ohE 'load\.ugm\.d16[a-z0-9]*' $asms 2>/dev/null | wc -l)"
-    echo "  total ugm loads          : $(grep -ohE 'load\.ugm\.d[0-9]+[a-z0-9]*' $asms 2>/dev/null | wc -l)"
+    echo "  narrow (d16*) global loads: $(grep -ohE 'load\.ugm\.d16[a-z0-9]*' "${asms[@]}" 2>/dev/null | wc -l)"
+    echo "  total ugm loads          : $(grep -ohE 'load\.ugm\.d[0-9]+[a-z0-9]*' "${asms[@]}" 2>/dev/null | wc -l)"
 }
 
 compile_and_dump "$REPO/$CANON_TU" canonical || true
