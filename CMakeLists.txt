@@ -278,13 +278,16 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     add_subdirectory(tests)
 endif()
 
-# EXISTS guards: the generated lib branch (scripts/prune-to-lib.sh) removes these
-# directories; a standalone checkout of that branch must still configure cleanly.
+# IS_DIRECTORY guards: the generated lib branch (scripts/prune-to-lib.sh) removes
+# these directories; a standalone checkout of that branch must still configure
+# cleanly. IS_DIRECTORY rather than EXISTS so a stray file cannot satisfy the
+# guard, and the paths are quoted so a source tree containing spaces or
+# semicolons cannot word-split the condition.
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
-    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/examples")
         add_subdirectory(examples)
     endif()
-    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/pocs)
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/pocs")
         add_subdirectory(pocs)
     endif()
 endif()
@@ -293,7 +296,7 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if (LLAMA_BUILD_APP AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app)
+if (LLAMA_BUILD_APP AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/app")
     add_subdirectory(app)
 endif()
 
