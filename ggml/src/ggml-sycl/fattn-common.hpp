@@ -1294,8 +1294,6 @@ void launch_fattn(
         // parallel_blocks must not be larger than what the tensor size allows:
         const int max_parallel_blocks = std::min(max_blocks_per_sm, ntiles_KQ);
         parallel_blocks = std::min(parallel_blocks, max_parallel_blocks);
-        // todo fix the hard code change
-        // parallel_blocks = ntiles_KQ;
 
         // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
         // Test whether parallel_blocks can be set to a higher value for better efficiency.
