@@ -36,6 +36,13 @@ fi
 
 SRC_SHA="$(git rev-parse --verify "${SRC_REF}^{commit}")"
 
+# git branch -f refuses to move a branch that is checked out in any worktree
+if git worktree list --porcelain | grep -qx "branch refs/heads/${LIB_BRANCH}"; then
+    echo "ERROR: branch '${LIB_BRANCH}' is checked out in a worktree; detach it first" >&2
+    echo "  (git -C <worktree> checkout --detach)" >&2
+    exit 1
+fi
+
 # directories removed from the SDK tree; paths absent in a given tree are skipped
 PRUNE_PATHS=(
     tools/batched-bench
