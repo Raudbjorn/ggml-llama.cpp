@@ -9,8 +9,8 @@
 # 16-bit loads per dword rather than one 32-bit load. That <N, 2> form describes the
 # pre-change baseline, not the final state of both sites.
 #
-# The canonical AoS layout must keep the 2: block_q8_0 is 34 bytes with qs at offset 2,
-# so 4-byte alignment alternates across blocks. The quants-first layout has a 136-byte
+# The canonical AoS layout must keep the 2-byte copy: block_q8_0 is 34 bytes with qs at
+# offset 2, so 4-byte alignment alternates across blocks. The quants-first layout has a 136-byte
 # group stride and every payload offset is a multiple of 4, so its loads could be
 # widened, and now are: that path is <N, 4> at HEAD.
 #
