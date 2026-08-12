@@ -641,6 +641,23 @@ fixed f16 suite was target-exact and exceeded 1.5x in every class. The hostile
 hard-off gate was also exact: target-only 21.82 t/s, unguarded 15.30 t/s, and
 dead-off-3 27.83 t/s with six observed trips.
 
+> **Correction (2026-08-12).** The f16 exactness claim in the paragraph above
+> ("the fixed f16 suite was target-exact and exceeded 1.5x in every class")
+> was retracted on 2026-07-26 by `scripts/perf/FINDINGS.md` ("the f16
+> exactness claim does not reproduce"). On re-run with the identical model
+> file, `REPEATS=3`, `ONLY=f16`, `free_prose` produced three distinct token
+> hashes in three deterministic runs, at both `GGML_SYCL_MAX_WG_PER_CU=16`
+> and `2` (exonerating the occupancy change; behaviour pre-existing). The
+> original 11.46x `free_prose` figure is implausible against its measured
+> draft acceptance of 0.615-0.680 (implying roughly 1.5-2.5x); a warm prompt
+> cache is the suspected cause. Exactness tracks prompt class, not KV cache
+> type: both f16 and q8_0 are exact on copy-heavy classes and non-exact on
+> `free_prose`. The proposal to enable speculation by default when KV is f16
+> is withdrawn; the surviving recommendation is unchanged from the q8_0 half
+> of this section (opt-in `ngram-mod,ngram-map-k4v` for controlled copy-heavy
+> workloads only, target-only as the general default). The hostile hard-off
+> gate result in the paragraph above is not affected by this correction.
+
 Durable post-P5 evidence is under
 `scripts/perf/results/p5-post-campaign/`. The final build provenance, complete
 CMake cache, matrix adjudication, correctness log, state result, speculative
