@@ -48,9 +48,25 @@ CANON_TU="ggml/src/ggml-sycl/template-instances/fattn-vec-instance-q8_0-q8_0.cpp
 BASE_CMD=$(jq -r --arg f "$CANON_TU" '.[] | select(.file | endswith($f)) | .command' "$CC_JSON" | head -1)
 [ -n "$BASE_CMD" ] || { echo "error: no compile command for $CANON_TU" >&2; exit 1; }
 
+# Strip everything up to and including the icpx token (not just a leading "icpx" prefix):
+# compile_commands.json can wrap the compiler behind ccache or `cmake -E env`, and a plain
+# leading-token strip leaves the wrapper/compiler in FLAGS, which then fails as bogus args
+# to the bare `icpx $FLAGS` invocation below. Take the last token that is or ends in "/icpx",
+# then keep everything after it.
+COMPILER_FLAGS=$(printf '%s\n' "$BASE_CMD" \
+    | awk '{
+          idx = 0
+          for (i = 1; i <= NF; i++) if ($i == "icpx" || $i ~ /\/icpx$/) idx = i
+          if (idx == 0) next
+          out = ""
+          for (i = idx + 1; i <= NF; i++) out = out $i " "
+          print out
+      }')
+[ -n "$COMPILER_FLAGS" ] || { echo "error: no icpx token found in compile command: $BASE_CMD" >&2; exit 1; }
+
 # Strip the object-output and compile-only flags; keep includes, defines, -O, -std.
-FLAGS=$(printf '%s\n' "$BASE_CMD" \
-    | sed -e 's/^[^ ]*icpx//' -e 's/ -o [^ ]*//g' -e 's/ -c [^ ]*//g' -e 's/ -MD//g' -e 's/ -MT [^ ]*//g' -e 's/ -MF [^ ]*//g')
+FLAGS=$(printf '%s\n' "$COMPILER_FLAGS" \
+    | sed -e 's/ -o [^ ]*//g' -e 's/ -c [^ ]*//g' -e 's/ -MD//g' -e 's/ -MT [^ ]*//g' -e 's/ -MF [^ ]*//g')
 
 # The quants-first kernels are instantiated implicitly from fattn.cpp, so no instance TU
 # carries them. Emit a minimal one; it is the smallest carrier of the two quants-first

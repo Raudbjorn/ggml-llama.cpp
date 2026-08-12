@@ -326,9 +326,10 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0_quants_first(
         const int ib = k_KQ / QI8_0;
         const int iqs = k_KQ % QI8_0;
         int v;
-        // Quants-first groups are 136-byte aligned and the payload offset is
-        // ib*QK8_0 + 4*iqs, so the dword is 4-byte aligned. Unlike the canonical
-        // 34-byte block_q8_0 rows, this does not need the 2-byte split copy.
+        // Quants-first groups have a 136-byte stride, and within a group the payload
+        // offset ib*QK8_0 + 4*iqs is always a multiple of 4, so the dword load is
+        // 4-byte aligned. Unlike the canonical 34-byte block_q8_0 rows, this does not
+        // need the 2-byte split copy.
         ggml_sycl_memcpy_1<sizeof(v), 4>(&v, quants + ib * QK8_0 + 4 * iqs);
         const sycl::float2 * Q_ds = (const sycl::float2 *) Q_ds_v;
         const float Q_d = Q_ds[k_KQ_0 / nthreads].x();
