@@ -176,6 +176,15 @@ class ProductCampaignTests(unittest.TestCase):
         self.assertIn("-p", argv)
         self.assertEqual(argv[argv.index("-p") + 1], "512")
 
+    def test_product_argv_requests_verbose_backend_env_report(self) -> None:
+        # Without -v the SYCL backend never prints "Running with Environment
+        # Variables", so _candidate_env_log_assertions can never bind a sample
+        # to its requested env (backend_logs_key stays False for every knob).
+        argv = HARNESS._product_bench_argv(
+            Path("/tmp/bin"), "model.gguf", ("q8_0", "q8_0"), 4096
+        )
+        self.assertIn("-v", argv)
+
     def test_tenancy_probe_accepts_only_empty_exit_one(self) -> None:
         cases = (
             (1, "", "", False),
