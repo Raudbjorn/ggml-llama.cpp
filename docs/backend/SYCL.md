@@ -797,7 +797,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | GGML_SYCL_ENABLE_FUSION | 0 or 1 (default) | Enable fused-kernel dispatch in graph compute (currently top-k MoE gating). |
 | GGML_SYCL_MAX_WG_PER_CU | Integer 1-1024 (16 default) | Set the flash-attention resident work-group cap per Xe-core/SM. This is not a cap per SYCL compute unit/EU. Invalid values are ignored with a warning. |
-| GGML_SYCL_FFN_FUSION | 0 (default) or 1 | Enable experimental fused dense Q4_K single-token SwiGLU. Disabled by default pending a campaign against the fixed kernel. |
+| GGML_SYCL_FFN_FUSION | 0 or 1 (default) | Enable fused dense Q4_K single-token SwiGLU. Promoted to default 2026-08-12 after a paired campaign against the fixed kernel; set to 0 to opt out. |
 | GGML_SYCL_FFN_FUSION_DEBUG | Unset (default) or set | Log tensor shape and layout details for the first fused FFN launch attempt. |
 | GGML_SYCL_FFN_FUSION_PROFILE | 0 (default) or 1 | Report fused FFN graph eligibility and rejection counters at process exit. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |

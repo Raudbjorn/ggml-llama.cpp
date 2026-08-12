@@ -439,7 +439,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_FA_Q8_GQA_TILE: %d\n",
             g_ggml_sycl_fa_q8_gqa_tile);
         GGML_LOG_INFO("  GGML_SYCL_FFN_FUSION: %d\n",
-            ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 0));
+            ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 1));
 
 #ifdef GGML_SYCL_GRAPH
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_GRAPH: %d\n", g_ggml_sycl_enable_graph);
@@ -5720,11 +5720,15 @@ static void ggml_sycl_profile_ffn_fusion(const ggml_cgraph * cgraph) {
     }
 }
 
-// Default OFF: the 2026-07-26 paired campaign used a binary identifying the
-// known-bad pre-fix commit b5ef0a84b, so it cannot promote the fixed kernel.
-// Set GGML_SYCL_FFN_FUSION=1 to enable it for a new validation campaign.
+// Default ON since the P6.2 re-campaign (2026-08-12) against the fixed kernel
+// (the 2026-07-26 campaign that shipped this default-off used a binary
+// identifying the known-bad pre-fix commit b5ef0a84b and could not promote
+// it). Paired product campaigns on Mistral-7B and Llama-3.1-8B, depths
+// 0-16384, cleared every tg128 cell at >=+5.68% median with a positive 95%
+// lower bound and no pp512 cell below -2%. Set GGML_SYCL_FFN_FUSION=0 to
+// opt out.
 static bool ggml_sycl_ffn_fusion_enabled() {
-    static const bool enabled = ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 0) != 0;
+    static const bool enabled = ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 1) != 0;
     return enabled;
 }
 
