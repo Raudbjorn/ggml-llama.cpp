@@ -803,6 +803,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
 | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
+| GGML_SYCL_Q8_KV_QUANTS_FIRST | 1 (default) or 0 | Store `q8_0` KV cache rows as 128 contiguous quant values followed by four fp16 scales, instead of four interleaved 34-byte `block_q8_0` records. Applies only to SYCL devices with `q8_0` K and V and 128-element heads; every other cache keeps canonical blocks either way. Set to 0 to fall back. |
 
 ### Intel Arc (A770 / DG2) flash-attention KV cache
 

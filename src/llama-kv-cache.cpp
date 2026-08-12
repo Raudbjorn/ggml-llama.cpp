@@ -335,9 +335,16 @@ llama_kv_cache::llama_kv_cache(
     // cache must decide from its own type_v/model shape/env.
     const char * const turbo_layer_adaptive_env = getenv("TURBO_LAYER_ADAPTIVE");
     const int adaptive_mode = llama_kv_cache_adaptive_mode(turbo_layer_adaptive_env, type_v, hparams.n_layer());
+    // The quants-first q8_0 KV row layout is the default; set
+    // GGML_SYCL_Q8_KV_QUANTS_FIRST=0 to fall back to canonical block rows.
+    // The per-layer gate below still restricts it to SYCL q8_0 128-element heads.
     const char * const quants_first_env = getenv("GGML_SYCL_Q8_KV_QUANTS_FIRST");
-    const bool quants_first_requested =
-        quants_first_env != nullptr && quants_first_env[0] != '\0' && quants_first_env[0] != '0';
+    const bool quants_first_opted_out = quants_first_env != nullptr && quants_first_env[0] == '0';
+    const bool quants_first_requested = !quants_first_opted_out;
+    // Only an explicit opt-in warrants a warning when the layer gate rejects it;
+    // the default-on path must stay silent for every non-qualifying cache.
+    const bool quants_first_explicit =
+        quants_first_env != nullptr && quants_first_env[0] != '\0' && !quants_first_opted_out;
     if (adaptive_mode > 0) {
         // The per-layer switch ignores the mode for non-turbo KV types or
         // shallow models; only log "enabled" when the mode will actually
@@ -522,7 +529,7 @@ llama_kv_cache::llama_kv_cache(
             if (il == 0) {
                 LLAMA_LOG_INFO("%s: q8_0 KV quants-first layout enabled for 128-element heads\n", __func__);
             }
-        } else if (quants_first_requested && il == 0) {
+        } else if (quants_first_explicit && il == 0) {
             LLAMA_LOG_WARN(
                 "%s: GGML_SYCL_Q8_KV_QUANTS_FIRST ignored (dev=%s type_k=%s type_v=%s head_k=%u head_v=%u v_trans=%d)\n",
                 __func__, dev_name, ggml_type_name(layer_type_k), ggml_type_name(layer_type_v),

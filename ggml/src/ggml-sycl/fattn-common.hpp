@@ -346,7 +346,11 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0_quants_first(
         const int ib = k_KQ / QI8_0;
         const int iqs = k_KQ % QI8_0;
         int v;
-        ggml_sycl_memcpy_1<sizeof(v), 2>(&v, quants + ib * QK8_0 + 4 * iqs);
+        // Quants-first groups have a 136-byte stride, and within a group the payload
+        // offset ib*QK8_0 + 4*iqs is always a multiple of 4, so the dword load is
+        // 4-byte aligned. Unlike the canonical 34-byte block_q8_0 rows, this does not
+        // need the 2-byte split copy.
+        ggml_sycl_memcpy_1<sizeof(v), 4>(&v, quants + ib * QK8_0 + 4 * iqs);
         const sycl::float2 * Q_ds = (const sycl::float2 *) Q_ds_v;
         const float Q_d = Q_ds[k_KQ_0 / nthreads].x();
         sum += vec_dot_q8_0_q8_1_impl<float, 1>(
@@ -665,7 +669,9 @@ static __dpct_inline__ void dequantize_V_q8_0(const void * __restrict__ vx, void
     const int     iqs = i0 % QK8_0;
 
     static_assert(ne % 2 == 0, "bad ne");
-    int8_t qs[ne];
+    // Same destination-alignment requirement as the quants-first path below: the
+    // 2-byte copy stores through short *, which int8_t[] does not guarantee.
+    alignas(4) int8_t qs[ne];
     ggml_sycl_memcpy_1<ne, 2>(qs, x[ib].qs + iqs);
 
 #ifdef GGML_SYCL_F16
@@ -699,8 +705,14 @@ static __dpct_inline__ void dequantize_V_q8_0_quants_first(
     const int64_t ib = i0 / QK8_0;
     const int iqs = i0 % QK8_0;
     static_assert(ne % 2 == 0, "bad ne");
-    int8_t qs[ne];
-    ggml_sycl_memcpy_1<ne, 2>(qs, quants + ib * QK8_0 + iqs);
+    // i0 advances in multiples of V_rows_per_thread (4 for quantized V), so iqs is a
+    // multiple of 4 and the quants-first payload is dword-aligned here. The explicit 4
+    // documents that and fails to compile if ne ever stops being a multiple of it.
+    static_assert(ne % 4 == 0, "quants-first V load assumes dword-aligned runs");
+    // ggml_sycl_memcpy_1 stores through the aligned type, so the destination needs
+    // the same alignment as the source; int8_t[] is only byte-aligned by default.
+    alignas(4) int8_t qs[ne];
+    ggml_sycl_memcpy_1<ne, 4>(qs, quants + ib * QK8_0 + iqs);
 
 #ifdef GGML_SYCL_F16
     if constexpr (std::is_same<T, sycl::half>::value) {
