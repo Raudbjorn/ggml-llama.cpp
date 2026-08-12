@@ -438,6 +438,8 @@ static void ggml_check_sycl() try {
             g_ggml_sycl_fa_force_vec_standard);
         GGML_LOG_INFO("  GGML_SYCL_FA_Q8_GQA_TILE: %d\n",
             g_ggml_sycl_fa_q8_gqa_tile);
+        GGML_LOG_INFO("  GGML_SYCL_FFN_FUSION: %d\n",
+            ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 0));
 
 #ifdef GGML_SYCL_GRAPH
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_GRAPH: %d\n", g_ggml_sycl_enable_graph);
