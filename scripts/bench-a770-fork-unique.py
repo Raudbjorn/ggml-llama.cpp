@@ -10,8 +10,10 @@ It writes JSONL records for each subprocess plus a compact Markdown summary.
 
 `--campaign product` adds a sole-tenancy product/depth harness used for the
 SYCL performance plan. One `llama-bench -r 1` invocation per sample with
-`-m MODEL -ngl 99 -fa on -ctk KV -ctv KV -n 128 -b 512 -ub 512 --no-warmup
--o json` (plus `-d DEPTH` only when DEPTH > 0). Six samples per cell,
+`-m MODEL -ngl NGL -fa on -ctk KV -ctv KV -n 128 -b 512 -ub 512 --no-warmup
+-o json` (plus `-d DEPTH` only when DEPTH > 0); `NGL` defaults to 99 and is
+overridable with `--ngl` for models too large to fully offload on the
+target device. Six samples per cell,
 paired percent samples (candidate/baseline - 1)*100 with 95% t-interval.
 The runner probes `fuser /dev/dri/renderD128` immediately before each
 leg; if any holder is reported, the leg is aborted with exit 70 and the
@@ -107,12 +109,23 @@ def _effective_env(env_extra: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def _redacted_env(env: dict[str, str]) -> dict[str, str]:
-    secret_markers = ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL", "COOKIE", "AUTH")
-    return {
-        key: "<redacted>" if any(marker in key.upper() for marker in secret_markers) else value
-        for key, value in sorted(env.items())
-    }
+def _provenance_env(env: dict[str, str], env_extra: dict[str, str]) -> dict[str, str]:
+    """Allowlisted view of an effective env for provenance recording.
+
+    The full process environment is never fit to commit: even after denylisting
+    known secret-name markers, it still exposes workstation/session metadata
+    (home paths, hostnames, session/socket/PID identifiers, cloud project
+    names, ...) that has nothing to do with reproducing a benchmark, and a
+    denylist only catches variable names it happens to recognize. Record only
+    (a) variables whose name matches a known benchmark-relevant prefix, and
+    (b) whatever the caller explicitly requested for this arm via
+    ``env_extra`` - the actual experimental input under investigator control,
+    regardless of prefix.
+    """
+    relevant_prefixes = ("GGML_", "TURBO_", "LLAMA_", "ONEAPI_", "UR_", "SYCL_")
+    allowed_keys = {key for key in env if key.startswith(relevant_prefixes)}
+    allowed_keys.update(env_extra)
+    return {key: env[key] for key in sorted(allowed_keys) if key in env}
 
 
 def _sha256_file(path: Path) -> str:
@@ -206,8 +219,8 @@ def collect_product_provenance(
                 "level-zero-loader",
             ]
         ),
-        "baseline_effective_env": _redacted_env(baseline_effective),
-        "candidate_effective_env": _redacted_env(candidate_effective),
+        "baseline_effective_env": _provenance_env(baseline_effective, baseline_env),
+        "candidate_effective_env": _provenance_env(candidate_effective, candidate_env or {}),
     }
 
 
@@ -493,12 +506,14 @@ def _parse_env_list(items: list[str] | None) -> dict[str, str]:
     return out
 
 
-def _product_bench_argv(bin_dir: Path, model: str, kv: tuple[str, str], depth: int) -> list[str]:
+def _product_bench_argv(
+    bin_dir: Path, model: str, kv: tuple[str, str], depth: int, ngl: int = 99
+) -> list[str]:
     """Canonical per-sample llama-bench command for the product campaign."""
     argv = [
         str(bin_dir / "llama-bench"),
         "-m", model,
-        "-ngl", "99",
+        "-ngl", str(ngl),
         "-fa", "on",
         "-ctk", kv[0],
         "-ctv", kv[1],
@@ -721,6 +736,8 @@ def _build_commit_diagnostics(
             commits = sample_commits_by_arm.setdefault(arm, set())
             for sample in samples:
                 for row in sample.get("selected_rows", {}).values():
+                    if row is None:
+                        continue
                     build_commit = row.get("build_commit")
                     if build_commit:
                         commits.add(str(build_commit))
@@ -843,6 +860,7 @@ def run_product_cell(
     samples_dir: Path,
     cell_idx: int,
     candidate_bin_dir: Path | None = None,
+    ngl: int = 99,
 ) -> dict[str, Any]:
     """Run one paired product cell and retain both pp512 and tg128."""
     if repetitions < 3:
@@ -864,7 +882,7 @@ def run_product_cell(
         order = list(arms) if rep % 2 == 0 else list(reversed(arms))
         for arm_name, arm_env, arm_bin_dir in order:
             check_sole_tenancy()
-            argv = _product_bench_argv(arm_bin_dir, model_path, kv, depth)
+            argv = _product_bench_argv(arm_bin_dir, model_path, kv, depth, ngl)
             label = (
                 f"[cell {cell_idx} d={depth} kv={kv[0]}/{kv[1]} rep={rep}] "
                 f"arm={arm_name}"
@@ -1084,6 +1102,7 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
                     timeout_s=timeout_s,
                     samples_dir=samples_dir,
                     cell_idx=cell_idx,
+                    ngl=getattr(ns, "ngl", 99),
                 )
                 _annotate_effective_kv_bandwidth(cell, model_shape)
                 cells.append(cell)
@@ -1222,6 +1241,12 @@ def main() -> int:
                     help="[product] literal label for the candidate arm.")
     ap.add_argument("--repetitions", type=int, default=DEFAULT_PRODUCT_REPETITIONS,
                     help="[product] samples per arm per cell (default 6; sample 0 is discarded).")
+    ap.add_argument("--ngl", type=int, default=99,
+                    help="[product] -ngl value passed to llama-bench (default 99, full "
+                         "offload). Lower this for a model too large to fully offload on "
+                         "the target device, e.g. Qwen3-Coder-30B (~18.6 GB) on a 16 GB "
+                         "A770, which fails with UR_RESULT_ERROR_OUT_OF_HOST_MEMORY at "
+                         "-ngl 99.")
     ns = ap.parse_args()
 
     if ns.campaign == "product":
