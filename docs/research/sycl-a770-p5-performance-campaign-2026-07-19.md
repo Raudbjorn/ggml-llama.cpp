@@ -643,20 +643,27 @@ dead-off-3 27.83 t/s with six observed trips.
 
 > **Correction (2026-08-12).** The f16 exactness claim in the paragraph above
 > ("the fixed f16 suite was target-exact and exceeded 1.5x in every class")
-> was retracted on 2026-07-26 by `scripts/perf/FINDINGS.md` ("the f16
+> was retracted on 2026-07-26 by
+> [`scripts/perf/FINDINGS.md`](../../scripts/perf/FINDINGS.md) ("the f16
 > exactness claim does not reproduce"). On re-run with the identical model
 > file, `REPEATS=3`, `ONLY=f16`, `free_prose` produced three distinct token
-> hashes in three deterministic runs, at both `GGML_SYCL_MAX_WG_PER_CU=16`
-> and `2` (exonerating the occupancy change; behaviour pre-existing). The
-> original 11.46x `free_prose` figure is implausible against its measured
-> draft acceptance of 0.615-0.680 (implying roughly 1.5-2.5x); a warm prompt
-> cache is the suspected cause. Exactness tracks prompt class, not KV cache
-> type: both f16 and q8_0 are exact on copy-heavy classes and non-exact on
-> `free_prose`. The proposal to enable speculation by default when KV is f16
-> is withdrawn; the surviving recommendation is unchanged from the q8_0 half
-> of this section (opt-in `ngram-mod,ngram-map-k4v` for controlled copy-heavy
-> workloads only, target-only as the general default). The hostile hard-off
-> gate result in the paragraph above is not affected by this correction.
+> hashes in three deterministic runs. That non-exact result reproduced
+> identically across two separate `REPEATS=3` sweeps, one at
+> `GGML_SYCL_MAX_WG_PER_CU=16` (the promoted flash-attention occupancy
+> default) and one at `2` (the previous effective value), exonerating the
+> occupancy change as a cause and establishing the behaviour as pre-existing.
+> The original 11.46x `free_prose` figure is implausible against its measured
+> draft acceptance of 0.615-0.680, which implies roughly 1.5-2.5x for ngram
+> drafting rather than 11x; a warm prompt cache is the suspected cause.
+> `FINDINGS.md`'s stated consequence, scoped to these tested `code_edit` /
+> `multi_turn` / `free_prose` prompts and `f16` / `q8_0` KV at both occupancy
+> settings: exactness tracks prompt class, not KV cache type - both types are
+> exact on the copy-heavy classes and non-exact on `free_prose`. The proposal
+> to enable speculation by default when KV is f16 is withdrawn; the surviving
+> recommendation is unchanged from the q8_0 half of this section (opt-in
+> `ngram-mod,ngram-map-k4v` for controlled copy-heavy workloads only,
+> target-only as the general default). The hostile hard-off gate result in
+> the paragraph above is not affected by this correction.
 
 Durable post-P5 evidence is under
 `scripts/perf/results/p5-post-campaign/`. The final build provenance, complete
