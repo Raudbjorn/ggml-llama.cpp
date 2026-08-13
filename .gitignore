@@ -15,6 +15,7 @@
 *.gguf.json
 *.lastModified
 *.log
+!docs/research/**/*.log
 *.metallib
 *.o
 *.so
