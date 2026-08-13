@@ -718,6 +718,35 @@ class ProductCampaignTests(unittest.TestCase):
             ],
         )
 
+    def test_provenance_env_allowlists_relevant_prefixes_and_explicit_arm_env(self) -> None:
+        # Committed provenance.json must never carry ambient workstation/session
+        # state (home paths, hostnames, session/socket/PID identifiers, cloud
+        # project names, ...); only variables the harness itself cares about,
+        # plus whatever the caller explicitly requested for this arm.
+        env = {
+            "GGML_SYCL_FA_XMX": "1",
+            "TURBO_AUTO_ASYMMETRIC": "0",
+            "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+            "UR_L0_BATCH_SIZE": "64",
+            "HOME": "/home/svnbjrn",
+            "CLAUDE_CODE_SESSION_ID": "c05e83fd-5f8b-4569-b473-f448b4b572d0",
+            "GOOGLE_CLOUD_PROJECT": "svnbjrn-ai",
+            "SOME_EXPLICIT_ARM_KNOB": "42",
+        }
+        result = HARNESS._provenance_env(env, {"SOME_EXPLICIT_ARM_KNOB": "42"})
+        self.assertEqual(
+            result,
+            {
+                "GGML_SYCL_FA_XMX": "1",
+                "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+                "SOME_EXPLICIT_ARM_KNOB": "42",
+                "TURBO_AUTO_ASYMMETRIC": "0",
+                "UR_L0_BATCH_SIZE": "64",
+            },
+        )
+        for leaked in ("HOME", "CLAUDE_CODE_SESSION_ID", "GOOGLE_CLOUD_PROJECT"):
+            self.assertNotIn(leaked, result)
+
     def test_q8_effective_requested_kv_bandwidth_formula(self) -> None:
         layers, heads, depth, head_dim = 32, 32, 16384, 128
         expected = 2 * layers * heads * depth * head_dim * (34 / 32)

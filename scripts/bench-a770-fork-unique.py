@@ -109,12 +109,23 @@ def _effective_env(env_extra: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def _redacted_env(env: dict[str, str]) -> dict[str, str]:
-    secret_markers = ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL", "COOKIE", "AUTH")
-    return {
-        key: "<redacted>" if any(marker in key.upper() for marker in secret_markers) else value
-        for key, value in sorted(env.items())
-    }
+def _provenance_env(env: dict[str, str], env_extra: dict[str, str]) -> dict[str, str]:
+    """Allowlisted view of an effective env for provenance recording.
+
+    The full process environment is never fit to commit: even after denylisting
+    known secret-name markers, it still exposes workstation/session metadata
+    (home paths, hostnames, session/socket/PID identifiers, cloud project
+    names, ...) that has nothing to do with reproducing a benchmark, and a
+    denylist only catches variable names it happens to recognize. Record only
+    (a) variables whose name matches a known benchmark-relevant prefix, and
+    (b) whatever the caller explicitly requested for this arm via
+    ``env_extra`` - the actual experimental input under investigator control,
+    regardless of prefix.
+    """
+    relevant_prefixes = ("GGML_", "TURBO_", "LLAMA_", "ONEAPI_", "UR_", "SYCL_")
+    allowed_keys = {key for key in env if key.startswith(relevant_prefixes)}
+    allowed_keys.update(env_extra)
+    return {key: env[key] for key in sorted(allowed_keys) if key in env}
 
 
 def _sha256_file(path: Path) -> str:
@@ -208,8 +219,8 @@ def collect_product_provenance(
                 "level-zero-loader",
             ]
         ),
-        "baseline_effective_env": _redacted_env(baseline_effective),
-        "candidate_effective_env": _redacted_env(candidate_effective),
+        "baseline_effective_env": _provenance_env(baseline_effective, baseline_env),
+        "candidate_effective_env": _provenance_env(candidate_effective, candidate_env or {}),
     }
 
 

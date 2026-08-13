@@ -1,6 +1,6 @@
 # Product campaign: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
 
-- bin-dir: /home/svnbjrn/build-p67-ef1c35835/bin
+- bin-dir: /home/svnbjrn/build-p63-80d52e708/bin
 - baseline label: stock
 - candidate label: candidate
 - baseline env: {}

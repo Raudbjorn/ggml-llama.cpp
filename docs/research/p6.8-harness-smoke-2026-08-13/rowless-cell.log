@@ -9,5 +9,5 @@ product campaign is not gateable; 7 diagnostic(s), invalid cells=[1]
   cell 1 d=0 kv=['q8_0', 'q8_0']: pp512 baseline has 0 retained samples (expected 2)
   cell 1 d=0 kv=['q8_0', 'q8_0']: tg128 baseline has 0 retained samples (expected 2)
   baseline samples do not report build_commit
-wrote /tmp/p68-smoke/rowless-cell/product.json
-wrote /tmp/p68-smoke/rowless-cell/product.md
+wrote /tmp/p68-smoke-v2/rowless-cell/product.json
+wrote /tmp/p68-smoke-v2/rowless-cell/product.md
