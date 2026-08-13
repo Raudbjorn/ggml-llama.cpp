@@ -124,3 +124,5 @@
 /tools/ui/src/lib/vendors/nerdamer-prime/LICENSE filter=lfs diff=lfs merge=lfs -text
 *.patch filter=lfs diff=lfs merge=lfs -text
 /f32 filter=lfs diff=lfs merge=lfs -text
+/docs/research/p4.5a-turbo4-capacity-reopen-2026-08-13/EXIT filter=lfs diff=lfs merge=lfs -text
+*.fuser filter=lfs diff=lfs merge=lfs -text
