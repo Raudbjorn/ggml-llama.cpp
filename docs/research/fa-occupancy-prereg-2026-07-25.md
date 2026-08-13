@@ -266,11 +266,29 @@ q8_0, the opposite of the framing carried through the earlier research.
 default; `GGML_SYCL_MAX_WG_PER_CU` stays as a documented diagnostic override, following the
 P5 pattern for `GGML_SYCL_MMV_Y` and `GGML_SYCL_MMVQ_NUM_SUBGROUPS`.
 
-### Coverage gap
+### Coverage gap - closed 2026-08-13
 
-Three llama31 cells (q8_0 d4096, and both KV types at d8192 and d16384) are outstanding.
-Every completed llama31 cell tracks its mistral counterpart within about 2 percentage
-points, so these are confirmatory rather than load-bearing.
+The five outstanding llama31-8b-heretic cells (q8_0 d4096, and both KV types at d8192 and
+d16384) were filled at merged-master source `80d52e708`, same env A/B
+(`GGML_SYCL_MAX_WG_PER_CU` 2 vs 16), six launches/arm, sample-zero discard, five retained
+pairs, empty `/dev/dri/renderD128` before every leg, zero new i915/xe fault:
+
+| depth | KV | pp512 delta | tg128 delta |
+|---:|---|---:|---:|
+| 4096 | q8_0/q8_0 | +0.13 % | **+21.13 %** |
+| 8192 | f16/f16 | -0.02 % | **+77.43 %** |
+| 8192 | q8_0/q8_0 | +0.20 % | **+40.11 %** |
+| 16384 | f16/f16 | +0.13 % | **+135.78 %** |
+| 16384 | q8_0/q8_0 | +0.01 % | **+72.92 %** |
+
+All five clear the promotion gates decisively (prefill neutral, positive paired lower
+bound, correctness `0 GATE-FAIL`); none contradicts the promoted fix. The prior "tracks its
+mistral counterpart within about 2 percentage points" estimate, based only on the three
+completed cells, does not hold precisely at the deepest new cells - d16384 f16 is +135.78 %
+here against mistral's +145.96 % (about 10 points apart), d8192 f16 is +77.43 % against
++84.84 % (about 7 points apart) - while the two q8_0 cells stay within ~4 points. Direction
+and order of magnitude match at every cell; only the tight numeric estimate was optimistic.
+The llama31 matrix is now complete across d0/d4096/d8192/d16384 x f16/q8_0.
 
 ### Note on tenancy
 
