@@ -20,7 +20,7 @@ from one, not from the occupancy cap").
 
 ## Suggested issue title
 
-`SYCL: flash-attention occupancy governor derives max_wg_per_cu by dividing max work-group size by compute-unit count, yielding 2 on Xe-HPG (Arc A-series); raising it to 16 measured up to +146% decode throughput`
+`SYCL: flash-attention occupancy governor derives max_wg_per_cu by dividing max work-group size by compute-unit count, yielding 2 on Xe-HPG (Arc A-series); raising it to 16 measured up to +146% decode throughput in a downstream fork's paired A/B`
 
 Scope note on the numbers: the governor's value of `2` on this device is established by
 arithmetic from `clinfo`. `16` is the best of `{2, 4, 8, 16, 32}` as measured on an A770,
@@ -85,8 +85,11 @@ work-groups of 128 work-items, i.e. 8,192 of the device's ~65,536 resident work-
 capacity, roughly **12.5% occupancy**. Instrumented on the fork, three independent decode
 configurations land on that same 64: VEC q8_0 (`parallel_blocks` 2 x `ntiles_total` 32),
 VEC f16 forced (2 x 32), and TILE f16 (8 x 8, reaching it through `ncols2 = 4` GQA packing
-plus an 8-way KV split). The ceiling does not rise with context depth, so the wasted
-fraction of the device grows as the per-work-group serial KV walk lengthens.
+plus an 8-way KV split). Those launch records were captured without sole tenancy on the
+render node, which does not affect them: launch geometry is a pure function of device
+properties and tensor shapes, so only the throughput figures measured alongside were
+discarded. The ceiling does not rise with context depth, so the wasted fraction of the
+device grows as the per-work-group serial KV walk lengthens.
 
 ### Impact (measured on a downstream fork, same code path)
 
@@ -162,6 +165,11 @@ separately run for this draft.
    Compare `tg128` for the decode effect and `pp512` for the prefill invariance claim. The
    fork's own runs used an added `GGML_SYCL_MAX_WG_PER_CU` env override to keep both arms on
    a single binary; that knob is fork-only and does not exist upstream.
+5. To see the prefill regression that makes the floor bug an *independent* problem, a third
+   arm is required: line 160 changed but **without** the floor fix. The two builds in step 4
+   are "before both fixes" and "after both fixes", so they show prefill as neutral and never
+   expose the -15.08% `pp512` described under "Prefill note". Only the formula-only build
+   reproduces it.
 
 ### Suggested fix (illustrative, not a ready-to-merge patch)
 
@@ -218,8 +226,13 @@ the formula - makes prefill invariant to the governor (1 split, 4,096 blocks at 
 
 ## What to check before filing
 
-- [ ] Re-fetch `ggml/src/ggml-sycl/ggml-sycl.cpp` and `fattn-common.hpp` at the upstream
-      commit current at filing time; line numbers above will have drifted.
+- [ ] Re-fetch `ggml/src/ggml-sycl/ggml-sycl.cpp`, `fattn-common.hpp`, `fattn-vec.hpp` and
+      `fattn-tile.hpp` at the upstream commit current at filing time; line numbers above
+      will have drifted, and the `stream_k = false` claim needs re-checking at every
+      `launch_fattn` call site rather than assumed.
+- [ ] If the title is used standalone, keep the "in a downstream fork's paired A/B"
+      attribution on the +146% figure; the caveat that qualifies it lives in a body section
+      a tracker title does not carry.
 - [ ] Decide whether to include the fork's throughput table (attributed as
       fork-measured, not upstream-measured) or ask upstream maintainers to reproduce
       independently.
