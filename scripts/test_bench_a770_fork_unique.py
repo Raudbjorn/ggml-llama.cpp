@@ -185,6 +185,19 @@ class ProductCampaignTests(unittest.TestCase):
         )
         self.assertIn("-v", argv)
 
+    def test_product_argv_ngl_defaults_to_99_and_is_overridable(self) -> None:
+        # Qwen3-Coder-30B (~18.6 GB) cannot fully offload on a 16 GB A770 and fails
+        # with UR_RESULT_ERROR_OUT_OF_HOST_MEMORY at the old hardcoded -ngl 99.
+        default_argv = HARNESS._product_bench_argv(
+            Path("/tmp/bin"), "model.gguf", ("q8_0", "q8_0"), 0
+        )
+        self.assertEqual(default_argv[default_argv.index("-ngl") + 1], "99")
+
+        partial_argv = HARNESS._product_bench_argv(
+            Path("/tmp/bin"), "model.gguf", ("q8_0", "q8_0"), 0, ngl=40
+        )
+        self.assertEqual(partial_argv[partial_argv.index("-ngl") + 1], "40")
+
     def test_tenancy_probe_accepts_only_empty_exit_one(self) -> None:
         cases = (
             (1, "", "", False),
@@ -609,6 +622,28 @@ class ProductCampaignTests(unittest.TestCase):
                 "commit 02f848c83a8aee4bfe0ce956b64cc4b9058e2bf2"
             ],
         )
+
+    def test_rowless_sample_does_not_crash_build_commit_diagnostics(self) -> None:
+        # A sample whose selected pp512/tg128 rows are both None (process crashed or
+        # produced no matching row, e.g. OOM before any bench line printed) must not
+        # raise AttributeError in the build-commit consistency check; it should simply
+        # contribute no commit evidence, which the existing "no build_commit" path
+        # already reports as a diagnostic.
+        cells = [
+            {
+                "samples": {
+                    "baseline": [
+                        {"selected_rows": {"pp512": None, "tg128": None}},
+                    ],
+                }
+            }
+        ]
+        provenance = {"repository_commit": {"returncode": 0, "stdout": "", "stderr": ""}}
+
+        diagnostics = HARNESS._build_commit_diagnostics(
+            cells, provenance, require_repository_match=False
+        )
+        self.assertIn("baseline samples do not report build_commit", diagnostics)
 
     def test_separate_binary_commits_match_their_own_arm_identity(self) -> None:
         cells = [
