@@ -26,6 +26,14 @@ struct llama_context;
 // must select from its own inputs, never inherit the first construction's.
 int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_t n_layer);
 
+// Decides whether to auto-upgrade turbo K to q8_0 to prevent quality
+// degradation, given the two independent triggers (GQA ratio, Qwen-family
+// architecture), the opt-out, and the symmetric-KV precondition. See the
+// call site in the constructor for the measurements backing each trigger,
+// and llm_arch_is_qwen() (llama-arch.h) for the family test.
+bool llama_kv_cache_auto_asymmetric_turbo_k(
+    bool disabled, uint32_t gqa_ratio, bool is_qwen_family, ggml_type type_k, ggml_type type_v);
+
 // Converts complete 4-block q8_0 groups between canonical block_q8_0 bytes
 // and the fork-local quants-first KV layout used only in SYCL device memory.
 void llama_kv_cache_q8_repack_groups(uint8_t * data, size_t size, bool to_quants_first);

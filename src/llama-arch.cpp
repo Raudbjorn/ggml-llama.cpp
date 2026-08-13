@@ -954,16 +954,12 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     }
 }
 
-// Fork addition (P6.6a): family test for the auto-asymmetric turbo-K
-// downgrade in llama-kv-cache.cpp. KVLinC (arXiv:2510.05373) attributes
-// catastrophic rotated-quant K blow-ups on Qwen models to per-channel
-// structure planted by Qwen2.x's Q/K projection biases and Qwen3's
-// post-projection QK-norm, not to GQA ratio - confirmed on this fork by a
-// Qwen3-1.7B (GQA 2:1, below the ratio threshold) turbo3-K PPL of 659.66
-// against a 16.64 baseline. Every Qwen-descended arch is included as a
-// conservative match: the downgrade only trades KV capacity for safety, so
-// over-triggering on an untested sibling costs memory, not correctness,
-// while under-triggering ships a silently broken K cache.
+// Fork addition: identifies the Qwen model family, used by the KV-cache
+// auto-asymmetric turbo-K policy to trigger regardless of GQA ratio -
+// Qwen's Q/K projection biases and post-projection QK-norm defeat a
+// rotated-quant K cache independent of ratio. Every Qwen-descended arch is
+// included deliberately: over-matching an untested sibling only costs KV
+// capacity, while missing one ships a silently broken K cache.
 bool llm_arch_is_qwen(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_QWEN:
