@@ -252,6 +252,24 @@ occupancy fix lifts f16 TILE by 84.84 % and closes the gap to near parity, 19.89
 19.31. The deep-context problem was therefore worse for the f16 default route than for
 q8_0, the opposite of the framing carried through the earlier research.
 
+### Prediction 3 CONFIRMED - the split-KV q8_0 rewrite loses its justification
+
+Phase 1 prediction 3 (above) staked out a falsifier: *"If the [q8_0-vs-f16] gap does not
+narrow, the dequant-ALU-wall hypothesis is correct and a genuine split-KV q8_0 kernel
+rewrite becomes justified rather than premature."* The framing correction just above shows
+the opposite of "does not narrow" - the gap **closed to near parity** (19.89 f16 against
+19.31 q8_0 at d8192, from a starting point where q8_0 already led at wg=2 baseline).
+Prediction 3 is therefore **confirmed**: the corrected occupancy governor removes the
+q8_0-vs-f16 deep-context gap as a live problem, so the dequant-ALU-wall hypothesis that
+would have justified a dedicated split-KV q8_0 kernel rewrite does not hold, and that
+rewrite is **not justified** by this evidence. No such rewrite is scheduled or in progress.
+
+This closure is conditional on the same split-K budget constraint recorded under Phase 2b
+below: split-K is not a free lever, there is a measured optimum near `wg=16` on this
+device, and any future change that consumes split capacity - including a hypothetical
+split-KV rewrite revisited under different evidence - has to pay for it out of that same
+budget rather than assuming headroom exists.
+
 ### Promotion gates
 
 | Gate | Result |
