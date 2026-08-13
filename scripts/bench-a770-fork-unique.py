@@ -509,6 +509,10 @@ def _product_bench_argv(bin_dir: Path, model: str, kv: tuple[str, str], depth: i
         "--no-warmup",
         "-r", "1",
         "-o", "json",
+        # -v surfaces the SYCL backend's "Running with Environment Variables"
+        # report on stderr; without it the env-log assertions can never bind a
+        # sample to the env the arm requested (backend_logs_key stays False).
+        "-v",
     ]
     if depth > 0:
         argv += ["-d", str(depth)]

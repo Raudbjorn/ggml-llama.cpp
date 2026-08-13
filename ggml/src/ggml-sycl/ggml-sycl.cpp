@@ -345,6 +345,11 @@ static const char* dev2dev_int2str(int dev2dev) {
     }
 }
 
+// Defined below; forward-declared so the startup env report can read the
+// same cached flag ggml_sycl_try_fuse_ffn_swiglu() gates on, instead of a
+// second independent ggml_sycl_get_env() call that could drift out of sync.
+static bool ggml_sycl_ffn_fusion_enabled();
+
 static void ggml_check_sycl() try {
     static bool initialized = false;
 
@@ -438,6 +443,7 @@ static void ggml_check_sycl() try {
             g_ggml_sycl_fa_force_vec_standard);
         GGML_LOG_INFO("  GGML_SYCL_FA_Q8_GQA_TILE: %d\n",
             g_ggml_sycl_fa_q8_gqa_tile);
+        GGML_LOG_INFO("  GGML_SYCL_FFN_FUSION: %d\n", ggml_sycl_ffn_fusion_enabled());
 
 #ifdef GGML_SYCL_GRAPH
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_GRAPH: %d\n", g_ggml_sycl_enable_graph);
@@ -5718,11 +5724,13 @@ static void ggml_sycl_profile_ffn_fusion(const ggml_cgraph * cgraph) {
     }
 }
 
-// Default OFF: the 2026-07-26 paired campaign used a binary identifying the
-// known-bad pre-fix commit b5ef0a84b, so it cannot promote the fixed kernel.
-// Set GGML_SYCL_FFN_FUSION=1 to enable it for a new validation campaign.
+// Fuses (ffn_gate MUL_MAT, ffn_up MUL_MAT, GLU) into one kernel for
+// single-token dense Q4_K decode. Default ON as of the P6.2 re-campaign
+// against this fixed kernel (PR #38 carries the promotion evidence; the
+// docs/research/ffn-fusion-campaign-2026-07-26/ directory predates the fix
+// and is historical only). Set GGML_SYCL_FFN_FUSION=0 to opt out.
 static bool ggml_sycl_ffn_fusion_enabled() {
-    static const bool enabled = ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 0) != 0;
+    static const bool enabled = ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 1) != 0;
     return enabled;
 }
 
