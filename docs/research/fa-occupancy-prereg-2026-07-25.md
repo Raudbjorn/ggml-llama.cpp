@@ -123,7 +123,7 @@ stands. The throughput figures observed alongside it (q8_0 VEC 6.88 t/s, f16 for
 13.99 t/s, f16 TILE 14.83 t/s at d16384) are **not** promotion evidence and must not be
 compared against the campaign baseline below. Phase 1 requires sole tenancy.
 
-## Phase 1 result - prediction 2 confirmed, prediction 3 initially FAILED
+## Phase 1 result - prediction 2 confirmed, prediction 4 initially FAILED
 
 ### First attempt (`d87f024e4`) was rejected by the gate
 
@@ -139,8 +139,15 @@ aborting on a tenancy violation. It rejected the change:
 | d4096 f16 | pp512 | 294.80 | 302.84 | +2.73 % |
 | d4096 f16 | tg128 | 20.37 | 21.17 | +3.93 % |
 
-Prediction 3 was stated only for tg128, where it held (-0.39 %, -0.05 %). Prefill was
+Prediction 4 was stated only for tg128, where it held (-0.39 %, -0.05 %). Prefill was
 never predicted, and it blew the -2 % protected-cell guard.
+
+(Both this sentence and the heading above originally said "prediction 3". That was a
+mis-numbering: `-0.39 %` and `-0.05 %` are the depth-0 `tg128` deltas and the "-2 %
+protected-cell guard" is prediction 4's wording, so prediction 4 is what was being
+evaluated here. Prediction 3, the q8_0-vs-f16 gap claim, is not evaluable from these three
+cells at all - it needs a q8_0-against-f16 comparison at depth, not a wg=2-against-wg=16
+delta - and is settled further down under "Prediction 3's falsifier did not trigger".)
 
 Two lessons, both against the earlier analysis:
 
@@ -251,6 +258,40 @@ the wg=2 baseline q8_0 VEC (13.94 at d8192) actually *beats* f16 TILE (10.76). T
 occupancy fix lifts f16 TILE by 84.84 % and closes the gap to near parity, 19.89 against
 19.31. The deep-context problem was therefore worse for the f16 default route than for
 q8_0, the opposite of the framing carried through the earlier research.
+
+### Prediction 3's falsifier did not trigger - the split-KV q8_0 rewrite loses its justification
+
+Prediction 3 in [Phase 1 predictions](#phase-1-predictions-recorded-now-measured-later) is
+the only one of the four that gates a follow-up work item, so it needs an explicit verdict.
+It was stated as *"The q8_0-vs-f16 gap narrows"*, with the falsifier attached: *"If the gap
+does not narrow, the dequant-ALU-wall hypothesis is correct and a genuine split-KV q8_0
+kernel rewrite becomes justified rather than premature."*
+
+Reading it as a bare confirm/falsify is what makes it confusing, so state the two halves
+separately:
+
+- **The falsifier did not trigger, and that is the load-bearing half.** The rewrite was
+  contingent on the gap *failing* to narrow. Under default routing the deep-context gap at
+  d8192 now sits at near parity (f16 TILE 19.89 against q8_0 VEC 19.31), so the condition
+  that would have justified the rewrite is not met. The dequant-ALU-wall hypothesis does
+  not hold, the rewrite is **not justified** by this evidence, and none is scheduled or in
+  progress.
+- **The prediction as literally worded is not confirmed, because its premise was wrong.**
+  It assumed q8_0 lagged f16 and would catch up. The framing correction directly above
+  shows the opposite: the "30.82 % behind" figure came from a forced-VEC comparison, and
+  under default routing q8_0 VEC (13.94 at d8192) already *led* f16 TILE (10.76) at the
+  wg=2 baseline. What actually happened is that the fix lifted f16 by 84.84 % and closed
+  the gap **from the other side**. Calling that a confirmation of "q8_0 catches up" would
+  record the wrong mechanism.
+
+Both halves point the same way for the work item; only the second one keeps the reason
+straight for a future reader.
+
+This closure is conditional on the same split-K budget constraint recorded under Phase 2b
+below: split-K is not a free lever, there is a measured optimum near `wg=16` on this
+device, and any future change that consumes split capacity - including a hypothetical
+split-KV rewrite revisited under different evidence - has to pay for it out of that same
+budget rather than assuming headroom exists.
 
 ### Promotion gates
 
