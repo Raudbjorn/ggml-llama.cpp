@@ -6,11 +6,14 @@ resolve a stated question before any source change, per that doc's own local-gat
 plans where one existed. No source change is made by this doc; findings that warrant
 follow-up work are queued as new RALPH tasks, not implemented here.
 
-Environment: Intel Arc A770/DG2, i915, Level Zero. Source `ef1c35835` (merged master,
-2026-08-13, includes PR #33/#35/#37/#38/#39/#40/#41). Build: Release JIT,
-`/home/svnbjrn/build-p63-80d52e708`, `GGML_SYCL_DEVICE_ARCH` empty. Sole tenancy of
-`/dev/dri/renderD128` verified before every timed run; zero new i915/xe fault lines in any
-run below.
+Environment: Intel Arc A770/DG2, i915, Level Zero. Source `80d52e708` (merged master,
+includes PR #33/#35/#36/#37/#38; the actual build/`build_commit` of record for every
+sample below - the build directory predates the later, docs-only PR #39/#40/#41, which
+touch nothing outside `docs/research/` and are a no-op diff against this commit,
+confirmed by `git diff 80d52e708 ef1c35835 -- ':!docs/research'` being empty). Build:
+Release JIT, `/home/svnbjrn/build-p63-80d52e708`, `GGML_SYCL_DEVICE_ARCH` empty. Sole
+tenancy of `/dev/dri/renderD128` verified before every timed run; zero new i915/xe fault
+lines in any run below.
 
 ## (a) Submission-mode local gate probe (section C0)
 
@@ -125,7 +128,8 @@ resolution of the original question.
 safe from unsafe configurations, or does model family (not GQA ratio) discriminate, meaning
 the threshold would silently ship a broken K cache for lower-GQA Qwen3 models?
 
-**Predicate confirmed unchanged** at `src/llama-kv-cache.cpp:240`
+**Predicate confirmed unchanged** at
+[`src/llama-kv-cache.cpp:240`](https://github.com/Raudbjorn/ggml-llama.cpp/blob/80d52e708cacbb0e89c269f6237ca4bb378c4cf6/src/llama-kv-cache.cpp#L240)
 (`!disabled && gqa_ratio >= 6 && type_k == type_v`).
 
 **Method (exactly the doc's prescribed local gate probe).** Fetched
@@ -178,16 +182,21 @@ later?
 
 **Result: CONFIRMED, mechanism partially refactored.**
 
-- Routing logic unchanged in substance (line numbers shifted from the doc's 2026-07-25
-  citation): `gqa_opt_applies` gate at `fattn.cpp:511-521`; quantized-KV branch
-  `if (Q->ne[1] <= 2) return BEST_FATTN_KERNEL_VEC;` at `fattn.cpp:661`, else falls to
-  TILE. This still hard-flips at the batch=2 boundary for quantized KV specifically, while
-  f16 KV's route depends on `gqa_opt_applies` instead (not batch size), so the two KV types
-  can and do take different routes across the same batch-size transition.
+- Routing logic unchanged in substance; only the line numbers shifted from the doc's
+  2026-07-25 citation:
+  - `gqa_opt_applies` gate at
+    [`fattn.cpp:511-521`](https://github.com/Raudbjorn/ggml-llama.cpp/blob/80d52e708cacbb0e89c269f6237ca4bb378c4cf6/ggml/src/ggml-sycl/fattn.cpp#L511-L521).
+  - Quantized-KV branch at
+    [`fattn.cpp:661`](https://github.com/Raudbjorn/ggml-llama.cpp/blob/80d52e708cacbb0e89c269f6237ca4bb378c4cf6/ggml/src/ggml-sycl/fattn.cpp#L661):
+    `if (Q->ne[1] <= 2) return BEST_FATTN_KERNEL_VEC;`, else falls through to TILE.
+  - That branch still hard-flips at the batch=2 boundary for quantized KV specifically,
+    while f16 KV's route depends on `gqa_opt_applies` instead of batch size - so the two
+    KV types can and do take different routes across the same batch-size transition.
 - **The `need_f16_K`/`need_f16_V` bool parameters the doc cited by name and line number no
   longer exist** at those call sites. TILE has been refactored to select its dequant
   behavior via a **compile-time template parameter** instead: every TILE instantiation in
-  `fattn-tile.cpp:23-60` (`ggml_sycl_flash_attn_ext_tile_case<D, D, GGML_TYPE_F16>`) is
+  [`fattn-tile.cpp:23-60`](https://github.com/Raudbjorn/ggml-llama.cpp/blob/80d52e708cacbb0e89c269f6237ca4bb378c4cf6/ggml/src/ggml-sycl/fattn-tile.cpp#L23-L60)
+  (`ggml_sycl_flash_attn_ext_tile_case<D, D, GGML_TYPE_F16>`) is
   baked to `type_K = GGML_TYPE_F16`. Functionally this is the same claim under a different
   mechanism: **TILE always computes on f16-typed K**, so a quantized cache must be
   dequantized to f16 before/during a TILE launch regardless of how that requirement is
@@ -210,6 +219,7 @@ the scoped follow-up if anyone wants to remove the discontinuity; not undertaken
 
 New correctness finding not previously tracked: `GGML_SYCL_ENABLE_GRAPH=1` crashes on
 q8_0/q8_0 quants-first KV at deep context during `FLASH_ATTN_EXT`
-(`ggml-sycl.cpp:5335`, "wait cannot be called for a queue which is recording to a command
+([`ggml-sycl.cpp:5335`](https://github.com/Raudbjorn/ggml-llama.cpp/blob/80d52e708cacbb0e89c269f6237ca4bb378c4cf6/ggml/src/ggml-sycl/ggml-sycl.cpp#L5335),
+"wait cannot be called for a queue which is recording to a command
 graph"). Graphs are default-OFF, so this does not affect default operation, but it blocks
 any future re-enablement work and blocked half of probe (b) here.
