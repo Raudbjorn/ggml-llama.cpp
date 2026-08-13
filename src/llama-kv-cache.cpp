@@ -210,12 +210,25 @@ llama_kv_cache::llama_kv_cache(
     }
     GGML_ASSERT(kv_size % n_pad == 0);
 
-    // Auto-asymmetric: when symmetric turbo K+V is requested and the model has
-    // high GQA ratio (few KV heads serving many Q heads), upgrade K to q8_0.
-    // Turbo K quantization error gets amplified by the GQA broadcast factor.
-    // Qwen2.5: 4 KV heads / 28 Q heads = 7:1 -> turbo3 K PPL catastrophic (2887 vs 7.4 baseline)
-    // Mistral:  8 KV heads / 32 Q heads = 4:1 -> turbo3 K works fine (+4.4% PPL)
-    // Threshold: GQA ratio >= 6 triggers auto-asymmetric.
+    // Auto-asymmetric: when symmetric turbo K+V is requested, upgrade K to
+    // q8_0 to prevent quality degradation, on either of two independent
+    // triggers:
+    //   1. High GQA ratio (few KV heads serving many Q heads) - turbo K
+    //      quantization error gets amplified by the GQA broadcast factor.
+    //      Qwen2.5: 4 KV heads / 28 Q heads = 7:1 -> turbo3 K PPL catastrophic (2887 vs 7.4 baseline)
+    //      Mistral:  8 KV heads / 32 Q heads = 4:1 -> turbo3 K works fine (+4.4% PPL)
+    //      Threshold: GQA ratio >= 6.
+    //   2. Qwen-family architecture, regardless of GQA ratio (P6.6a). GQA
+    //      ratio alone is not the discriminator: KVLinC (arXiv:2510.05373)
+    //      attributes rotated-quant K blow-ups on Qwen models to per-channel
+    //      structure from Q/K projection biases (Qwen2.x) and post-projection
+    //      QK-norm (Qwen3), which a token-wise/Hadamard-rotated codec cannot
+    //      represent. Confirmed on this fork: Qwen3-1.7B at GQA 2:1 (well
+    //      under the ratio threshold) measures turbo3 K PPL 659.66 against a
+    //      16.64 baseline - a ~40x blow-up the ratio-only gate misses
+    //      entirely. See llm_arch_is_qwen() for the exact family list and
+    //      why it is deliberately conservative (over-triggering only costs
+    //      KV capacity, not correctness).
     {
         const bool k_is_turbo = (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0 || type_k == GGML_TYPE_TURBO2_0);
         // P3.2.2a2a3c trace: log pre-downgrade state so we
@@ -230,24 +243,26 @@ llama_kv_cache::llama_kv_cache(
             const uint32_t n_head    = hparams.n_head(0);
             const uint32_t n_head_kv = hparams.n_head_kv(0);
             const uint32_t gqa_ratio = (n_head_kv > 0) ? n_head / n_head_kv : 1;
+            const bool     is_qwen_family = llm_arch_is_qwen(model.arch);
 
             const char * env = getenv("TURBO_AUTO_ASYMMETRIC");
             const bool disabled = (env && env[0] == '0');
 
-            LLAMA_LOG_DEBUG("%s: a2a3c-pre-auto: n_head=%u n_head_kv=%u gqa_ratio=%u disabled=%d\n",
-                            __func__, n_head, n_head_kv, gqa_ratio, (int)disabled);
+            LLAMA_LOG_DEBUG("%s: a2a3c-pre-auto: n_head=%u n_head_kv=%u gqa_ratio=%u is_qwen_family=%d disabled=%d\n",
+                            __func__, n_head, n_head_kv, gqa_ratio, (int)is_qwen_family, (int)disabled);
 
-            if (!disabled && gqa_ratio >= 6 && type_k == type_v) {
-                LLAMA_LOG_WARN("%s: auto-asymmetric: GQA ratio %u:1 (n_head=%u, n_head_kv=%u) - "
+            if (!disabled && (gqa_ratio >= 6 || is_qwen_family) && type_k == type_v) {
+                LLAMA_LOG_WARN("%s: auto-asymmetric: %s (GQA ratio %u:1, n_head=%u, n_head_kv=%u) - "
                                "upgrading K from %s to q8_0 to prevent quality degradation. "
                                "Disable with TURBO_AUTO_ASYMMETRIC=0\n",
-                               __func__, gqa_ratio, n_head, n_head_kv, ggml_type_name(type_k));
+                               __func__, is_qwen_family ? "Qwen-family architecture" : "high GQA ratio",
+                               gqa_ratio, n_head, n_head_kv, ggml_type_name(type_k));
                 type_k = GGML_TYPE_Q8_0;
                 LLAMA_LOG_DEBUG("%s: a2a3c-post-auto: downgrade FIRED, type_k now=%s\n",
                                 __func__, ggml_type_name(type_k));
             } else {
-                LLAMA_LOG_DEBUG("%s: a2a3c-post-auto: downgrade SKIPPED (disabled=%d gqa_ratio=%u type_k==type_v=%d), type_k still=%s\n",
-                                __func__, (int)disabled, gqa_ratio,
+                LLAMA_LOG_DEBUG("%s: a2a3c-post-auto: downgrade SKIPPED (disabled=%d gqa_ratio=%u is_qwen_family=%d type_k==type_v=%d), type_k still=%s\n",
+                                __func__, (int)disabled, gqa_ratio, (int)is_qwen_family,
                                 (int)(type_k == type_v), ggml_type_name(type_k));
             }
         }
