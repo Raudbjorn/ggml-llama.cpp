@@ -271,7 +271,7 @@ P5 pattern for `GGML_SYCL_MMV_Y` and `GGML_SYCL_MMVQ_NUM_SUBGROUPS`.
 The five outstanding llama31-8b-heretic cells (q8_0 d4096, and both KV types at d8192 and
 d16384) were filled at merged-master source `80d52e708`, same env A/B
 (`GGML_SYCL_MAX_WG_PER_CU` 2 vs 16), six launches/arm, sample-zero discard, five retained
-pairs, empty `/dev/dri/renderD128` before every leg, zero new i915/xe fault:
+pairs, zero new i915/xe faults:
 
 | depth | KV | pp512 delta | tg128 delta |
 |---:|---|---:|---:|
@@ -286,15 +286,51 @@ bound, correctness `0 GATE-FAIL`); none contradicts the promoted fix. The prior 
 mistral counterpart within about 2 percentage points" estimate, based only on the three
 completed cells, does not hold precisely at the deepest new cells - d16384 f16 is +135.78 %
 here against mistral's +145.96 % (about 10 points apart), d8192 f16 is +77.43 % against
-+84.84 % (about 7 points apart) - while the two q8_0 cells stay within ~4 points. Direction
-and order of magnitude match at every cell; only the tight numeric estimate was optimistic.
-The llama31 matrix is now complete across d0/d4096/d8192/d16384 x f16/q8_0.
++84.84 % (about 7 points apart) - while all three new q8_0 cells stay within ~4.5 points
+(d4096 +21.13 against +18.42, d8192 +40.11 against +38.53, d16384 +72.92 against +68.50).
+Direction and order of magnitude match at every cell; only the tight numeric estimate was
+optimistic. The llama31 matrix is now complete across d0/d4096/d8192/d16384 x f16/q8_0.
+
+#### Raw artifacts
+
+The complete run is committed under
+[`fa-occupancy-campaign-2026-08-13-llama31-coverage/`](fa-occupancy-campaign-2026-08-13-llama31-coverage/):
+one directory per cell (60 sample JSONs, 12 per cell = 6 launches x 2 arms, with rep 0
+discarded to leave the five retained pairs), per-cell `product.json` / `product.md` /
+`provenance.json` and `dmesg.before.txt` / `dmesg.after.txt`, plus campaign-level
+`dmesg.fault.delta.txt` (empty, hence `new=0`), `correctness.txt` and `campaign-runner.txt`.
+Every cell's `provenance.json` records `repository_commit`
+`80d52e708cacbb0e89c269f6237ca4bb378c4cf6`, and every `product.json` carries
+`all_cells_valid: true` with `dmesg_before_hits = dmesg_after_hits = 0`.
+
+This is a distinct campaign from the 2026-07-25 Phase 1 evidence in
+`fa-occupancy-campaign-2026-07-25/`, which was run against `53f390a91` and whose `llama31/`
+directory holds only the three cells completed at that time. The two directories are not
+interchangeable, and the `sole-tenancy-violation.txt` under
+`fa-occupancy-campaign-2026-07-25/llama31/` (PID 3561640) belongs to that July run, not to
+these cells.
+
+Sole tenancy here is enforced fail-closed rather than recorded positively:
+`check_sole_tenancy()` in `scripts/bench-a770-fork-unique.py` runs a non-mutating
+`fuser /dev/dri/renderD128` probe before every individual leg, and on any holder aborts the
+campaign with exit 70 after writing `sole-tenancy-violation.txt` into the output directory.
+The 2026-08-13 directory contains no such file and the runner completed all five cells, so
+no leg started with a holder on the device. There is no per-leg positive holder record; the
+evidence is the absence of the violation artifact plus a clean exit.
+
+One further limit on the A/B: `GGML_SYCL_MAX_WG_PER_CU` is read through a bare `getenv` in
+`ggml/src/ggml-sycl/ggml-sycl.cpp` and is logged only when the value is invalid, so it never
+appears in the backend's "Running with Environment Variables" block. The harness env-log
+assertion is therefore vacuous for this knob, and each `product.md` says so verbatim: `not
+validated from backend logs; key not emitted`. Engagement rests on the per-sample recorded
+process environment (`active_env`) plus effect size - a no-op override cannot move tg128 by
++21 % to +136 % while leaving pp512 inside +/-0.2 %.
 
 ### Note on tenancy
 
-Three separate holder classes interrupted this campaign: editor and IDE GPU processes, a
-user `llama-server` at `-ngl 99`, and KDE `kioworker` thumbnail helpers spawned by open
-Dolphin windows. The thumbnailers were the most disruptive because they reappear whenever a
+Three separate holder classes interrupted the 2026-07-25 Phase 1 campaign: editor and IDE
+GPU processes, a user `llama-server` at `-ngl 99`, and KDE `kioworker` thumbnail helpers
+spawned by open Dolphin windows. The thumbnailers were the most disruptive because they reappear whenever a
 directory is browsed. A clean campaign needs the desktop file manager closed, not just
 inference servers stopped.
 
