@@ -647,11 +647,12 @@ dead-off-3 27.83 t/s with six observed trips.
 > [`scripts/perf/FINDINGS.md`](../../scripts/perf/FINDINGS.md) ("the f16
 > exactness claim does not reproduce"). On re-run with the identical model
 > file, `REPEATS=3`, `ONLY=f16`, `free_prose` produced three distinct token
-> hashes in three deterministic runs. That non-exact result reproduced
-> identically across two separate `REPEATS=3` sweeps, one at
-> `GGML_SYCL_MAX_WG_PER_CU=16` (the promoted flash-attention occupancy
-> default) and one at `2` (the previous effective value), exonerating the
-> occupancy change as a cause and establishing the behaviour as pre-existing.
+> hashes in three deterministic runs. Two further separate `REPEATS=3`
+> sweeps, one at `GGML_SYCL_MAX_WG_PER_CU=16` (the promoted flash-attention
+> occupancy default) and one at `2` (the previous effective value), each
+> independently produced three distinct `free_prose` hashes as well,
+> exonerating the occupancy change as a cause and establishing the
+> behaviour as pre-existing.
 > The original 11.46x `free_prose` figure is implausible against its measured
 > draft acceptance of 0.615-0.680, which implies roughly 1.5-2.5x for ngram
 > drafting rather than 11x; a warm prompt cache is the suspected cause.
