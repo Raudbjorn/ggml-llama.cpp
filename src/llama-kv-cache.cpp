@@ -159,6 +159,11 @@ int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_
     return 0;
 }
 
+bool llama_kv_cache_auto_asymmetric_turbo_k(
+        bool disabled, uint32_t gqa_ratio, bool is_qwen_family, ggml_type type_k, ggml_type type_v) {
+    return !disabled && (gqa_ratio >= 6 || is_qwen_family) && type_k == type_v;
+}
+
 //
 // llama_kv_cache
 //
@@ -210,12 +215,15 @@ llama_kv_cache::llama_kv_cache(
     }
     GGML_ASSERT(kv_size % n_pad == 0);
 
-    // Auto-asymmetric: when symmetric turbo K+V is requested and the model has
-    // high GQA ratio (few KV heads serving many Q heads), upgrade K to q8_0.
-    // Turbo K quantization error gets amplified by the GQA broadcast factor.
-    // Qwen2.5: 4 KV heads / 28 Q heads = 7:1 -> turbo3 K PPL catastrophic (2887 vs 7.4 baseline)
-    // Mistral:  8 KV heads / 32 Q heads = 4:1 -> turbo3 K works fine (+4.4% PPL)
-    // Threshold: GQA ratio >= 6 triggers auto-asymmetric.
+    // Auto-asymmetric: when symmetric turbo K+V is requested, upgrade K to
+    // q8_0 to prevent quality degradation. Two independent triggers, either
+    // one is sufficient: high GQA ratio (turbo K quantization error is
+    // amplified by the GQA broadcast factor), or Qwen-family architecture
+    // regardless of ratio (Qwen's projection biases and QK-norm defeat a
+    // rotated-quant K cache at any GQA ratio). See
+    // llama_kv_cache_auto_asymmetric_turbo_k() for the exact policy and
+    // llm_arch_is_qwen() for the family test; the measurements behind both
+    // triggers are in docs/research/, not here.
     {
         const bool k_is_turbo = (type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0 || type_k == GGML_TYPE_TURBO2_0);
         // P3.2.2a2a3c trace: log pre-downgrade state so we
@@ -230,24 +238,26 @@ llama_kv_cache::llama_kv_cache(
             const uint32_t n_head    = hparams.n_head(0);
             const uint32_t n_head_kv = hparams.n_head_kv(0);
             const uint32_t gqa_ratio = (n_head_kv > 0) ? n_head / n_head_kv : 1;
+            const bool     is_qwen_family = llm_arch_is_qwen(model.arch);
 
             const char * env = getenv("TURBO_AUTO_ASYMMETRIC");
             const bool disabled = (env && env[0] == '0');
 
-            LLAMA_LOG_DEBUG("%s: a2a3c-pre-auto: n_head=%u n_head_kv=%u gqa_ratio=%u disabled=%d\n",
-                            __func__, n_head, n_head_kv, gqa_ratio, (int)disabled);
+            LLAMA_LOG_DEBUG("%s: a2a3c-pre-auto: n_head=%u n_head_kv=%u gqa_ratio=%u is_qwen_family=%d disabled=%d\n",
+                            __func__, n_head, n_head_kv, gqa_ratio, (int)is_qwen_family, (int)disabled);
 
-            if (!disabled && gqa_ratio >= 6 && type_k == type_v) {
-                LLAMA_LOG_WARN("%s: auto-asymmetric: GQA ratio %u:1 (n_head=%u, n_head_kv=%u) - "
+            if (llama_kv_cache_auto_asymmetric_turbo_k(disabled, gqa_ratio, is_qwen_family, type_k, type_v)) {
+                LLAMA_LOG_WARN("%s: auto-asymmetric: %s (GQA ratio %u:1, n_head=%u, n_head_kv=%u) - "
                                "upgrading K from %s to q8_0 to prevent quality degradation. "
                                "Disable with TURBO_AUTO_ASYMMETRIC=0\n",
-                               __func__, gqa_ratio, n_head, n_head_kv, ggml_type_name(type_k));
+                               __func__, is_qwen_family ? "Qwen-family architecture" : "high GQA ratio",
+                               gqa_ratio, n_head, n_head_kv, ggml_type_name(type_k));
                 type_k = GGML_TYPE_Q8_0;
                 LLAMA_LOG_DEBUG("%s: a2a3c-post-auto: downgrade FIRED, type_k now=%s\n",
                                 __func__, ggml_type_name(type_k));
             } else {
-                LLAMA_LOG_DEBUG("%s: a2a3c-post-auto: downgrade SKIPPED (disabled=%d gqa_ratio=%u type_k==type_v=%d), type_k still=%s\n",
-                                __func__, (int)disabled, gqa_ratio,
+                LLAMA_LOG_DEBUG("%s: a2a3c-post-auto: downgrade SKIPPED (disabled=%d gqa_ratio=%u is_qwen_family=%d type_k==type_v=%d), type_k still=%s\n",
+                                __func__, (int)disabled, gqa_ratio, (int)is_qwen_family,
                                 (int)(type_k == type_v), ggml_type_name(type_k));
             }
         }

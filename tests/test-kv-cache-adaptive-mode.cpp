@@ -60,6 +60,36 @@ static void test_q8_kv_repack_round_trip() {
     check_bytes(data.data(), canonical.data(), data.size(), "quants-first q8_0 canonical round trip");
 }
 
+static void test_auto_asymmetric_turbo_k() {
+    // Two independent triggers (GQA ratio, Qwen-family), an opt-out that beats
+    // both, and the symmetric-type precondition that also beats both. See
+    // llama_kv_cache_auto_asymmetric_turbo_k() in llama-kv-cache.cpp.
+    check(
+        llama_kv_cache_auto_asymmetric_turbo_k(false, 2, true, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0),
+        true, "low-GQA Qwen fires on the family trigger alone");
+    check(
+        llama_kv_cache_auto_asymmetric_turbo_k(false, 2, false, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0),
+        false, "low-GQA non-Qwen does not fire");
+    check(
+        llama_kv_cache_auto_asymmetric_turbo_k(false, 6, false, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0),
+        true, "high-GQA non-Qwen fires on the ratio trigger alone");
+    check(
+        llama_kv_cache_auto_asymmetric_turbo_k(false, 6, true, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0),
+        true, "high-GQA Qwen fires (both triggers hold)");
+    check(
+        llama_kv_cache_auto_asymmetric_turbo_k(false, 1, false, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0),
+        false, "low-GQA non-Qwen baseline (neither trigger) does not fire");
+    check(
+        llama_kv_cache_auto_asymmetric_turbo_k(true, 2, true, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0),
+        false, "opt-out beats the Qwen-family trigger");
+    check(
+        llama_kv_cache_auto_asymmetric_turbo_k(true, 6, false, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0),
+        false, "opt-out beats the GQA-ratio trigger");
+    check(
+        llama_kv_cache_auto_asymmetric_turbo_k(false, 6, true, GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO4_0),
+        false, "asymmetric K/V type already beats both triggers");
+}
+
 static void test_cpu_rejects_quants_first_q8() {
     ggml_init_params params = { 16 * 1024, nullptr, true };
     ggml_context * ctx = ggml_init(params);
@@ -101,6 +131,7 @@ int main() {
     check(llama_kv_cache_adaptive_mode(nullptr, GGML_TYPE_TURBO2_0, 32), 7, "call A repeated after B still selects its own mode");
 
     test_q8_kv_repack_round_trip();
+    test_auto_asymmetric_turbo_k();
     test_cpu_rejects_quants_first_q8();
 
     if (failures == 0) {

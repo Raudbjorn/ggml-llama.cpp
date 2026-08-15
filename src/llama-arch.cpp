@@ -954,6 +954,31 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     }
 }
 
+// Fork addition: identifies the Qwen model family, used by the KV-cache
+// auto-asymmetric turbo-K policy to trigger regardless of GQA ratio -
+// Qwen's Q/K projection biases and post-projection QK-norm defeat a
+// rotated-quant K cache independent of ratio. Every Qwen-descended arch is
+// included deliberately: over-matching an untested sibling only costs KV
+// capacity, while missing one ships a silently broken K cache.
+bool llm_arch_is_qwen(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_QWEN:
+        case LLM_ARCH_QWEN2:
+        case LLM_ARCH_QWEN2MOE:
+        case LLM_ARCH_QWEN2VL:
+        case LLM_ARCH_QWEN3:
+        case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN3NEXT:
+        case LLM_ARCH_QWEN3VL:
+        case LLM_ARCH_QWEN3VLMOE:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool llm_arch_is_diffusion(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_DREAM:
