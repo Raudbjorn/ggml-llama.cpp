@@ -1122,9 +1122,12 @@ void launch_fattn(
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
     // Profiling synchronizes the queue and is intentionally limited to q8 decode.
+    // Also off while the stream is being recorded into a SYCL graph: oneAPI
+    // forbids wait()/wait_and_throw() on a queue in that state.
     using profile_clock = std::chrono::steady_clock;
     const bool profile =
         ggml_sycl_fattn_profile_enabled() &&
+        !ctx.graph_recording &&
         Q->ne[1] == 1 &&
         K->type == GGML_TYPE_Q8_0 &&
         V->type == GGML_TYPE_Q8_0;

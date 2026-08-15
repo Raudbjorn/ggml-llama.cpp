@@ -5979,8 +5979,10 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
         const auto record_start = std::chrono::steady_clock::now();
         model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
+        sycl_ctx->graph_recording = true;
         const ggml_status graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
         model_sycl_graph.end_recording();
+        sycl_ctx->graph_recording = false;
         if (graph_profile != nullptr) {
             graph_profile->graph_calls.fetch_add(1, std::memory_order_relaxed);
             graph_profile->nodes.fetch_add(cgraph->n_nodes, std::memory_order_relaxed);
