@@ -119,6 +119,51 @@ static __dpct_inline__ T op_sigmoid(T x) {
 }
 
 template<typename T>
+static void gated_op_fused_geglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const int64_t j0 = (i / n) * o0 + (i % n);
+        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        dst[i] = op_gelu(x[j0]) * g[j1];
+    }
+}
+
+template<typename T>
+static void gated_op_fused_reglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const int64_t j0 = (i / n) * o0 + (i % n);
+        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        dst[i] = op_relu(x[j0]) * g[j1];
+    }
+}
+
+template<typename T>
+static void gated_op_fused_swiglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1)  {
+        const int64_t j0 = (i / n) * o0 + (i % n);
+        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        dst[i] = op_silu(x[j0]) * g[j1];
+    }
+}
+
+template<typename T>
+static void gated_op_fused_geglu_erf(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const int64_t j0 = (i / n) * o0 + (i % n);
+        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        dst[i] = op_gelu_erf(x[j0]) * g[j1];
+    }
+}
+
+template<typename T>
+static void gated_op_fused_geglu_quick(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const int64_t j0 = (i / n) * o0 + (i % n);
+        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        dst[i] = op_gelu_quick(x[j0]) * g[j1];
+    }
+}
+
+template<typename T>
 static __dpct_inline__ T op_sqrt(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::sqrt(x);

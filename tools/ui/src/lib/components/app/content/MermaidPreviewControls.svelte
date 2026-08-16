@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { Download } from '@lucide/svelte';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
 		scale: number;

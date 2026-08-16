@@ -657,7 +657,15 @@ struct ggml_backend_sycl_buffer_context {
 };
 
 static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_type_t buft);
-struct ggml_backend_sycl_device_context;
+struct ggml_backend_sycl_device_context {
+    int device;
+    std::string name;
+    std::string description;
+    int op_offload_min_batch_size;
+    std::atomic<int> pending_status = GGML_STATUS_SUCCESS;
+    std::atomic<int> pending_cause  = GGML_SYCL_FAILURE_CAUSE_NONE;
+    std::atomic<int> pending_raw_code = 0;
+};
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev);
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_backend(ggml_backend_t backend);
 static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx);
@@ -5644,7 +5652,7 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
- 
+
     try {
         const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
         SYCL_CHECK(CHECK_TRY_ERROR((stream)->wait()));
@@ -6351,7 +6359,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
- 
+
     try {
         sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
         const queue_ptr & stream = sycl_ctx->stream(sycl_ctx->device, 0);
@@ -6362,14 +6370,14 @@ static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_
         GGML_LOG_ERROR("%s: SYCL event record failed: %s\n", __func__, exc.what());
     }
 }
- 
+
 static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
- 
+
     try {
         sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
- 
+
         if (ggml_backend_is_sycl(backend)) {
             SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
         } else {
@@ -6418,28 +6426,18 @@ int ggml_backend_sycl_get_device_count() {
 
 // backend device
 
-struct ggml_backend_sycl_device_context {
-    int device;
-    std::string name;
-    std::string description;
-    int op_offload_min_batch_size;
-    std::atomic<int> pending_status = GGML_STATUS_SUCCESS;
-    std::atomic<int> pending_cause  = GGML_SYCL_FAILURE_CAUSE_NONE;
-    std::atomic<int> pending_raw_code = 0;
-};
- 
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev) {
     return dev ? static_cast<ggml_backend_sycl_device_context *>(dev->context) : nullptr;
 }
- 
+
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_backend(ggml_backend_t backend) {
     if (backend == nullptr || !ggml_backend_is_sycl(backend)) {
         return nullptr;
     }
- 
+
     return ggml_backend_sycl_device_context_from_device(backend->device);
 }
- 
+
 static ggml_backend_sycl_failure_cause ggml_backend_sycl_classify_exception(const sycl::exception & exc) {
     const int raw_code = exc.code().value();
     const std::string_view category_name(exc.code().category().name());
@@ -6459,7 +6457,7 @@ static ggml_backend_sycl_failure_cause ggml_backend_sycl_classify_exception(cons
 
     return GGML_SYCL_FAILURE_CAUSE_OTHER;
 }
- 
+
 static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx) {
     if (dev_ctx != nullptr) {
         dev_ctx->pending_status.store(GGML_STATUS_SUCCESS);
@@ -6467,7 +6465,7 @@ static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_cont
         dev_ctx->pending_raw_code.store(0);
     }
 }
- 
+
 static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx) {
     if (dev_ctx != nullptr && dev_ctx->pending_status.load() == GGML_STATUS_SUCCESS) {
         dev_ctx->pending_status.store(GGML_STATUS_FAILED);
@@ -6475,7 +6473,7 @@ static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_cont
         dev_ctx->pending_raw_code.store(0);
     }
 }
- 
+
 static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_context * dev_ctx, const sycl::exception & exc) {
     if (dev_ctx != nullptr) {
         dev_ctx->pending_status.store(GGML_STATUS_FAILED);
@@ -6483,7 +6481,7 @@ static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_c
         dev_ctx->pending_raw_code.store(exc.code().value());
     }
 }
- 
+
 extern "C" ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml_backend_t backend) {
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     if (dev_ctx == nullptr) {
@@ -6493,7 +6491,7 @@ extern "C" ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml
             0,
         };
     }
- 
+
     ggml_backend_sycl_failure out = {
         static_cast<ggml_status>(dev_ctx->pending_status.exchange(GGML_STATUS_SUCCESS)),
         static_cast<ggml_backend_sycl_failure_cause>(dev_ctx->pending_cause.exchange(GGML_SYCL_FAILURE_CAUSE_NONE)),
@@ -6501,7 +6499,7 @@ extern "C" ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml
     };
     return out;
 }
- 
+
 extern "C" ggml_status ggml_backend_sycl_consume_last_status(ggml_backend_t backend) {
     return ggml_backend_sycl_consume_last_failure(backend).status;
 }
@@ -7070,7 +7068,7 @@ static void ggml_backend_sycl_device_event_synchronize(ggml_backend_dev_t dev, g
     GGML_UNUSED(dev);
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_device(dev);
- 
+
     try {
         sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
         SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));

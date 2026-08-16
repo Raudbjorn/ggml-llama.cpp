@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

@@ -393,6 +393,14 @@ struct common_params_speculative {
     }
 };
 
+struct common_params_vocoder {
+    struct common_params_model model;
+
+    std::string speaker_file; // speaker file path
+
+    bool use_guide_tokens = false; // enable guide tokens to improve TTS accuracy
+};
+
 struct common_params_diffusion {
     int32_t steps         = 128;
     bool    visual_mode   = false;
@@ -492,6 +500,7 @@ struct common_params {
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_diffusion   diffusion;
+    struct common_params_vocoder     vocoder;
 
     struct common_params_model model;
 

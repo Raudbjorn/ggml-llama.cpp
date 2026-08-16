@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { AlertTriangle, Server } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
