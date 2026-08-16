@@ -161,6 +161,13 @@ def test_cors_default_wildcard_preflight_is_non_credentialed():
     assert res.headers["Access-Control-Allow-Methods"] == "GET, POST, DELETE, OPTIONS"
     assert res.headers["Access-Control-Allow-Headers"] == "*"
 
+# note: upstream's test_cors_options asserted origin-reflection + credentials=true as the
+# *default* (no --cors-origins/--api-key) CORS behavior. That is upstream's default posture,
+# not this fork's: test_cors_default_wildcard_preflight_is_non_credentialed above asserts the
+# fork's intentional hardened default (wildcard, non-credentialed) against the same endpoint,
+# and the two cannot both hold for the same server config. The Methods/Headers assertions
+# upstream's version also carried are already covered by that sibling test.
+
 
 @pytest.mark.parametrize("origin", [
     "https://one.example",
