@@ -116,6 +116,7 @@ def test_mcp_proxy_no_content():
     try:
         global server
         server.ui_mcp_proxy = True
+        server.ui_mcp_proxy_allow = ["127.0.0.1"]
         server.start()
 
         res = server.make_request("POST", f"/cors-proxy?url=http://127.0.0.1:{target.server_port}/", data={})
