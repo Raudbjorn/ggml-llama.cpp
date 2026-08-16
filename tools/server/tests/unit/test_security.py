@@ -162,6 +162,26 @@ def test_cors_default_wildcard_preflight_is_non_credentialed():
     assert res.headers["Access-Control-Allow-Headers"] == "*"
 
 
+@pytest.mark.parametrize("origin,cors_header,cors_header_value", [
+    ("localhost", "Access-Control-Allow-Origin", "localhost"),
+    ("web.mydomain.fr", "Access-Control-Allow-Origin", "web.mydomain.fr"),
+    ("origin", "Access-Control-Allow-Credentials", "true"),
+    ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
+    ("web.mydomain.fr", "Access-Control-Allow-Headers", "*"),
+])
+def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
+    global server
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert cors_header in res.headers
+    assert res.headers[cors_header] == cors_header_value
+
+
 @pytest.mark.parametrize("origin", [
     "https://one.example",
     "https://two.example",

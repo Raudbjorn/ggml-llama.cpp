@@ -1,5 +1,14 @@
 import { NEWLINE } from '$lib/constants';
 import WORKER_SHIM from './sandbox-worker.js?raw';
+import { NEWLINE } from '$lib/constants';
+
+/**
+ * CSP for the harness document, inherited by the blob worker. connect-src
+ * falls back to default-src, removing network egress for model and vendored
+ * code. 'unsafe-eval' is required by the worker's AsyncFunction constructor,
+ * 'unsafe-inline' by the inline script below, worker-src by the blob worker.
+ */
+const HARNESS_CSP = `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; worker-src blob:`;
 
 /**
  * CSP for the harness document, inherited by the blob worker. connect-src
