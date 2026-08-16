@@ -1,17 +1,19 @@
 <script lang="ts">
-	import { formatParameters } from '$lib/utils/formatters';
-	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
+	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
 	import ContextGaugeDetails from './ContextGaugeDetails.svelte';
 	import ContextGaugeLoadModel from './ContextGaugeLoadModel.svelte';
-	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
-	import {
-		gaugePopup,
-		gaugeCardEnter,
-		gaugeCardLeave,
-		gaugePopupClose
-	} from '$lib/stores/context-gauge-popup.svelte';
+	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
+	import { gaugeCardEnter, gaugeCardLeave, gaugePopup, gaugePopupClose } from '$lib/stores';
+	import { formatParameters } from '$lib/utils/formatters';
 
 	const gauge = useContextGauge();
+
+	// The gauge hook wraps a processing state instance that only follows the
+	// live stream while its own monitoring flag is set, so the card instance
+	// starts monitoring like the dial does.
+	$effect(() => {
+		gauge.startMonitoring();
+	});
 
 	let cardEl = $state<HTMLElement | null>(null);
 
@@ -23,13 +25,18 @@
 
 		const onPointerDown = (event: PointerEvent) => {
 			const target = event.target;
+
 			if (!(target instanceof Node)) return;
+
 			if (cardEl?.contains(target)) return;
+
 			if (target instanceof Element && target.closest('[data-context-gauge-trigger]')) return;
+
 			gaugePopupClose();
 		};
 
 		document.addEventListener('pointerdown', onPointerDown, true);
+
 		return () => document.removeEventListener('pointerdown', onPointerDown, true);
 	});
 
@@ -44,7 +51,7 @@
 	<div
 		role="status"
 		bind:this={cardEl}
-		class="absolute z-50 w-64 -translate-x-1/2 rounded-lg border border-border/50 bg-popover p-3 text-popover-foreground shadow-lg"
+		class="absolute z-50 w-64 -translate-x-1/2 rounded-lg border border-border/50 bg-popover p-3 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10"
 		style="left: {gaugePopup.centerX}px; bottom: {gaugePopup.bottom}px"
 		onpointerenter={gaugeCardEnter}
 		onpointerleave={gaugeCardLeave}
@@ -80,7 +87,7 @@
 						<span class={colorLevelTextClass(gauge.colorLevel)}>{gauge.contextPercent}%</span> used
 					</span>
 					<span>
-						{formatParameters((gauge.contextTotal ?? 0) - gauge.contextUsed)} remaining
+						{formatParameters(gauge.contextAvailable ?? 0)} remaining
 					</span>
 				</div>
 			{:else}
