@@ -172,6 +172,12 @@ struct common_speculative_impl {
     // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
     virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) const { return false; }
     virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
+
+    // true if this implementation requires the target context to extract post-norm embeddings
+    virtual bool need_embd() const = 0;
+
+    // true if this implementation requires the target context to extract pre-norm embeddings
+    virtual bool need_embd_nextn() const { return false; }
 };
 
 struct common_speculative_impl_draft_simple : public common_speculative_impl {
@@ -383,6 +389,10 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
         // noop
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -902,6 +912,10 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         pending_g_last[seq_id].resize(n_embd_dec);
         std::memcpy(pending_g_last[seq_id].data(), data.data() + sizeof(llama_pos), (size_t) n_embd_dec * sizeof(float));
     }
+
+    bool need_embd() const override {
+        return false;
+    }
 };
 
 // DFlash: block-diffusion drafting with a draft-side KV cache injection
@@ -1268,6 +1282,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
         // noop
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -1707,6 +1725,14 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
         std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
     }
+
+    bool need_embd() const override {
+        return false;
+    }
+
+    bool need_embd_nextn() const override {
+        return true;
+    }
 };
 
 // state of self-speculation (simple implementation, not ngram-map)
@@ -1752,6 +1778,10 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
         // noop
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -1807,6 +1837,10 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
 
         common_ngram_map_accept(config[seq_id], n_accepted);
     }
+
+    bool need_embd() const override {
+        return false;
+    }
 };
 
 struct common_speculative_impl_ngram_mod : public common_speculative_impl {
@@ -1827,6 +1861,12 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         // consecutive accept rounds with low acceptance fraction (< 0.5)
         int n_low = 0;
+
+        // hard-off latch (R2): consecutive zero-accept drafts; once n_dead
+        // reaches params.n_dead_off the sequence stops drafting for the rest
+        // of this generation (re-armed in begin()).
+        int  n_dead = 0;
+        bool off    = false;
     };
 
     std::vector<seq_info> sinfos;
@@ -1841,8 +1881,8 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
 
         SPC_TRC("%s", "adding speculative implementation 'ngram-mod'\n");
-        SPC_TRC("- n_match=%d, n_max=%d, n_min=%d\n",
-                this->params.n_match, this->params.n_max, this->params.n_min);
+        SPC_TRC("- n_match=%d, n_max=%d, n_min=%d, n_dead_off=%d\n",
+                this->params.n_match, this->params.n_max, this->params.n_min, this->params.n_dead_off);
         SPC_TRC("- mod size=%zu (%.3f MB)\n",
                 mod.size(), (float)(mod.size_bytes())/1024/1024);
 
@@ -1859,6 +1899,9 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         sinfo.i_last = 0;
         sinfo.n_draft_last = 0;
+
+        sinfo.n_dead = 0;       // re-arm the hard-off latch for the new generation
+        sinfo.off    = false;
 
         const size_t n = mod.get_n();
         if (prompt.size() < n) {
@@ -1891,6 +1934,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         const auto & prompt = *dparams.prompt;
 
         sinfo.n_draft_last = 0;
+        if (sinfo.off) { return; }  // hard-off latch (R2): skip drafting; n_draft_last stays 0
 
         const size_t cur_len = prompt.size();
         if (cur_len < mod.get_n()) {
@@ -1980,7 +2024,27 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
             } else {
                 sinfo.n_low = 0;
             }
+
+            // hard-off latch (R2): count consecutive zero-accept fires; once
+            // we hit params.n_dead_off, stop drafting for this sequence until
+            // the next generation (begin() re-arms). Any partial accept resets.
+            if (params.n_dead_off > 0) {
+                if (n_accepted == 0) {
+                    if (++sinfo.n_dead >= params.n_dead_off) {
+                        if (verbose) {
+                            LOG_WRN("%s: %d dead ngram-mod fires - disabling for seq %d\n", __func__, sinfo.n_dead, seq_id);
+                        }
+                        sinfo.off = true;
+                    }
+                } else {
+                    sinfo.n_dead = 0;
+                }
+            }
         }
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -2120,6 +2184,10 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
         // noop
+    }
+
+    bool need_embd() const override {
+        return false;
     }
 };
 
@@ -2370,6 +2438,7 @@ common_speculative_init_result::common_speculative_init_result(
     const bool spec_mtp = std::find(params.speculative.types.begin(),
                                     params.speculative.types.end(),
                                     COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    GGML_ASSERT(has_draft || spec_mtp);
 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
@@ -2386,7 +2455,7 @@ common_speculative_init_result::common_speculative_init_result(
     std::string model_path;
     if (has_draft) {
         model_path = params.speculative.draft.mparams.path;
-        LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
+        LOG_TRC("%s: loading draft model '%s'\n", __func__, model_path.c_str());
 
         llama_model * model_dft = llama_model_load_from_file(params.model.path.c_str(), mparams);
         if (model_dft == NULL) {
@@ -2406,7 +2475,7 @@ common_speculative_init_result::common_speculative_init_result(
     } else if (spec_mtp) {
         model_path = params.model.path;
 
-        LOG_INF("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
+        LOG_TRC("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
 
         llama_context * ctx_dft = llama_init_from_model(model_tgt, cparams);
         if (ctx_dft == nullptr) {
@@ -2605,6 +2674,34 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
     }
 
     return result;
+}
+
+bool common_speculative_need_embd(common_speculative * spec) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    for (auto & impl : spec->impls) {
+        if (impl->need_embd()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool common_speculative_need_embd_nextn(common_speculative * spec) {
+    if (spec == nullptr) {
+        return false;
+    }
+
+    for (auto & impl : spec->impls) {
+        if (impl->need_embd_nextn()) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void common_speculative_draft(common_speculative * spec) {

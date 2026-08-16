@@ -85,10 +85,11 @@
 | `-dr, --docker-repo [<repo>/]<model>[:quant]` | Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.<br/>example: gemma3<br/>(default: unused)<br/>(env: LLAMA_ARG_DOCKER_REPO) |
 | `-hf, -hfr, --hf-repo <user>/<model>[:quant]` | Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.<br/>mmproj is also downloaded automatically if available. to disable, add --no-mmproj<br/>example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M<br/>(default: unused)<br/>(env: LLAMA_ARG_HF_REPO) |
 | `-hff, --hf-file FILE` | Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)<br/>(env: LLAMA_ARG_HF_FILE) |
-| `-hft, --hf-token TOKEN` | Hugging Face access token (default: value from HF_TOKEN environment variable)<br/>(env: HF_TOKEN) |
+| `-hft, --hf-token TOKEN` | Hugging Face access token (precedence: --hf-token, HF_TOKEN, then HUGGING_FACE_HUB_TOKEN)<br/>(env: HF_TOKEN) |
 | `--log-disable` | Log disable |
 | `--log-file FNAME` | Log to file<br/>(env: LLAMA_ARG_LOG_FILE) |
 | `--log-colors [on\|off\|auto]` | Set colored logging ('on', 'off', or 'auto', default: 'auto')<br/>'auto' enables colors when output is to a terminal<br/>(env: LLAMA_ARG_LOG_COLORS) |
+| `--warn-unknown-env` | opt-in warning for unrecognized LLAMA_ARG_* environment variable names; values are never logged (default: disabled)<br/>(env: LLAMA_ARG_WARN_UNKNOWN_ENV) |
 | `-v, --verbose, --log-verbose` | Set verbosity level to infinity (i.e. log all messages, useful for debugging) |
 | `--offline` | Offline mode: forces use of cache, prevents network access<br/>(env: LLAMA_ARG_OFFLINE) |
 | `-lv, --verbosity, --log-verbosity N` | Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:<br/> - 0: generic output<br/> - 1: error<br/> - 2: warning<br/> - 3: info<br/> - 4: trace (more info)<br/> - 5: debug<br/>(default: 3)<br/><br/>(env: LLAMA_ARG_LOG_VERBOSITY) |
@@ -206,6 +207,7 @@
 | `--spec-ngram-mod-n-min N` | minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48) |
 | `--spec-ngram-mod-n-max N` | maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64) |
 | `--spec-ngram-mod-n-match N` | ngram-mod lookup length (default: 24) |
+| `--spec-ngram-mod-dead-off N` | consecutive zero-accept ngram-mod drafts before disabling it for a sequence, 0 = never disable (default: 3)<br/>(env: LLAMA_ARG_SPEC_NGRAM_MOD_DEAD_OFF) |
 | `--spec-ngram-simple-size-n N` | ngram size N for ngram-simple speculative decoding, length of lookup n-gram (default: 12) |
 | `--spec-ngram-simple-size-m N` | ngram size M for ngram-simple speculative decoding, length of draft m-gram (default: 48) |
 | `--spec-ngram-simple-min-hits N` | minimum hits for ngram-simple speculative decoding (default: 1) |

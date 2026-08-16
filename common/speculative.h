@@ -70,6 +70,12 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
 // process the batch and update the internal state of the speculative context
 bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
 
+// true if any active implementation requires the target context to extract post-norm embeddings
+bool common_speculative_need_embd(common_speculative * spec);
+
+// true if any active implementation requires the target context to extract pre-norm embeddings
+bool common_speculative_need_embd_nextn(common_speculative * spec);
+
 // generate drafts for the sequences specified with `common_speculative_get_draft_params`
 void common_speculative_draft(common_speculative * spec);
 
