@@ -481,6 +481,13 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
 #endif
 
+    // True while the main stream is being recorded into a SYCL command graph.
+    // oneAPI forbids queue::wait()/wait_and_throw() on a queue in that state,
+    // so op code that would otherwise synchronize (e.g. the FA decode timing
+    // profile) must check this and skip. Not gated by GGML_SYCL_GRAPH so it is
+    // always a valid false default when graphs are compiled out.
+    bool graph_recording = false;
+
     ggml_sycl_pool & host_pool(int device) {
         if (host_pools[device] == nullptr) {
             host_pools[device] = new_pool_for_host(stream(device, 0), device);
