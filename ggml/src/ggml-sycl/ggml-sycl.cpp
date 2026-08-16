@@ -6273,8 +6273,20 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
         const auto record_start = std::chrono::steady_clock::now();
         model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
-        const ggml_status graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
-        model_sycl_graph.end_recording();
+        ggml_status graph_status;
+        {
+            // RAII: guarantees graph_recording resets to false even if
+            // compute_impl or end_recording throws, so a mid-capture exception
+            // cannot leave the flag stuck true and permanently suppress the FA
+            // profile on this context.
+            struct graph_recording_guard {
+                bool & flag;
+                explicit graph_recording_guard(bool & f) : flag(f) { flag = true; }
+                ~graph_recording_guard() { flag = false; }
+            } recording_guard(sycl_ctx->graph_recording);
+            graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
+            model_sycl_graph.end_recording();
+        }
         if (graph_profile != nullptr) {
             graph_profile->graph_calls.fetch_add(1, std::memory_order_relaxed);
             graph_profile->nodes.fetch_add(cgraph->n_nodes, std::memory_order_relaxed);
