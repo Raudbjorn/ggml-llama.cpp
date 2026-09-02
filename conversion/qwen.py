@@ -833,13 +833,6 @@ class DSparkModel(DFlashModel):
             return None
         return super().filter_tensors(item)
 
-    _ROPE_PERMUTE_SUFFIXES = (
-        "self_attn.q_proj.weight",
-        "self_attn.k_proj.weight",
-        "self_attn.q_norm.weight",
-        "self_attn.k_norm.weight",
-    )
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "model.d2t":
             self._d2t = data_torch
@@ -848,12 +841,12 @@ class DSparkModel(DFlashModel):
         if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith("lm_head.weight"):
             return
 
-        # interleaved-rope checkpoints (rope_is_neox_style = false) -> NeoX layout: per head, even dims first then odd
-        if not self.hparams.get("rope_is_neox_style", True) and name.endswith(self._ROPE_PERMUTE_SUFFIXES):
-            head_dim = self.hparams["head_dim"]
-            shape = data_torch.shape
-            data_torch = data_torch.reshape(-1, head_dim // 2, 2, *shape[1:]).transpose(1, 2).reshape(shape)
-
+        # note: the interleaved-rope (rope_is_neox_style = false) permute for
+        # self_attn.q/k_proj.weight and q/k_norm.weight is applied once, by
+        # DFlashModel.modify_tensors below via super() - do not repeat it here,
+        # since _ROPE_PERMUTE_SUFFIXES is a shared class attribute and applying
+        # the same reshape/transpose twice does not invert it, it corrupts the
+        # tensor into a third, wrong layout.
         yield from super().modify_tensors(data_torch, name, bid)
 
     def prepare_tensors(self):

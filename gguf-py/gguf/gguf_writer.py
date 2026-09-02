@@ -1252,7 +1252,16 @@ class GGUFWriter:
 
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]] | None) -> None:
         if value is None:
+            # a prior call may have written the multi-template form (the default key,
+            # one tokenizer.chat_template.<name> key per named template, and the
+            # tokenizer.chat_templates name list below) - clear all of it, not just
+            # the default, or a "no chat template" caller's intent is only half applied.
             self.remove_key(Keys.Tokenizer.CHAT_TEMPLATE)
+            self.remove_key(Keys.Tokenizer.CHAT_TEMPLATES)
+            named_prefix = Keys.Tokenizer.CHAT_TEMPLATE_N.format(name="")
+            for kv_data in self.kv_data:
+                for key in [k for k in kv_data if k.startswith(named_prefix)]:
+                    kv_data.pop(key, None)
             return
 
         if not isinstance(value, str):
