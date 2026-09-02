@@ -204,7 +204,9 @@ common_json common_json::parse(const std::string & text) {
         common_json out;
         as_json(&out) = ordered_json::parse(text);
         return out;
-    } catch (const std::exception & e) {
+    } catch (const ordered_json::exception & e) {
+        // only the backing library's own errors mean "not valid JSON"; a resource failure
+        // such as std::bad_alloc must propagate as itself, not be relabeled a parse error
         throw common_json_error(e.what());
     }
 }

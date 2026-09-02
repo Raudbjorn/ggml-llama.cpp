@@ -577,15 +577,6 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
     }
 
-    // infer the speculative type from the draft GGUF metadata when none is requested
-    // note: reads only the first split - sharded drafts need an explicit --spec-type
-    if (spec_types_is_default(params) && !params.speculative.draft.mparams.path.empty()) {
-        const auto types_gguf = common_speculative_types_from_gguf(params.speculative.draft.mparams.path);
-        if (!types_gguf.empty()) {
-            params.speculative.types = types_gguf;
-        }
-    }
-
     // when a sidecar type is requested, the draft repo resolves to its sidecar instead of a full model
     const bool spec_sidecar_found = !plan_spec.mtp.local_path.empty() ||
                                     !plan_spec.dflash.local_path.empty() ||
@@ -722,6 +713,17 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     for (const auto & task : tasks) {
         if (task.on_done) {
             task.on_done();
+        }
+    }
+
+    // infer the speculative type from the draft GGUF metadata when none is requested
+    // done after the tasks above run: a remote draft (hf repo or plain url) has no readable
+    // GGUF at this path until its download task finalizes it here
+    // note: reads only the first split - sharded drafts need an explicit --spec-type
+    if (spec_types_is_default(params) && !params.speculative.draft.mparams.path.empty()) {
+        const auto types_gguf = common_speculative_types_from_gguf(params.speculative.draft.mparams.path);
+        if (!types_gguf.empty()) {
+            params.speculative.types = types_gguf;
         }
     }
 }
