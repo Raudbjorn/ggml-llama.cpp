@@ -2083,7 +2083,12 @@ llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
     hca_state(kv->get_hca_state()),
     lid_state(kv->get_lid_state()),
     status(ctx_raw->get_status()) {
-    kv->reset_rs_idx_for_ubatches(this->ubatches);
+    // Only consume pending rollback markers once slot allocation succeeded;
+    // on failure the caller discards this context and a retry must still see
+    // the pending restore.
+    if (!llama_memory_status_is_fail(status)) {
+        kv->reset_rs_idx_for_ubatches(this->ubatches);
+    }
 }
 
 llama_kv_cache_dsv4_context::~llama_kv_cache_dsv4_context() = default;

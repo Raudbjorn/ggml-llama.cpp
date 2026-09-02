@@ -477,6 +477,11 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->dflash_selector_prev);
     add_tensor(model->dflash_selector_next);
     add_tensor(model->dflash_selector_hidden);
+    add_tensor(model->dspark_markov_w1);
+    add_tensor(model->dspark_markov_w2);
+    add_tensor(model->dspark_markov_w2_s);
+    add_tensor(model->dspark_conf_proj);
+    add_tensor(model->dspark_conf_proj_b);
     add_tensor(model->cls_b);
     add_tensor(model->cls_out);
     add_tensor(model->cls_out_b);

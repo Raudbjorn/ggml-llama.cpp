@@ -12,6 +12,7 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-sampler.h"
 #include "llama-ext.h"
 #include "llama.h"
 // ggml-sycl.h includes the failure-status type that is referenced from
@@ -1841,6 +1842,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // when computing embeddings, all tokens are output
     const bool output_all   = cparams.embeddings;
     const bool has_samplers = !sampling.samplers.empty();
+
+    // Reset each attached backend sampler's transactional draw state before this
+    // round's batches are processed, so a candidate rejected earlier in
+    // speculative decoding cannot leave rng_backend desynced from the
+    // committed rng (llama_sampler_backend_begin() is a no-op for samplers
+    // that are not backend_transactional).
+    for (auto & [seq_id, sampler] : sampling.samplers) {
+        llama_sampler_backend_begin(sampler);
+    }
 
     const uint32_t n_seq_max = cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max;
 
