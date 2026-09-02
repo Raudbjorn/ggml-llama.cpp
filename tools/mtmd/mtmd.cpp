@@ -1914,6 +1914,11 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
         return 0;
     }
 
+    if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV) {
+        LOG_ERR("%s: unknown gen process type %d\n", __func__, (int) inp->type);
+        return 1;
+    }
+
     // MTMD_GEN_PROCESS_TYPE_GEN_WAV
     const bool has_codes = inp->codes && inp->n_codes > 0;
     const bool has_feats = inp->feats && inp->n_feats > 0;
