@@ -37,11 +37,18 @@ inline uint64_t fnv1a_u64(uint64_t h, uint64_t v) {
 
 constexpr uint64_t FNV_OFFSET = 0xcbf29ce484222325ull;
 
-// Bytes sampled from each end of a weight tensor for the sampled hash. The whole
-// model is never hashed (that would cost seconds every run); instead we sample a
-// bounded window from the head and tail of each weight's bytes. The manifest
-// re-verify (same sample) guards the residual collision risk.
-constexpr size_t WEIGHT_SAMPLE_BYTES = 4096;
+// Sampling budget for the weight fingerprint. The whole model is never hashed
+// (that would cost seconds every run); instead we hash a bounded number of
+// fixed-size windows spread evenly across each weight's bytes, from offset 0
+// through the final window ending at nbytes. Spreading the windows (rather than
+// only sampling the head and tail) means a change confined to the middle of a
+// tensor still changes the fingerprint. Total sampled bytes per weight are
+// capped regardless of tensor size, so cost stays bounded on multi-GB weights;
+// the tradeoff is a residual (much smaller) collision risk between the sampled
+// windows, which manifest re-verification does not add further protection
+// against since it hashes the same windows.
+constexpr size_t WEIGHT_SAMPLE_WINDOW_BYTES = 1024;
+constexpr size_t WEIGHT_SAMPLE_WINDOWS = 8;
 
 // Is this src a model weight, mirroring create_weight_nodes()'s selection:
 // non-view tensor whose buffer is USAGE_WEIGHTS or whose type is quantized.
@@ -64,11 +71,19 @@ uint64_t weight_fingerprint(const ggml_tensor * t) {
     const size_t nbytes = ggml_nbytes(t);
     h = fnv1a_u64(h, nbytes);
     if (t->data != nullptr && nbytes > 0) {
-        const size_t head = nbytes < WEIGHT_SAMPLE_BYTES ? nbytes : WEIGHT_SAMPLE_BYTES;
-        h = fnv1a(h, t->data, head);
-        if (nbytes > WEIGHT_SAMPLE_BYTES) {
-            const size_t tail = nbytes < 2 * WEIGHT_SAMPLE_BYTES ? nbytes - WEIGHT_SAMPLE_BYTES : WEIGHT_SAMPLE_BYTES;
-            h = fnv1a(h, static_cast<const uint8_t *>(t->data) + (nbytes - tail), tail);
+        const uint8_t * data = static_cast<const uint8_t *>(t->data);
+        const size_t total_sample = WEIGHT_SAMPLE_WINDOWS * WEIGHT_SAMPLE_WINDOW_BYTES;
+        if (nbytes <= total_sample) {
+            // Small enough to hash in full: no unsampled gap is possible.
+            h = fnv1a(h, data, nbytes);
+        } else {
+            // Evenly-spaced windows spanning the whole buffer, first window at
+            // offset 0 and last window ending at nbytes, so the middle of the
+            // tensor is covered along with the head and tail.
+            for (size_t w = 0; w < WEIGHT_SAMPLE_WINDOWS; ++w) {
+                const size_t start = (nbytes - WEIGHT_SAMPLE_WINDOW_BYTES) * w / (WEIGHT_SAMPLE_WINDOWS - 1);
+                h = fnv1a(h, data + start, WEIGHT_SAMPLE_WINDOW_BYTES);
+            }
         }
     }
     return h;

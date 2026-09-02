@@ -286,6 +286,13 @@ public:
     // is_model_splitted that only need name membership.
     static std::set<std::string> collect_weight_names(ggml_cgraph * cgraph);
 
+    // Drop the process-lifetime cache of weight nodes built from non-OpenVINO
+    // (CPU/mmap) buffers. Must be called when a backend/model context tears down,
+    // before its CPU-buffer weight memory can be freed and a new allocation could
+    // reuse the same address -- otherwise the cache, which is keyed by tensor->data,
+    // could alias a stale node onto an unrelated later tensor. See create_weight_node().
+    static void clear_nonov_weight_cache();
+
     const ggml_tensor * get_tensor_used_op(const ggml_tensor * tensor) const;
 
     const ggml_tensor * get_tensor_from_name(const std::string & name) const;

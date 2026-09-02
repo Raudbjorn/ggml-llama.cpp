@@ -4,6 +4,7 @@
 #include "ggml-backend.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
+#include "ggml-openvino/ggml-decoder.h"
 #include "ggml-openvino/openvino/op_table.h"
 #include "ggml-openvino/utils.h"
 #include "ggml-quants.h"
@@ -709,9 +710,14 @@ bool ggml_backend_buft_is_openvino_host(ggml_backend_buffer_type_t buft) {
 static void ggml_backend_openvino_free(ggml_backend_t backend) {
     ggml_backend_openvino_context * ctx = (ggml_backend_openvino_context *) backend->context;
 
+    // Whether this is the last backend instance for its runtime context (or there is no
+    // shared runtime context to begin with), i.e. the point past which this model's
+    // buffers are gone and their addresses may be reused.
+    bool last_backend_of_context = true;
     if (ctx->runtime_context) {
         auto r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
-        if (--r_ctx->backend_count == 0) {
+        last_backend_of_context = (--r_ctx->backend_count == 0);
+        if (last_backend_of_context) {
             // If host weight buffers were released (GGML_OPENVINO_RELEASE_WEIGHTS), the
             // dropped pages can never be repopulated, so a recompile is impossible. Keep
             // the compiled-model cache alive across backend teardown so the next context
@@ -720,6 +726,17 @@ static void ggml_backend_openvino_free(ggml_backend_t backend) {
                 r_ctx->clear_caches();
             }
         }
+    }
+
+    if (last_backend_of_context) {
+        // The non-OV weight cache is keyed by tensor->data from this context's CPU/mmap
+        // weight buffers. Those buffers are about to go away now that the last backend
+        // sharing this runtime context is tearing down, so drop the cache -- otherwise a
+        // later model load could get a reused address and read a stale weight node
+        // cached from this teardown. Unlike the OV compiled-model cache above, this is
+        // unaffected by GGML_OPENVINO_RELEASE_WEIGHTS (that flag governs OV device
+        // buffers, not the CPU/mmap tensors cached here).
+        GgmlOvDecoder::clear_nonov_weight_cache();
     }
 
     delete ctx;

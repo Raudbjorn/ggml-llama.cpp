@@ -1127,15 +1127,27 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
     return model_weights;
 }
 
-// Process-lifetime cache for weight nodes built from NON-OpenVINO buffers (e.g. the
-// token_embd.weight copy that lives in a CPU/mmap buffer and feeds GET_ROWS). Such
-// tensors have no OV buffer context to own a cached extra, so without this they are
-// re-extracted/re-requantized on every (re)compile — for token_embd that is a ~1-2 GB
-// F32 dequant each time. Keyed by tensor->data, which is stable for the process and
-// uniquely identifies the immutable weight bytes. OV-buffer weights keep using the
-// per-tensor extra cache and never reach here.
+// Cache for weight nodes built from NON-OpenVINO buffers (e.g. the token_embd.weight
+// copy that lives in a CPU/mmap buffer and feeds GET_ROWS). Such tensors have no OV
+// buffer context to own a cached extra, so without this they are re-extracted/
+// re-requantized on every (re)compile -- for token_embd that is a ~1-2 GB F32 dequant
+// each time. Keyed by tensor->data, which is stable for the lifetime of the owning
+// backend/model context. OV-buffer weights keep using the per-tensor extra cache and
+// never reach here.
+//
+// tensor->data is only unique while the owning CPU/mmap buffer is alive: once a model
+// context is freed, that memory can be released and a later allocation (e.g. a
+// different model loaded in the same process) can reuse the same address, aliasing a
+// stale node onto an unrelated tensor. clear_nonov_weight_cache() must therefore be
+// called on backend teardown (see ggml_backend_openvino_free) before any such reuse
+// can occur.
 static std::mutex g_nonov_weight_cache_mutex;
 static std::unordered_map<const void *, std::shared_ptr<ov::Node>> g_nonov_weight_cache;
+
+void GgmlOvDecoder::clear_nonov_weight_cache() {
+    std::lock_guard<std::mutex> lock(g_nonov_weight_cache_mutex);
+    g_nonov_weight_cache.clear();
+}
 
 std::set<std::string> GgmlOvDecoder::collect_weight_names(ggml_cgraph * cgraph) {
     // Mirrors the name-selection logic of create_weight_nodes() but builds no nodes,
