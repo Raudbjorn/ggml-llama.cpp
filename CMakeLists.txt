@@ -2,6 +2,23 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
+### llama.cpp version
+set(LLAMA_VERSION_MAJOR 0)
+set(LLAMA_VERSION_MINOR 3)
+set(LLAMA_VERSION_PATCH 0)
+set(LLAMA_VERSION_BASE "${LLAMA_VERSION_MAJOR}.${LLAMA_VERSION_MINOR}.${LLAMA_VERSION_PATCH}")
+
+# Whether this is a development/nightly build.
+option(LLAMA_BUILD_IS_DEV "llama: dev build" ON)
+
+if (LLAMA_BUILD_IS_DEV)
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}-dev")
+else()
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}")
+endif()
+
+message(STATUS "llama.cpp version: ${LLAMA_VERSION}")
+
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
 
@@ -261,15 +278,9 @@ add_subdirectory(src)
 # utils, programs, examples and tests
 #
 
+add_subdirectory(vendor)
+
 if (LLAMA_BUILD_COMMON)
-    # the server needs cpp-httplib even when the downloader is stubbed out.
-    # LLAMA_BUILD_TOOLS is part of the condition because tools/server is only
-    # added under it (see add_subdirectory(tools) below), so without it there
-    # is no server target and pulling in cpp-httplib would drag find_package
-    # (OpenSSL) back into an SDK configure for nothing.
-    if (LLAMA_DOWNLOAD OR (LLAMA_BUILD_TOOLS AND LLAMA_BUILD_SERVER AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tools/server"))
-        add_subdirectory(vendor/cpp-httplib)
-    endif()
     add_subdirectory(common)
 endif()
 

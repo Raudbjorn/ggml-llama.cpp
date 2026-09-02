@@ -16,12 +16,6 @@
 #include <string>
 #include <unordered_map>
 
-// Signals between router parent and model child processes.
-// Also used by server.cpp (the child process entry point).
-#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
-#define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // followed by json string
-#define CMD_CHILD_TO_ROUTER_ERROR "cmd_child_to_router:error:" // followed by a flattened error message
-
 /**
  * state diagram:
  *
@@ -90,7 +84,7 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
-    // bool need_download = false; // whether the model needs to be downloaded before loading // TODO @ngxson: implement this
+    bool hidden = false; // hidden from GET /models, but still accept if requested
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -100,47 +94,39 @@ struct server_model_meta {
         return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING || status == SERVER_MODEL_STATUS_SLEEPING;
     }
 
+    bool is_ready_or_sleep() const {
+        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_SLEEPING;
+    }
+
     bool is_failed() const {
         return status == SERVER_MODEL_STATUS_UNLOADED && exit_code != 0;
     }
-
-    // true when the child was killed by a signal (e.g. SIGABRT from OOM,
-    // SIGTERM from force-kill).  exit_code is the negated signal number.
-    bool is_signaled() const {
-        return status == SERVER_MODEL_STATUS_UNLOADED && exit_code < 0;
-    }
-
-    // the signal number if is_signaled(), 0 otherwise
-    int exit_signal() const {
-        return is_signaled() ? -exit_code : 0;
-    }
-
-    std::string last_error = {}; // error message from CMD_CHILD_TO_ROUTER_ERROR or GGML_ABORT
 
     void update_args(common_preset_context & ctx_presets, std::string bin_path);
     void update_caps();
 };
 
 struct server_models_routes;
-struct server_subproc; // defined in server-models.cpp
+struct server_subproc;   // defined in server-models.cpp
+struct server_lru_sched; // defined in server-models.cpp
 
 struct server_models {
     friend struct server_models_routes;
+    friend struct server_lru_sched;
 
 private:
     struct instance_t {
         std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
         std::thread th;
         server_model_meta meta;
+        int req_count = 0; // number of active proxy requests
     };
 
     std::mutex mutex;
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
 
-    // for stopping models — separate mutex prevents cv_stop from contending
-    // with update_status() on mutex.
-    std::mutex stop_mutex;
+    // for stopping models
     std::condition_variable cv_stop;
     std::set<std::string> stopping_models;
 
@@ -150,17 +136,33 @@ private:
     // if true, the next get_meta() will trigger a reload of model list
     bool need_reload = false;
 
+    // models marked with load-on-startup, unset once load_startup_models() drains it
+    // no value means the startup phase is over, so a reload must not queue anything
+    std::optional<std::vector<std::string>> startup_models{std::in_place};
+
     // conv_id -> model name that currently serves its stream session, lets the resumable stream
     // routes go straight to the owning child instead of polling every one. populated when
     // proxy_request forwards a POST carrying an X-Conversation-Id. best effort: a stale entry just
     // makes the child answer not found and the client recovers. owns its lock, one mutex per struct
     struct conv_model_tracker {
-        void remember(const std::string & conv_id, const std::string & model) {
+        // returns the ticket of this registration, 0 when nothing was registered. erasing or
+        // replacing the entry invalidates the ticket, which is how a stop cancels a request
+        // parked in the model load wait
+        uint64_t remember(const std::string & conv_id, const std::string & model) {
             if (conv_id.empty() || model.empty()) {
-                return;
+                return 0;
             }
             std::lock_guard<std::mutex> lock(mu);
-            map[conv_id] = model;
+            uint64_t ticket = next_ticket++;
+            map[conv_id] = { model, ticket };
+            return ticket;
+        }
+
+        // false means a stop erased the entry or a newer request replaced it
+        bool alive(const std::string & conv_id, uint64_t ticket) {
+            std::lock_guard<std::mutex> lock(mu);
+            auto it = map.find(conv_id);
+            return it != map.end() && it->second.ticket == ticket;
         }
 
         std::optional<std::string> lookup(const std::string & conv_id) {
@@ -172,7 +174,7 @@ private:
             if (it == map.end()) {
                 return std::nullopt;
             }
-            return it->second;
+            return it->second.model;
         }
 
         void forget(const std::string & conv_id) {
@@ -184,8 +186,13 @@ private:
         }
 
       private:
-        std::mutex                                   mu;
-        std::unordered_map<std::string, std::string> map;
+        struct entry_t {
+            std::string model;
+            uint64_t    ticket;
+        };
+        std::mutex                               mu;
+        uint64_t                                 next_ticket = 1;
+        std::unordered_map<std::string, entry_t> map;
     };
 
     common_preset_context ctx_preset;
@@ -194,6 +201,12 @@ private:
     std::string bin_path;
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
+
+    // queue of requests waiting for a models_max slot
+    std::unique_ptr<server_lru_sched> sched;
+
+    // if true, add some delay to simulate works (useful for testing)
+    bool debug_fake_timing = false;
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
@@ -211,6 +224,7 @@ public:
     conv_model_tracker conv_models;
 
     server_models(const common_params & params, int argc, char ** argv);
+    ~server_models();
 
     server_response sse; // for real-time updates via SSE endpoint
 
@@ -220,6 +234,9 @@ public:
     //   - if a model is running but updated or removed from the source, it will be unloaded
     //   - if a model is not running, it will be added or updated according to the source
     void load_models();
+
+    // lazy-load startup_models, to be called after main() setup phase
+    void load_startup_models();
 
     // check if a model instance exists (thread-safe)
     bool has_model(const std::string & name);
@@ -254,9 +271,6 @@ public:
     void update_status(const std::string & name, const update_status_args & args);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
-    // record the last error reported by a child process (thread-safe)
-    void update_last_error(const std::string & name, const std::string & error);
-
     // remove a cache model from disk and update the list (thread-safe)
     // note: only cache models can be removed; returns false if the model doesn't exist or is not a cache model
     bool remove(const std::string & name);
@@ -270,10 +284,12 @@ public:
     // ensure the model is in ready state (thread-safe)
     // return false if model is ready
     // otherwise, load the model and blocking wait until it's ready, then return true (meta may need to be refreshed)
-    bool ensure_model_ready(const std::string & name);
+    // if models_max is reached, the request waits in a queue until a slot frees up
+    // throws if the load fails, or if should_stop fires while waiting
+    bool ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop = nullptr);
 
     // proxy an HTTP request to the model instance
-    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);
+    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached = false);
 
     // handle message sent from server_child::notify_to_router()
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
@@ -350,7 +366,6 @@ struct server_models_routes {
  */
 struct server_http_proxy : server_http_res {
     std::function<void()> cleanup = nullptr;
-public:
     server_http_proxy(const std::string & method,
                       const std::string & scheme,
                       const std::string & host,
@@ -364,11 +379,15 @@ public:
                       int32_t timeout_write
                       );
     ~server_http_proxy() {
+        if (cleanup_pipes) {
+            cleanup_pipes();
+        }
         if (cleanup) {
             cleanup();
         }
     }
 private:
+    std::function<void()> cleanup_pipes = nullptr;
     std::thread thread;
     struct msg_t {
         std::map<std::string, std::string> headers;
