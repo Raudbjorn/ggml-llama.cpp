@@ -386,7 +386,7 @@ class GGUFWriter:
 
         if tensor_endianess != self.endianess:
             # Don't byteswap inplace since lazy copies cannot handle it
-            tensor = tensor.byteswap(inplace=False)
+            tensor = self._byteswap_tensor_data(tensor, raw_dtype)
         if self.use_temp_file and self.temp_file is None:
             fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024)
             fp.seek(0)
@@ -402,12 +402,38 @@ class GGUFWriter:
         tensor.tofile(self.temp_file)
         self.write_padding(self.temp_file, tensor.nbytes)
 
+    @staticmethod
+    def _byteswap_tensor_data(
+        tensor: np.ndarray[Any, Any], raw_dtype: GGMLQuantizationType | None,
+    ) -> np.ndarray[Any, Any]:
+        # A block-quantized tensor (raw_dtype set, packed as a flat uint8 buffer)
+        # embeds multi-byte fields (e.g. f16/f32 block scales) inside those bytes.
+        # ndarray.byteswap() swaps whole elements, so on a uint8 view it is a
+        # silent no-op: the file's declared endianness would not match the
+        # scale fields actually written. BF16 has no such embedded fields - it
+        # is a plain 2-byte value per element - so it can be swapped via a
+        # uint16 view (same special case as
+        # gguf.scripts.gguf_convert_endian.convert_byteorder). Any other
+        # quantized type needs per-type block-layout knowledge that isn't
+        # available here (see gguf.scripts.gguf_convert_endian.byteswap_tensors),
+        # so refuse rather than write a corrupted file.
+        if raw_dtype == GGMLQuantizationType.BF16:
+            return tensor.view(np.uint16).byteswap(inplace=False).view(np.uint8)
+        if raw_dtype is not None and tensor.dtype == np.uint8:
+            raise NotImplementedError(
+                f"Writing byteswapped {raw_dtype.name} quantized data is not supported"
+            )
+        return tensor.byteswap(inplace=False)
+
     def write_padding(self, fp: IO[bytes], n: int, align: int | None = None) -> None:
         pad = GGUFWriter.ggml_pad(n, align if align is not None else self.data_alignment) - n
         if pad != 0:
             fp.write(bytes([0] * pad))
 
-    def write_tensor_data(self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None) -> None:
+    def write_tensor_data(
+        self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None,
+        raw_dtype: GGMLQuantizationType | None = None,
+    ) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
         assert self.fout is not None
@@ -418,7 +444,7 @@ class GGUFWriter:
 
         if tensor_endianess != self.endianess:
             # Don't byteswap inplace since lazy copies cannot handle it
-            tensor = tensor.byteswap(inplace=False)
+            tensor = self._byteswap_tensor_data(tensor, raw_dtype)
 
         file_id = -1
         for i, tensors in enumerate(self.tensors):

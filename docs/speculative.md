@@ -103,8 +103,10 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
 `--spec-draft-conf-min P` truncates each drafted block at the first position whose predicted
 acceptance (from the draft's confidence head, if present) falls below `P` (default 0 = disabled).
 
-Currently only drafts with a Qwen3 backbone are supported; support for other backbones
-(e.g. Gemma4) is planned.
+Currently only standalone drafts (converted via `--target-model-dir`) with a Qwen3 backbone are
+supported; support for other backbones (e.g. Gemma4) is planned. DeepSeek-V4 does not use a
+standalone draft - it ships its own DSpark head inside the target checkpoint, extracted with
+`--dspark` instead (see `convert_hf_to_gguf.py --help`).
 
 DSpark drafts exported in the [speculators](https://github.com/vllm-project/speculators) format
 (for example [`RedHatAI/gemma-4-31B-it-speculator.dspark`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dspark))
