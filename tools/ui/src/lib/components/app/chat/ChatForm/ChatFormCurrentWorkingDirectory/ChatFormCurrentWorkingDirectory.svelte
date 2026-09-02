@@ -211,9 +211,11 @@
 	}
 
 	// Resolve a browser-picked folder name (which exposes only the leaf name)
-	// to a server-side absolute path; null when the server cannot locate it,
-	// so the caller fails visibly instead of committing a bare leaf name.
-	async function resolveNativeName(name: string): Promise<string | null> {
+	// to every server-side absolute path sharing that leaf under the server
+	// home. Remote clients and duplicate leaf names (e.g. "src", "build")
+	// make a single "first match" guess unsafe, so the caller decides what
+	// to do with zero, one, or many results.
+	async function resolveNativeMatches(name: string): Promise<string[]> {
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
 				include: buildCaseInsensitiveGlob(name),
@@ -224,13 +226,12 @@
 			});
 			const base = typeof res.base === 'string' ? res.base : '';
 			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
-			const match = entries.find(
-				(e) => lastPathSegment(e.path).toLowerCase() === name.toLowerCase()
-			);
 
-			return match ? joinPath(base, match.path) : null;
+			return entries
+				.filter((e) => lastPathSegment(e.path).toLowerCase() === name.toLowerCase())
+				.map((e) => joinPath(base, e.path));
 		} catch {
-			return null;
+			return [];
 		}
 	}
 
@@ -239,15 +240,19 @@
 
 		try {
 			const handle = await window.showDirectoryPicker();
-			const path = await resolveNativeName(handle.name);
+			const matches = await resolveNativeMatches(handle.name);
 
-			if (path) {
-				setDirectory(path);
+			if (matches.length === 1) {
+				setDirectory(matches[0]);
 				closePicker();
 			} else {
-				// keep the previous cwd and fail visibly instead of committing a
-				// bare leaf name that would resolve against the server cwd
-				searchError = `Could not resolve "${handle.name}" to a server path`;
+				// Ambiguous leaf name, or no exact match: hand off to the same
+				// search-and-pick UI used for manual typing instead of silently
+				// guessing one. Setting `query` also makes the results/error
+				// panel below render at all - it stays hidden while `query` is
+				// empty, which it always is on a fresh Browse click.
+				searchError = null;
+				query = handle.name;
 			}
 		} catch (err) {
 			// user cancelled - silently ignore; other errors are logged
