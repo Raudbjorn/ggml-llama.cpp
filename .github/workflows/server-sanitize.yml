@@ -28,7 +28,14 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/server-sanitize.yml'
+      '.github/workflows/server-sanitize.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      'tools/server/**.*'
     ]
 
 env:

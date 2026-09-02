@@ -5,7 +5,7 @@
 #   --dry-run: warn on failures instead of aborting
 #
 # Env (when running in GitHub Actions):
-#   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT
+#   GITHUB_OUTPUT
 #   RELEASE_BRANCH: when set, HEAD must belong to origin/RELEASE_BRANCH and must
 #     not be older than 3 days from the branch HEAD (skipped when unset)
 set -euo pipefail
@@ -71,54 +71,22 @@ if git ls-remote --tags origin "${VERSION}" | grep -q "${VERSION}"; then
 fi
 echo "Tag ${VERSION} does not exist on remote - OK"
 
-echo "Checking release.yml status for commit ${SHA}..."
-if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
-    echo "Warning: GITHUB_REPOSITORY not set - skipping CI check (local run)"
-else
-    RUNS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?per_page=100" \
-        --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .conclusion == \"success\")] | length")
-    if [[ "$RUNS" -eq 0 ]]; then
-        if [[ "$DRY_RUN" == "true" ]]; then
-            echo "Warning: no successful release.yml run found for HEAD (${SHA}) (dry run, continuing)."
-            CHECKS_PASSED=false
-        else
-            echo "Error: no successful release.yml run found for HEAD (${SHA})"
-            echo "The nightly build must complete successfully before making a release."
-            exit 1
-        fi
-    else
-        echo "Found successful release.yml run for HEAD."
-    fi
-fi
+# NOTE: two upstream release gates were removed here rather than reworked:
+# (1) a byte-for-byte diff of ggml/src, ggml/include and ggml/CMakeLists.txt
+#     against the matching ggml-org/ggml tag, and (2) a lookup of
+#     .github/workflows/release.yml CI runs for the release commit.
+# Both assume upstream's topology, which this fork intentionally does not
+# have: ggml/ carries the TurboQuant+ codec and SYCL changes plus 9+ deleted
+# backends (so it never matches upstream byte-for-byte), and release.yml was
+# deleted when backends were pruned (afe22f08c), so no commit since then can
+# ever have a run recorded against that workflow path - the check was an
+# unconditional, permanent block, not a real gate. See CLAUDE.md.
 
 MAJOR=$(grep "set(GGML_VERSION_MAJOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 MINOR=$(grep "set(GGML_VERSION_MINOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 PATCH=$(grep "set(GGML_VERSION_PATCH" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 GGML_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
 echo "Local ggml version: ${GGML_VERSION}"
-
-if ! git clone --depth 1 --branch "${GGML_VERSION}" https://github.com/ggml-org/ggml.git upstream-ggml 2>/dev/null; then
-    echo "Warning: tag ${GGML_VERSION} not found in upstream ggml - skipping comparison"
-else
-    echo "Comparing local ggml/ src and include with upstream ${GGML_VERSION}..."
-    DIFF=$(diff -rq "$REPO_ROOT/ggml/src"          upstream-ggml/src          2>&1 || true)
-    DIFF+=$(diff -rq "$REPO_ROOT/ggml/include"     upstream-ggml/include      2>&1 || true)
-    DIFF+=$(diff     "$REPO_ROOT/ggml/CMakeLists.txt" upstream-ggml/CMakeLists.txt 2>&1 || true)
-    rm -rf upstream-ggml
-    if [[ -n "$DIFF" ]]; then
-        echo "local ggml/ differs from upstream ${GGML_VERSION}:"
-        echo "$DIFF"
-        if [[ "$DRY_RUN" == "true" ]]; then
-            echo "Warning: would abort release due to ggml mismatch (dry run, continuing)."
-            CHECKS_PASSED=false
-        else
-            echo "Error: ggml must match upstream before making a release."
-            exit 1
-        fi
-    else
-        echo "local ggml/ matches upstream ${GGML_VERSION}"
-    fi
-fi
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "checks_passed=${CHECKS_PASSED}" >> "$GITHUB_OUTPUT"
