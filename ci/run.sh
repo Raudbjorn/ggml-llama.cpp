@@ -58,8 +58,8 @@ if [ ! -z "${GG_BUILD_NINJA}" ]; then
 fi
 
 
-if [ ! -z ${GG_BUILD_SYCL} ]; then
-    if [ -z ${ONEAPI_ROOT} ]; then
+if [ -n "${GG_BUILD_SYCL}" ]; then
+    if [ -z "${ONEAPI_ROOT}" ]; then
         echo "Not detected ONEAPI_ROOT, please install oneAPI base toolkit and enable it by:"
         echo "source /opt/intel/oneapi/setvars.sh"
         exit 1
@@ -73,7 +73,7 @@ if [ ! -z ${GG_BUILD_SYCL} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON"
 fi
 
-if [ ! -z ${GG_BUILD_VULKAN} ]; then
+if [ -n "${GG_BUILD_VULKAN}" ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
 
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -92,7 +92,7 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
 fi
 
 
-if [ ! -z ${GG_BUILD_NO_SVE} ]; then
+if [ -n "${GG_BUILD_NO_SVE}" ]; then
     # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm"
 fi
@@ -102,14 +102,14 @@ if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } -DGGML_CPU_KLEIDIAI=ON"
 fi
 
-if [ ! -z ${GG_BUILD_BLAS} ]; then
+if [ -n "${GG_BUILD_BLAS}" ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=${GG_BUILD_BLAS_VENDOR:-OpenBLAS}"
 else
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=OFF"
 fi
 
-if [ ! -z ${GG_BUILD_OPENVINO} ]; then
-    if [ -z ${OpenVINO_DIR} ]; then
+if [ -n "${GG_BUILD_OPENVINO}" ]; then
+    if [ -z "${OpenVINO_DIR}" ]; then
         echo "OpenVINO_DIR not found, please install OpenVINO via archives and enable it by:"
         echo "source /opt/intel/openvino/setupvars.sh"
         exit 1
@@ -680,7 +680,7 @@ test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
 
-if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
+if [ -n "${GG_BUILD_HIGH_PERF}" ]; then
     test $ret -eq 0 && gg_run test_backend_ops_cpu
 fi
 
