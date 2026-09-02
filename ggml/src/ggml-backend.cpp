@@ -37,15 +37,19 @@ static enum ggml_status ggml_backend_sched_maybe_consume_sycl_status(ggml_backen
     }
 
     const int n_backends = ggml_backend_sched_get_n_backends(sched);
+    enum ggml_status first_failure = GGML_STATUS_SUCCESS;
     for (int i = 0; i < n_backends; ++i) {
+        // Consume every backend's sticky status, not just the first failing one -
+        // an early return here would leave later backends' pending error status
+        // uncleared and it would leak into the next request.
         const enum ggml_status status =
             ggml_backend_maybe_consume_sycl_status(ggml_backend_sched_get_backend(sched, i));
-        if (status != GGML_STATUS_SUCCESS) {
-            return status;
+        if (status != GGML_STATUS_SUCCESS && first_failure == GGML_STATUS_SUCCESS) {
+            first_failure = status;
         }
     }
 
-    return GGML_STATUS_SUCCESS;
+    return first_failure;
 }
 
 #include <assert.h>

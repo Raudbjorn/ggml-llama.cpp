@@ -327,7 +327,10 @@ int llama_server(common_params & params, int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
     }
 
-    if (!params.server_tools.empty() && params.api_keys.empty()) {
+    // router-spawned children are always bound to loopback only (see CHILD_ADDR in
+    // server-models.cpp) and have their API key stripped by design (unset_reserved_args);
+    // the network-exposure risk this check guards against does not apply to them
+    if (!params.server_tools.empty() && params.api_keys.empty() && !child.is_child()) {
         SRV_ERR("%s", "built-in server tools require an API key (use --api-key)\n");
         return 1;
     }

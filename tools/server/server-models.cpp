@@ -313,6 +313,20 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
+// mask argument values that may carry secrets (e.g. MCP server env vars embedded in
+// --mcp-servers-json) before the rendered child argv is logged or exposed via the
+// router's status API; the raw args are still used to spawn the child process itself
+static std::vector<std::string> redact_sensitive_args(const std::vector<std::string> & args) {
+    static const std::set<std::string> sensitive_flags = { "--mcp-servers-json" };
+    std::vector<std::string> out = args;
+    for (size_t i = 0; i + 1 < out.size(); i++) {
+        if (sensitive_flags.count(out[i])) {
+            out[i + 1] = "<redacted>";
+        }
+    }
+    return out;
+}
+
 #ifdef _WIN32
 static std::string wide_to_utf8(const wchar_t * ws) {
     if (!ws || !*ws) {
@@ -1034,10 +1048,10 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
 
         SRV_INF("%s", "spawning server instance with args:\n");
-        for (const auto & arg : child_args) {
+        for (const auto & arg : redact_sensitive_args(child_args)) {
             SRV_INF("  %s\n", arg.c_str());
         }
-        inst.meta.args = child_args; // save for debugging
+        inst.meta.args = redact_sensitive_args(child_args); // save for debugging/display only
 
         // TODO @ngxson : maybe separate stdout and stderr in the future
         //                so that we can use stdout for commands and stderr for logging

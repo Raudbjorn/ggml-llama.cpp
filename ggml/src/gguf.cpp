@@ -783,7 +783,17 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 gguf_free(ctx);
                 return nullptr;
             }
-            size_t padded_size = GGML_PAD(ggml_nbytes(&ti.t), ctx->alignment);
+            const size_t raw_size = ggml_nbytes(&ti.t);
+            // GGML_PAD does (raw_size + alignment - 1) internally; check that add can't wrap
+            // before doing it, since a wrapped (small) padded_size would pass the accumulation
+            // check below and silently under-count ctx->size for a crafted/corrupt GGUF file.
+            if (raw_size > SIZE_MAX - (ctx->alignment - 1)) {
+                GGML_LOG_ERROR("%s: tensor '%s' size overflow computing padded size (%zu + alignment %zu)\n",
+                    __func__, ti.t.name, raw_size, ctx->alignment);
+                gguf_free(ctx);
+                return nullptr;
+            }
+            size_t padded_size = GGML_PAD(raw_size, ctx->alignment);
             if (SIZE_MAX - ctx->size < padded_size) {
                 GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %zu + %zu\n",
                     __func__, ti.t.name, ctx->size, padded_size);
