@@ -23,6 +23,32 @@ static void check_bytes(const uint8_t * got, const uint8_t * want, size_t size, 
     }
 }
 
+static void test_turbo_type_predicate() {
+    check(ggml_type_is_turbo(GGML_TYPE_TURBO2_0), 1, "turbo2 is a turbo KV type");
+    check(ggml_type_is_turbo(GGML_TYPE_TURBO3_0), 1, "turbo3 is a turbo KV type");
+    check(ggml_type_is_turbo(GGML_TYPE_TURBO4_0), 1, "turbo4 is a turbo KV type");
+    check(ggml_type_is_turbo(GGML_TYPE_F16),      0, "f16 is not a turbo KV type");
+    check(ggml_type_is_turbo(GGML_TYPE_F32),      0, "f32 is not a turbo KV type");
+    check(ggml_type_is_turbo(GGML_TYPE_BF16),     0, "bf16 is not a turbo KV type");
+    check(ggml_type_is_turbo(GGML_TYPE_Q8_0),     0, "q8_0 is not a turbo KV type");
+    check(ggml_type_is_turbo(GGML_TYPE_TQ3_1S),   0, "turbo weight types are not turbo KV types");
+}
+
+static void test_adaptive_mode_matrix() {
+    static const bool supported[] = { false, true, true, false, false, true, true, true, false, false };
+    static const bool changes_k[] = { false, true, true, false, false, false, false, false, false, false };
+    static const bool changes_v[] = { false, true, true, false, false, true, true, true, false, false };
+
+    for (int mode = 0; mode < 10; ++mode) {
+        check(llama_kv_cache_adaptive_mode_is_supported(mode), supported[mode], "adaptive mode support matrix");
+        check(llama_kv_cache_adaptive_mode_changes_k(mode), changes_k[mode], "adaptive mode K-change matrix");
+        check(llama_kv_cache_adaptive_mode_changes_v(mode), changes_v[mode], "adaptive mode V-change matrix");
+    }
+    check(llama_kv_cache_adaptive_mode_is_supported(-1), 0, "negative adaptive mode is unsupported");
+    check(llama_kv_cache_adaptive_mode_changes_k(-1), 0, "negative adaptive mode does not change K");
+    check(llama_kv_cache_adaptive_mode_changes_v(-1), 0, "negative adaptive mode does not change V");
+}
+
 static void test_q8_kv_repack_round_trip() {
     constexpr size_t blocks_per_group = 4;
     constexpr size_t quants_per_block = 32;
@@ -107,6 +133,8 @@ static void test_cpu_rejects_quants_first_q8() {
 }
 
 int main() {
+    test_turbo_type_predicate();
+    test_adaptive_mode_matrix();
     // auto-enable path (env unset)
     check(llama_kv_cache_adaptive_mode(nullptr, GGML_TYPE_TURBO2_0, 32), 7, "turbo2 V, 32 layers auto-enables Boundary V");
     check(llama_kv_cache_adaptive_mode(nullptr, GGML_TYPE_TURBO2_0, 7),  0, "turbo2 V, 7 layers stays uniform");

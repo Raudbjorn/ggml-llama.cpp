@@ -7,23 +7,12 @@
 # # CPU-only build
 # bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
-# # with CUDA support
-# GG_BUILD_CUDA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-#
-# # with ROCm support
-# GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-#
 # # with SYCL support
 # GG_BUILD_SYCL=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
 # # with VULKAN support
 # GG_BUILD_VULKAN=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
-# # with WebGPU support
-# GG_BUILD_WEBGPU=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-#
-# # with MUSA support
-# GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
 # # with KLEIDIAI support
 # GG_BUILD_KLEIDIAI=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
@@ -49,13 +38,6 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
-# gpu-rocm self-hosted runner can't upload logs to blob; keep each run's logs in
-# their own dir keyed by the GitHub run id so an Actions run URL maps to its logs.
-if [ -n "${GG_BUILD_ROCM}" ] && [ -n "${GITHUB_RUN_ID}" ]; then
-    OUT="$OUT/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
-    mkdir -p "$OUT"
-    echo "ci results dir: $OUT"
-fi
 
 rm -f $OUT/*.log
 rm -f $OUT/*.exit
@@ -75,39 +57,6 @@ if [ ! -z "${GG_BUILD_NINJA}" ]; then
     CMAKE_GENERATOR="Ninja"
 fi
 
-if [ ! -z ${GG_BUILD_METAL} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
-else
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF"
-fi
-
-if [ ! -z ${GG_BUILD_CUDA} ]; then
-    # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON -DGGML_CUDA_CUB_3DOT2=ON"
-
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d '.')
-        if [[ -n "$CUDA_ARCH" && "$CUDA_ARCH" =~ ^[0-9]+$ ]]; then
-            CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH}"
-        else
-            echo "Warning: Using fallback CUDA architectures"
-            CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_CUDA_ARCHITECTURES=61;70;75;80;86;89"
-        fi
-    else
-        echo "Error: nvidia-smi not found, cannot build with CUDA"
-        exit 1
-    fi
-fi
-
-if [ ! -z ${GG_BUILD_ROCM} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_HIP_COMPILER=$(hipconfig -l)/clang -DGGML_HIP=ON"
-    if [ -z ${GG_BUILD_AMDGPU_TARGETS} ]; then
-        echo "Missing GG_BUILD_AMDGPU_TARGETS, please set it to your GPU architecture (e.g. gfx90a, gfx1100, etc.)"
-        exit 1
-    fi
-
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGPU_TARGETS=${GG_BUILD_AMDGPU_TARGETS}"
-fi
 
 if [ ! -z ${GG_BUILD_SYCL} ]; then
     if [ -z ${ONEAPI_ROOT} ]; then
@@ -142,28 +91,6 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
     fi
 fi
 
-if [ ! -z ${GG_BUILD_WEBGPU} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
-
-    if [ ! -z "${GG_BUILD_WEBGPU_DAWN_PREFIX}" ]; then
-        if [ -z "${CMAKE_PREFIX_PATH}" ]; then
-            export CMAKE_PREFIX_PATH="${GG_BUILD_WEBGPU_DAWN_PREFIX}"
-        else
-            export CMAKE_PREFIX_PATH="${GG_BUILD_WEBGPU_DAWN_PREFIX}:${CMAKE_PREFIX_PATH}"
-        fi
-    fi
-
-    # For some systems, Dawn_DIR needs to be set explicitly, e.g., the lib64 path
-    if [ ! -z "${GG_BUILD_WEBGPU_DAWN_DIR}" ]; then
-        CMAKE_EXTRA="${CMAKE_EXTRA} -DDawn_DIR=${GG_BUILD_WEBGPU_DAWN_DIR}"
-    fi
-fi
-
-if [ ! -z ${GG_BUILD_MUSA} ]; then
-    # Use qy1 by default (MTT S80)
-    MUSA_ARCH=${MUSA_ARCH:-21}
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
-fi
 
 if [ ! -z ${GG_BUILD_NO_SVE} ]; then
     # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used
@@ -300,39 +227,6 @@ function gg_sum_ctest_release {
     gg_printf '```\n'
 }
 
-# test_llama_archs_tensor_split
-
-function gg_run_test_llama_archs_tensor_split {
-    cd ${SRC}
-
-    set -e
-
-    if [ ! -z ${GG_BUILD_CUDA} ]; then
-        GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-    fi
-
-    if [ ! -z ${GG_BUILD_METAL} ]; then
-        GGML_METAL_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_METAL_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_METAL_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_METAL_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-    fi
-
-    set +e
-}
-
-function gg_sum_test_llama_archs_tensor_split {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs test-llama-archs with 1 to 4 devices\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
-    gg_printf '```\n'
-}
 
 # test_scripts
 
@@ -391,11 +285,6 @@ function gg_run_ctest_with_model_release {
 
     (LLAMACPP_TEST_MODELFILE="$model" time ctest -C Release --output-on-failure -L model) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
-    # test memory leaks
-    #if [[ ! -z ${GG_BUILD_METAL} ]]; then
-    #    # TODO: this hangs for some reason ...
-    #    (time leaks -quiet -atExit -- ./bin/test-thread-safety -m $model --parallel 2 -t 2 -p "hello") 2>&1 | tee -a $OUT/${ci}-leaks.log
-    #fi
 
     set +e
     cd ..
@@ -790,7 +679,6 @@ ret=0
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
-test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
 if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
     test $ret -eq 0 && gg_run test_backend_ops_cpu

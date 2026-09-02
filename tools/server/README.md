@@ -198,13 +198,15 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--cors-origins ORIGINS` | comma-separated list of allowed origins for CORS (default: *)<br/>if set to special value 'localhost', reflect the Origin header only if it is localhost<br/>(env: LLAMA_ARG_CORS_ORIGINS) |
 | `--cors-methods METHODS` | comma-separated list of allowed methods for CORS (default: GET, POST, DELETE, OPTIONS)<br/>(env: LLAMA_ARG_CORS_METHODS) |
 | `--cors-headers HEADERS` | comma-separated list of allowed headers for CORS (default: *)<br/>(env: LLAMA_ARG_CORS_HEADERS) |
-| `--cors-credentials, --no-cors-credentials` | whether to allow credentials for CORS (default: enabled)<br/>note: if this is enabled and --cors-origins is set to * (default), the Origin header will be echoed back, and credentials will always be allowed<br/>(env: LLAMA_ARG_CORS_CREDENTIALS) |
+| `--cors-credentials, --no-cors-credentials` | whether to allow credentials for CORS (default: disabled)<br/>credentials are allowed only when the request Origin matches an explicitly configured origin; wildcard CORS origin ('*') forces credentials off<br/>(env: LLAMA_ARG_CORS_CREDENTIALS) |
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
 | `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
 | `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
 | `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
-| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
-| `--tools-runtime OPTION` | experimental: run tools in a separate runtime environment (default: none, use host environment)<br/>available options:<br/>  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit<br/>  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit<br/>  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required<br/><br/>(env: LLAMA_ARG_TOOLS_RUNTIME) |
+| `--ui-mcp-proxy-allow HOST[,HOST]` | direct targets with non-global numeric, local, or metadata hosts are blocked by default; this option adds exact normalized host exceptions (DNS names are case-insensitive with one trailing dot ignored)<br/>automatic redirect destinations and DNS answers are not validated or pinned, so operators must account for residual redirect and DNS-rebinding risk<br/>(env: LLAMA_ARG_UI_MCP_PROXY_ALLOW) |
+| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info<br/>requires at least one `--api-key` or `--api-key-file` entry<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
+| `--tools-runtime OPTION` | experimental: run tools in a separate runtime environment (default: none, use host environment)<br/>available options:<br/>  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit<br/>  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit<br/>  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required<br/>requests without x-tool-runtime use the configured runtime; if present, x-tool-runtime must exactly repeat the original --tools-runtime value and cannot select a different destination; execution always uses the configured runtime's effective target<br/><br/>(env: LLAMA_ARG_TOOLS_RUNTIME) |
+| `--tools-cwd-root PATH` | experimental: operator-approved root for local x-tool-cwd overrides<br/>request values must name an existing relative directory beneath this root; SSH and container runtimes do not accept x-tool-cwd<br/>(env: LLAMA_ARG_TOOLS_CWD_ROOT) |
 | `--mcp-servers-config PATH` | experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_CONFIG) |
 | `--mcp-servers-json JSON` | experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_JSON) |
 | `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
@@ -348,9 +350,11 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 
 ### Server tools support
 
-The server includes a set of server tools that enable the LLM to access the local file system directly from the Web UI.
+The server includes a set of server tools that enable the LLM to access the local file system directly from the Web UI. Built-in tools are available only when at least one API key is configured; start the server with `--tools all --api-key KEY`, or enable a comma-separated subset with `--tools name1,name2,...`. MCP-only tools do not require this built-in-tools startup check.
 
-To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
+`x-tool-runtime` cannot choose an execution target. A nonempty header must exactly match the single operator-configured `--tools-runtime`; an absent or empty header uses that configured runtime, and a header is rejected when no runtime was configured. This applies to SSH hosts and existing or newly spawned Docker/Podman containers. Network or Tailscale reachability is not authorization to run SSH as the `llama-server` host identity.
+
+For the local host runtime, per-request working directories are disabled unless the operator configures `--tools-cwd-root PATH`. `x-tool-cwd` must then be a relative path naming an existing directory whose canonical path remains beneath that root; absolute paths, `..` traversal, symlink escapes, missing paths, and files are rejected. SSH and container runtimes reject `x-tool-cwd` because the server cannot prove local canonical containment in those filesystems. This bounds only the working-directory header; it is not a sandbox for tool path arguments or shell commands.
 
 ### MCP servers
 
@@ -384,13 +388,15 @@ Every server is spawned once at startup to list its tools, then stopped, and res
 
 The child process runs with the same privileges as the server, so only declare commands you trust. As with `--tools`, `--cors-origins` then defaults to `localhost`.
 
+The MCP CORS proxy permits direct targets only when their numeric address is IANA-global, while loopback, private, link-local, IPv4-mapped loopback, and metadata destinations are denied. `--ui-mcp-proxy-allow` adds exact normalized host exceptions. Redirect destinations and post-resolution DNS addresses are not currently revalidated or pinned, so enabling the proxy still carries redirect and DNS-rebinding risk.
+
 Note: `--ui-mcp-proxy` is unrelated, it only lets the Web UI reach remote MCP servers from the browser.
 
 Any server written against the [MCP specification](https://modelcontextprotocol.io) works as is, whether it uses an official SDK or not: the transport is one JSON-RPC message per line on stdio, so a script wrapping an existing program is a valid server too.
 
 ### CORS
 
-By default the server reflects any `Origin` header back with credentials allowed. This matches the old, always-on `*` behavior and is fine as long as the server only exposes stateless, read-only endpoints.
+By default `--cors-origins` remains `*`, but CORS credentials are disabled. `--cors-credentials` takes effect only when the request `Origin` matches an explicitly configured origin; wildcard `*` forces credentials off.
 
 Enabling `--tools` or `--agent` exposes file read/write over the API, so in that case `--cors-origins` defaults to `localhost` instead: only pages served from localhost can reach the server. Pass `--cors-origins` explicitly to override either default.
 

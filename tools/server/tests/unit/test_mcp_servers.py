@@ -35,7 +35,6 @@ def _mcp_config_json(servers: dict) -> str:
 def _start_server_with_mcp(mcp_json: str, **kwargs) -> ServerProcess:
     """Helper to start a router server with MCP config."""
     srv = ServerPreset.router()
-    srv.server_tools = "all"
     srv.no_ui = True
     srv.server_port = 8085  # avoid conflict with load_all() which uses 8080
     srv.mcp_servers_json = mcp_json
@@ -117,6 +116,42 @@ def test_mcp_tool_invocation():
         server.stop()
 
 
+def test_mcp_tool_ignores_builtin_routing_headers():
+    """Built-in routing headers must not authorize, reject, or rewrite MCP calls."""
+    global server
+    mcp_json = _mcp_config_json({
+        "echo": {
+            "command": sys.executable,
+            "args": [MCP_ECHO_SERVER],
+        }
+    })
+    server = _start_server_with_mcp(mcp_json)
+
+    try:
+        res = server.make_request(
+            "POST",
+            "/tools",
+            data={
+                "tool": "echo_echo",
+                "params": {
+                    "message": "mcp routing boundary",
+                    "cwd": "operator-body-cwd",
+                    "runtime": "operator-body-runtime",
+                    "resp_type": "operator-body-response",
+                },
+            },
+            headers={
+                "x-tool-cwd": "/client/override",
+                "x-tool-runtime": "ssh:client-selected.example",
+                "x-resp-type": "client-response",
+            },
+        )
+        assert res.status_code == 200, res.body
+        assert "mcp routing boundary" in str(res.body)
+    finally:
+        server.stop()
+
+
 def test_mcp_bad_command_does_not_crash():
     """A misconfigured MCP server should not crash the llama-server."""
     global server
@@ -133,11 +168,11 @@ def test_mcp_bad_command_does_not_crash():
         res = server.make_request("GET", "/health")
         assert res.status_code == 200, res.body
 
-        # Builtin tools should still work
+        # The tools endpoint should remain healthy and omit the failed MCP server.
         res = server.make_request("GET", "/tools")
         assert res.status_code == 200, res.body
         tools = res.body
-        # Should have builtin tools but no MCP tools from the bad server
+        # No tools from the bad server should be exposed.
         mcp_tools = [t for t in tools if t.get("name", "").startswith("nonexistent_")]
         assert len(mcp_tools) == 0, f"Expected no nonexistent_ tools, got {mcp_tools}"
     finally:
@@ -182,12 +217,17 @@ def test_mcp_tools_not_listed_when_not_configured():
     global server
     server = ServerPreset.router()
     server.server_tools = "all"
+    server.api_key = "mcp-mixed-mode-test-key"
     server.no_ui = True
     server.server_port = 8085
     server.start()
 
     try:
-        res = server.make_request("GET", "/tools")
+        res = server.make_request(
+            "GET",
+            "/tools",
+            headers={"Authorization": "Bearer mcp-mixed-mode-test-key"},
+        )
         assert res.status_code == 200, res.body
 
         tools = res.body
@@ -248,7 +288,6 @@ def test_mcp_tools_via_json_config_file():
 
     try:
         server = ServerPreset.router()
-        server.server_tools = "all"
         server.no_ui = True
         server.server_port = 8085
         server.mcp_servers_config = config_path
@@ -466,7 +505,6 @@ def test_mcp_config_file_errors():
     """Invalid JSON config and missing file should cause server to fail to start."""
     # Invalid JSON - server should fail to start
     server = ServerPreset.router()
-    server.server_tools = "all"
     server.no_ui = True
     server.server_port = 8085
     server.mcp_servers_json = "not valid json"
@@ -478,7 +516,6 @@ def test_mcp_config_file_errors():
 
     # Missing file - server should fail to start
     server = ServerPreset.router()
-    server.server_tools = "all"
     server.no_ui = True
     server.server_port = 8085
     server.mcp_servers_config = "/nonexistent/path.json"

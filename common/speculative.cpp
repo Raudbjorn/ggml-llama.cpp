@@ -1878,6 +1878,10 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         // consecutive accept rounds with low acceptance fraction (< 0.5)
         int n_low = 0;
+
+        // consecutive zero-accept drafts and per-generation disable latch
+        int  n_dead = 0;
+        bool off    = false;
     };
 
     std::vector<seq_info> sinfos;
@@ -1892,8 +1896,8 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
 
         SPC_TRC("%s", "adding speculative implementation 'ngram-mod'\n");
-        SPC_TRC("- n_match=%d, n_max=%d, n_min=%d\n",
-                this->params.n_match, this->params.n_max, this->params.n_min);
+        SPC_TRC("- n_match=%d, n_max=%d, n_min=%d, n_dead_off=%d\n",
+                this->params.n_match, this->params.n_max, this->params.n_min, this->params.n_dead_off);
         SPC_TRC("- mod size=%zu (%.3f MB)\n",
                 mod.size(), (float)(mod.size_bytes())/1024/1024);
 
@@ -1910,6 +1914,9 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         sinfo.i_last = 0;
         sinfo.n_draft_last = 0;
+        sinfo.n_low = 0;
+        sinfo.n_dead = 0;
+        sinfo.off    = false;
 
         const size_t n = mod.get_n();
         if (prompt.size() < n) {
@@ -1942,6 +1949,9 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         const auto & prompt = *dparams.prompt;
 
         sinfo.n_draft_last = 0;
+        if (sinfo.off) {
+            return;
+        }
 
         const size_t cur_len = prompt.size();
         if (cur_len < mod.get_n()) {
@@ -2030,6 +2040,19 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
                 }
             } else {
                 sinfo.n_low = 0;
+            }
+
+            if (params.n_dead_off > 0) {
+                if (n_accepted == 0) {
+                    if (++sinfo.n_dead >= params.n_dead_off) {
+                        if (verbose) {
+                            SPC_TRC("%d dead ngram-mod fires - disabling for seq %d\n", sinfo.n_dead, seq_id);
+                        }
+                        sinfo.off = true;
+                    }
+                } else {
+                    sinfo.n_dead = 0;
+                }
             }
         }
     }
@@ -2299,7 +2322,16 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
 
     const std::string arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
     if (arch != "dflash") {
-        const uint32_t block_count = gguf_get_val_u32(gguf_ctx.get(), gguf_find_key(gguf_ctx.get(), (arch + ".block_count").c_str()));
+        const std::string block_count_key = arch + ".block_count";
+        const int64_t block_count_id = gguf_find_key(gguf_ctx.get(), block_count_key.c_str());
+        if (block_count_id < 0 || gguf_get_kv_type(gguf_ctx.get(), block_count_id) != GGUF_TYPE_UINT32) {
+            return {};
+        }
+
+        const uint32_t block_count = gguf_get_val_u32(gguf_ctx.get(), block_count_id);
+        if (block_count == 0) {
+            return {};
+        }
 
         if (gguf_find_tensor(gguf_ctx.get(), ("blk." + std::to_string(block_count - 1) + ".nextn.eh_proj.weight").c_str()) >= 0) {
             return { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };

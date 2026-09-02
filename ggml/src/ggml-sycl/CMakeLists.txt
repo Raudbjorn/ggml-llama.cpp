@@ -33,6 +33,10 @@ list(APPEND GGML_SOURCES_SYCL ${SRCS})
 
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
+if (LLAMA_BUILD_TESTS)
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_TESTING)
+endif()
+
 if (WIN32)
     # To generate a Visual Studio solution, using Intel C++ Compiler for ggml-sycl is mandatory
     if( ${CMAKE_GENERATOR} MATCHES "Visual Studio" AND NOT (${CMAKE_GENERATOR_TOOLSET} MATCHES "Intel C"))

@@ -25,7 +25,10 @@ on:
       '**/*.cu',
       '**/*.swift',
       '**/*.m',
-      'tools/server/**.*'
+      'tools/server/**.*',
+      'scripts/check-required-targets.sh',
+      'scripts/check-upstream-sync-invariants.sh',
+      'docs/development/upstream-merge.md'
     ]
   pull_request:
     types: [opened, synchronize, reopened]
@@ -40,7 +43,10 @@ on:
       '**/*.cu',
       '**/*.swift',
       '**/*.m',
-      'tools/server/**.*'
+      'tools/server/**.*',
+      'scripts/check-required-targets.sh',
+      'scripts/check-upstream-sync-invariants.sh',
+      'docs/development/upstream-merge.md'
     ]
 
 env:
@@ -67,6 +73,7 @@ jobs:
             xxd \
             git \
             cmake \
+            ninja-build \
             curl \
             wget \
             language-pack-en \
@@ -79,6 +86,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: Upstream sync invariants
+        run: scripts/check-upstream-sync-invariants.sh
+
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
@@ -90,8 +100,15 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -G Ninja \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
             -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config Release -j $(nproc) --target llama-server
+
+      - name: Required CPU targets
+        run: scripts/check-required-targets.sh build cpu
 
       - name: Python setup
         id: setup_python

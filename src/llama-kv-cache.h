@@ -26,6 +26,11 @@ struct llama_context;
 // must select from its own inputs, never inherit the first construction's.
 int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_t n_layer);
 
+// Shared policy matrix for the non-uniform layer-adaptive modes.
+bool llama_kv_cache_adaptive_mode_is_supported(int mode);
+bool llama_kv_cache_adaptive_mode_changes_k(int mode);
+bool llama_kv_cache_adaptive_mode_changes_v(int mode);
+
 // Decides whether to auto-upgrade turbo K to q8_0 to prevent quality
 // degradation, given the two independent triggers (GQA ratio, Qwen-family
 // architecture), the opt-out, and the symmetric-KV precondition. See the

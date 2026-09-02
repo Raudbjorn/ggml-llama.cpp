@@ -2587,15 +2587,25 @@ private:
 
                     size_t nread = 0;
                     try {
-                        size_t n_packed = 0;
+                        // sentinel: only the header/magic-check path can leave this unset; any
+                        // file that clears that check (even a legitimately empty one) reports
+                        // its real token count, including zero.
+                        size_t n_packed = (size_t) -1;
                         llama_tokens packed;
-                        nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, nullptr, 0, &n_packed);
-                        if (nread != 0) {
-                            packed.resize(std::max<size_t>(1, n_packed));
-                            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
-                        }
-                        if (nread == 0) {
+                        // probe call: capacity 0 can never fit a non-empty file, so this call's
+                        // own nread == 0 is expected and not itself an error; n_packed is what
+                        // tells us whether the header was even readable and how big to size the
+                        // real load below.
+                        llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, nullptr, 0, &n_packed);
+                        if (n_packed == (size_t) -1) {
                             throw std::runtime_error("No available space in KV cache or invalid slot save file");
+                        }
+                        if (n_packed > 0) {
+                            packed.resize(n_packed);
+                            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
+                            if (nread == 0) {
+                                throw std::runtime_error("No available space in KV cache or invalid slot save file");
+                            }
                         }
                         packed.resize(n_packed);
 

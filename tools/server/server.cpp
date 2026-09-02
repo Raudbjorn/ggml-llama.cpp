@@ -327,6 +327,11 @@ int llama_server(common_params & params, int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
     }
 
+    if (!params.server_tools.empty() && params.api_keys.empty()) {
+        SRV_ERR("%s", "built-in server tools require an API key (use --api-key)\n");
+        return 1;
+    }
+
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     std::vector<std::string> warn_names;
     if (is_router_server) {
@@ -334,8 +339,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
     }
 
     if (params.ui_mcp_proxy) {
-        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
-        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get(params.ui_mcp_proxy_allow)));
+        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post(params.ui_mcp_proxy_allow)));
         warn_names.push_back("MCP proxy (experimental)");
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
@@ -351,7 +356,11 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     if (!params.server_tools.empty() || !mcp_mgr.empty()) {
         try {
-            tools.setup(params.server_tools, mcp_mgr, params.server_tools_runtime);
+            tools.setup(
+                params.server_tools,
+                mcp_mgr,
+                params.server_tools_runtime,
+                params.server_tools_cwd_root);
         } catch (const std::exception & e) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;

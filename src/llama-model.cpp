@@ -2212,9 +2212,7 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
 
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
     llama_memory_i * res;
-    const bool turbo_v = params.type_v == GGML_TYPE_TURBO2_0 ||
-                         params.type_v == GGML_TYPE_TURBO3_0 ||
-                         params.type_v == GGML_TYPE_TURBO4_0;
+    const bool turbo_v = ggml_type_is_turbo(params.type_v);
     const bool attn_v_trans = !cparams.flash_attn && !turbo_v;
 
     if (!cparams.flash_attn && turbo_v) {

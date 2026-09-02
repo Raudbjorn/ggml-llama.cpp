@@ -91,7 +91,8 @@ void mtmd_serialization::write<std::string>(std::string value) {
 template <>
 std::string mtmd_serialization::read<std::string>() {
     uint64_t len = read<uint64_t>();
-    if (read_pos + len > data.size()) {
+    // overflow-safe: read_pos + len can wrap a corrupted/malicious uint64_t len past data.size()
+    if (len > data.size() - read_pos) {
         throw std::runtime_error("read_string OOB");
     }
     std::string str(data.data() + read_pos, len);

@@ -677,6 +677,7 @@ struct common_params {
     // enable built-in tools
     std::vector<std::string> server_tools;
     std::string server_tools_runtime;
+    std::string server_tools_cwd_root;
 
     // MCP server configs (Cursor-compatible JSON)
     std::string mcp_servers_config;   // path to JSON file with MCP server definitions
@@ -695,8 +696,6 @@ struct common_params {
     std::string media_path; // path to directory for loading media files
 
     float   slot_prompt_similarity        = 0.1f;
-    float   slot_cache_key_similarity     = 0.5f;
-    int32_t slot_cache_key_min_prefix     = 32;
 
     // batched-bench params
     bool is_pp_shared   = false;

@@ -3538,6 +3538,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
         "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info\n"
+        "requires at least one --api-key or --api-key-file entry\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);
@@ -3549,11 +3550,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "available options:\n"
         "  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit\n"
         "  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit\n"
-        "  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required\n",
+        "  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required\n"
+        "requests cannot select a runtime: x-tool-runtime, when nonempty, must exactly match this option",
         [](common_params & params, const std::string & value) {
             params.server_tools_runtime = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS_RUNTIME"));
+    add_opt(common_arg(
+        {"--tools-cwd-root"}, "PATH",
+        "experimental: operator-approved root for local x-tool-cwd overrides\n"
+        "request values must name an existing relative directory beneath this root; "
+        "SSH and container runtimes do not accept x-tool-cwd",
+        [](common_params & params, const std::string & value) {
+            params.server_tools_cwd_root = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS_CWD_ROOT"));
     add_opt(common_arg(
         {"--mcp-servers-config"}, "PATH",
         "experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)\n"
@@ -3915,20 +3926,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),
         [](common_params & params, const std::string & value) {
             params.slot_prompt_similarity = std::stof(value);
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
-        {"--slot-cache-key-similarity"}, "SIMILARITY",
-        string_format("how much the prompt of a cache_key request must match the cached slot prompt before reusing it (default: %.2f, 0.0 = disable ratio check)\n", params.slot_cache_key_similarity),
-        [](common_params & params, const std::string & value) {
-            params.slot_cache_key_similarity = std::stof(value);
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
-        {"--slot-cache-key-min-prefix"}, "N",
-        string_format("minimum common-prefix tokens required before reusing a cache_key slot (default: %d, 0 = disabled)\n", params.slot_cache_key_min_prefix),
-        [](common_params & params, const std::string & value) {
-            params.slot_cache_key_min_prefix = std::stoi(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(

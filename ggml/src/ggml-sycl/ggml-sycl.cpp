@@ -58,6 +58,10 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#ifdef GGML_SYCL_TESTING
+#include "ggml-sycl/ggml-sycl-test.h"
+#endif
+
 #include "ggml-sycl/add-id.hpp"
 #include "ggml-sycl/backend.hpp"
 #include "ggml-sycl/common.hpp"
@@ -605,6 +609,9 @@ static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_
 static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx);
 static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx);
 static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_context * dev_ctx, const sycl::exception & exc);
+#ifdef GGML_SYCL_TESTING
+static void ggml_backend_sycl_test_maybe_record_sync_failure(ggml_backend_sycl_device_context * dev_ctx);
+#endif
 
 
 static bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
@@ -4477,13 +4484,12 @@ static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_
                                     2*GGML_SYCL_DMMV_X : GGML_SYCL_DMMV_X;
     return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
            src0->ne[0] % dmmv_x_required == 0 && src1->ne[1] == 1 &&
-           src0->type != GGML_TYPE_TURBO2_0 && src0->type != GGML_TYPE_TURBO3_0 && src0->type != GGML_TYPE_TURBO4_0;
+           !ggml_type_is_turbo(src0->type);
 }
 
 static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE &&
-           src0->type != GGML_TYPE_TURBO2_0 && src0->type != GGML_TYPE_TURBO3_0 && src0->type != GGML_TYPE_TURBO4_0;
+           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE && !ggml_type_is_turbo(src0->type);
 }
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -5468,6 +5474,9 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) {
     try {
         const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
         SYCL_CHECK(CHECK_TRY_ERROR((stream)->wait()));
+#ifdef GGML_SYCL_TESTING
+        ggml_backend_sycl_test_maybe_record_sync_failure(dev_ctx);
+#endif
     } catch (sycl::exception const & exc) {
         ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
         GGML_LOG_ERROR("%s: SYCL synchronize failed: %s\n", __func__, exc.what());
@@ -6152,6 +6161,9 @@ struct ggml_backend_sycl_device_context {
     std::atomic<int> pending_status = GGML_STATUS_SUCCESS;
     std::atomic<int> pending_cause  = GGML_SYCL_FAILURE_CAUSE_NONE;
     std::atomic<int> pending_raw_code = 0;
+#ifdef GGML_SYCL_TESTING
+    std::atomic<bool> test_sync_failure_once = false;
+#endif
 };
  
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev) {
@@ -6201,6 +6213,23 @@ static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_cont
         dev_ctx->pending_raw_code.store(0);
     }
 }
+#ifdef GGML_SYCL_TESTING
+static void ggml_backend_sycl_test_maybe_record_sync_failure(ggml_backend_sycl_device_context * dev_ctx) {
+    if (dev_ctx != nullptr && dev_ctx->test_sync_failure_once.exchange(false)) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+    }
+}
+
+bool ggml_backend_sycl_test_inject_sync_failure_once(ggml_backend_t backend) {
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+    if (dev_ctx == nullptr) {
+        return false;
+    }
+
+    dev_ctx->test_sync_failure_once.store(true);
+    return true;
+}
+#endif
  
 static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_context * dev_ctx, const sycl::exception & exc) {
     if (dev_ctx != nullptr) {
@@ -6442,7 +6471,7 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                          op->type == GGML_TYPE_Q1_0 ||
                          op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_IQ4_NL ||
                          op->type == GGML_TYPE_MXFP4 || op->type == GGML_TYPE_NVFP4 ||
-                         op->type == GGML_TYPE_TURBO2_0 || op->type == GGML_TYPE_TURBO3_0 || op->type == GGML_TYPE_TURBO4_0 ||
+                         ggml_type_is_turbo(op->type) ||
                          op->type == GGML_TYPE_TQ3_1S || op->type == GGML_TYPE_TQ4_1S) &&
                         op->src[0]->type == GGML_TYPE_F32 &&
                         (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32));

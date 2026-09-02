@@ -434,6 +434,11 @@ function(ggml_add_backend backend)
         if (NOT GGML_BACKEND_DL)
             string(TOUPPER "GGML_USE_${backend}" backend_use)
             target_compile_definitions(ggml PUBLIC ${backend_use})
+            # ggml-backend.cpp (the synchronous compute wrappers that consume per-backend
+            # sticky error status, e.g. ggml_backend_maybe_consume_sycl_status) is compiled
+            # as part of ggml-base, not ggml, so it never saw this define via the line above -
+            # its #ifdef GGML_USE_<BACKEND> guards silently compiled to their no-op branch.
+            target_compile_definitions(ggml-base PUBLIC ${backend_use})
         endif()
     endif()
 endfunction()

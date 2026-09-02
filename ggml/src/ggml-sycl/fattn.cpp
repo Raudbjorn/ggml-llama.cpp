@@ -552,10 +552,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // pair so Qwen3 GQA 8:1 (after the auto-asymmetric K downgrade at
     // src/llama-kv-cache.cpp:152 fires) can reach the VEC kernel.
     const bool k_q8_0_v_turbo =
-        (K->type == GGML_TYPE_Q8_0) &&
-        (V->type == GGML_TYPE_TURBO2_0 ||
-         V->type == GGML_TYPE_TURBO3_0 ||
-         V->type == GGML_TYPE_TURBO4_0);
+        K->type == GGML_TYPE_Q8_0 && ggml_type_is_turbo(V->type);
     if (K->type != V->type && !k_q8_0_v_turbo) {
         return BEST_FATTN_KERNEL_NONE;
     }
@@ -589,8 +586,8 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // with complete K and V dequant (need_f16 = false). VEC tiles over Q columns,
     // so it serves both decode and prefill. TILE turbo is unsupported. Turbo blocks
     // span 128 elements, so only head sizes that are multiples of 128 are usable.
-    const bool K_turbo = K->type == GGML_TYPE_TURBO2_0 || K->type == GGML_TYPE_TURBO3_0 || K->type == GGML_TYPE_TURBO4_0;
-    const bool V_turbo = V->type == GGML_TYPE_TURBO2_0 || V->type == GGML_TYPE_TURBO3_0 || V->type == GGML_TYPE_TURBO4_0;
+    const bool K_turbo = ggml_type_is_turbo(K->type);
+    const bool V_turbo = ggml_type_is_turbo(V->type);
     if (K_turbo || V_turbo) {
         if (K->ne[0] % 128 != 0) {
             return BEST_FATTN_KERNEL_NONE;

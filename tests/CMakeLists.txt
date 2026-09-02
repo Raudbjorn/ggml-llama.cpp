@@ -116,6 +116,30 @@ function(llama_build_and_test source)
     set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
 endfunction()
 
+function(llama_build_chat_test)
+    if (TARGET server-context AND NOT TARGET test-chat)
+        llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+        target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
+        target_link_libraries(test-chat PRIVATE server-context)
+    endif()
+endfunction()
+
+function(llama_build_mtmd_tests)
+    if (TARGET mtmd)
+        if (NOT TARGET test-mtmd-c-api)
+            set(LLAMA_TEST_NAME test-mtmd-c-api)
+            llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-mtmd-c-api.c)
+            target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+            unset(LLAMA_TEST_NAME)
+        endif()
+
+        if (NOT TARGET test-mtmd-impl)
+            llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-mtmd-impl.cpp)
+            target_link_libraries(test-mtmd-impl PRIVATE mtmd)
+        endif()
+    endif()
+endfunction()
+
 # build test-tokenizer-0 target once and add many tests
 llama_build(test-tokenizer-0.cpp)
 
@@ -160,9 +184,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-integration.cpp)
     llama_build_and_test(test-llama-grammar.cpp)
     llama_build_and_test(test-batch-alloc.cpp)
-    llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-    target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
-    target_link_libraries(test-chat PRIVATE server-context)
+    llama_build_chat_test()
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
@@ -322,13 +344,7 @@ if (NOT GGML_BACKEND_DL)
 endif()
 
 # libmtmd
-set(LLAMA_TEST_NAME test-mtmd-c-api)
-llama_build_and_test(test-mtmd-c-api.c)
-target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
-unset(LLAMA_TEST_NAME)
-
-llama_build_and_test(test-mtmd-impl.cpp)
-target_link_libraries(test-mtmd-impl PRIVATE mtmd)
+llama_build_mtmd_tests()
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
@@ -370,6 +386,22 @@ if (TARGET gguf-model-data)
     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
 
+find_program(LLAMA_TEST_BASH NAMES bash)
+if (LLAMA_TEST_BASH AND TARGET test-llama-archs AND TARGET test-export-graph-ops)
+    add_custom_target(
+        test-turbo-attention-architectures
+        DEPENDS test-llama-archs test-export-graph-ops
+    )
+    llama_test_cmd(
+        ${LLAMA_TEST_BASH}
+        NAME test-turbo-attention-architectures
+        ARGS
+            ${CMAKE_CURRENT_SOURCE_DIR}/test-turbo-attention-architectures.sh
+            $<TARGET_FILE:test-llama-archs>
+            $<TARGET_FILE:test-export-graph-ops>
+    )
+endif()
+
 # Fork-specific TurboQuant and SYCL tests.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat grep hostname
@@ -409,14 +441,6 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
 endif()
 
-if (TARGET server-context)
-    llama_build_and_test(test-server-cors-proxy-policy.cpp)
-    target_include_directories(test-server-cors-proxy-policy PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
-    target_link_libraries(test-server-cors-proxy-policy PRIVATE server-context)
-    if (WIN32)
-        target_link_libraries(test-server-cors-proxy-policy PRIVATE ws2_32)
-    endif()
-endif()
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build(test-kv-cache-adaptive-mode.cpp)
@@ -448,4 +472,43 @@ if (GGML_SYCL)
     add_test(NAME test-sycl-turbo-correctness COMMAND test-sycl-turbo-correctness)
     set_property(TEST test-sycl-turbo-correctness PROPERTY LABELS sycl)
     set_property(TEST test-sycl-turbo-correctness PROPERTY TIMEOUT 180)
+
+    # NOTE: linking only ggml-sycl does NOT bring in ggml/include (that dir is exported PUBLIC
+    # by the `ggml`/`ggml-base` targets only, see ggml/src/CMakeLists.txt); a test that links
+    # ggml-sycl alone gets zero -I flags and silently falls through to the C compiler's system
+    # include path. On this machine that resolves to an unrelated system-installed
+    # llama.cpp-openvino package's stale /usr/include/ggml*.h instead of this tree's headers -
+    # a silent ABI/declaration mismatch, not a build error, so every one of these targets must
+    # also link `ggml` explicitly.
+    add_executable(test-sycl-fusion-eligibility test-sycl-fusion-eligibility.cpp)
+    # fusion.hpp pulls in <sycl/sycl.hpp> and <oneapi/mkl.hpp> via common.hpp/dpct/helper.hpp,
+    # so this translation unit needs -fsycl and the MKL SYCL headers itself; linking against
+    # ggml-sycl does not propagate its PRIVATE compile options/includes to consumers.
+    target_compile_options(test-sycl-fusion-eligibility PRIVATE "-fsycl")
+    target_link_options(test-sycl-fusion-eligibility PRIVATE "-fsycl")
+    # common.hpp also reaches for the private ggml-impl.h (ggml/src, not the public ggml/include).
+    target_include_directories(test-sycl-fusion-eligibility PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
+    # common.hpp needs the same directory-scoped defines ggml/src/ggml-sycl/CMakeLists.txt sets
+    # via add_compile_definitions() for its own translation units, which (being directory-scoped,
+    # not target-scoped) do not reach this file's separate directory/target at all.
+    if (GGML_SYCL_TARGET STREQUAL "INTEL")
+        target_compile_definitions(test-sycl-fusion-eligibility PRIVATE GGML_SYCL_WARP_SIZE=16)
+    endif()
+    if (GGML_SYCL_F16)
+        target_compile_definitions(test-sycl-fusion-eligibility PRIVATE GGML_SYCL_F16)
+    endif()
+    target_link_libraries(test-sycl-fusion-eligibility PRIVATE ggml ggml-sycl MKL::MKL_SYCL::BLAS)
+    add_test(NAME test-sycl-fusion-eligibility COMMAND test-sycl-fusion-eligibility)
+    set_property(TEST test-sycl-fusion-eligibility PROPERTY LABELS sycl)
+
+    add_executable(test-sycl-fattn-mkl-policy test-sycl-fattn-mkl-policy.cpp)
+    target_include_directories(test-sycl-fattn-mkl-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-sycl)
+    target_link_libraries(test-sycl-fattn-mkl-policy PRIVATE ggml ggml-sycl)
+    add_test(NAME test-sycl-fattn-mkl-policy COMMAND test-sycl-fattn-mkl-policy)
+    set_property(TEST test-sycl-fattn-mkl-policy PROPERTY LABELS sycl)
+
+    add_executable(test-sycl-status-propagation test-sycl-status-propagation.cpp)
+    target_link_libraries(test-sycl-status-propagation PRIVATE ggml ggml-sycl)
+    add_test(NAME test-sycl-status-propagation COMMAND test-sycl-status-propagation)
+    set_property(TEST test-sycl-status-propagation PROPERTY LABELS sycl)
 endif()

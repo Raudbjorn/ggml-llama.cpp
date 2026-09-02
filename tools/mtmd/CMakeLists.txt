@@ -97,6 +97,10 @@ if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
+if (COMMAND llama_build_mtmd_tests)
+    llama_build_mtmd_tests()
+endif()
+
 set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd.h
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-helper.h

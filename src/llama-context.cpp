@@ -581,8 +581,7 @@ llama_context::llama_context(
         sched_reserve();
 
         if (!cparams.flash_attn) {
-            if (ggml_is_quantized(params.type_v) &&
-                params.type_v != GGML_TYPE_TURBO2_0 && params.type_v != GGML_TYPE_TURBO3_0 && params.type_v != GGML_TYPE_TURBO4_0) {
+            if (ggml_is_quantized(params.type_v) && !ggml_type_is_turbo(params.type_v)) {
                 throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
             }
         }
@@ -3142,13 +3141,16 @@ bool llama_context::state_load_file(const char * filepath, llama_token * tokens_
     {
         const uint32_t n_token_count = file.read_u32();
 
+        // report the actual count even when capacity is insufficient, so a capacity=0
+        // probe call can still learn how large a buffer the caller needs to allocate.
+        *n_token_count_out = n_token_count;
+
         if (n_token_count > n_token_capacity) {
             LLAMA_LOG_ERROR("%s: token count in session file exceeded capacity! %u > %zu\n", __func__, n_token_count, n_token_capacity);
             return false;
         }
 
         file.read_raw(tokens_out, sizeof(llama_token) * n_token_count);
-        *n_token_count_out = n_token_count;
     }
 
     // restore the context state
@@ -3202,13 +3204,16 @@ size_t llama_context::state_seq_load_file(llama_seq_id seq_id, const char * file
     {
         const uint32_t n_token_count = file.read_u32();
 
+        // report the actual count even when capacity is insufficient, so a capacity=0
+        // probe call can still learn how large a buffer the caller needs to allocate.
+        *n_token_count_out = n_token_count;
+
         if (n_token_count > n_token_capacity) {
             LLAMA_LOG_ERROR("%s: token count in sequence state file exceeded capacity! %u > %zu\n", __func__, n_token_count, n_token_capacity);
             return 0;
         }
 
         file.read_raw(tokens_out, sizeof(llama_token) * n_token_count);
-        *n_token_count_out = n_token_count;
     }
 
     // restore the context state
@@ -3666,9 +3671,7 @@ llama_context * llama_init_from_model(
 
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {
         const uint32_t blck_size = ggml_blck_size(params.type_k);
-        const bool k_is_turbo = (params.type_k == GGML_TYPE_TURBO2_0 ||
-                                 params.type_k == GGML_TYPE_TURBO3_0 ||
-                                 params.type_k == GGML_TYPE_TURBO4_0);
+        const bool k_is_turbo = ggml_type_is_turbo(params.type_k);
         for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
             uint32_t head_k = model->hparams.n_embd_head_k(il);
             // Turbo types zero-pad heads to next multiple of 128 in llama-kv-cache.cpp
@@ -3685,9 +3688,7 @@ llama_context * llama_init_from_model(
 
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_v)) {
         const uint32_t blck_size = ggml_blck_size(params.type_v);
-        const bool v_is_turbo = (params.type_v == GGML_TYPE_TURBO2_0 ||
-                                 params.type_v == GGML_TYPE_TURBO3_0 ||
-                                 params.type_v == GGML_TYPE_TURBO4_0);
+        const bool v_is_turbo = ggml_type_is_turbo(params.type_v);
         const bool is_mla = model->hparams.is_mla();
         for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
             uint32_t head_v = model->hparams.n_embd_head_v(il);
@@ -3705,15 +3706,14 @@ llama_context * llama_init_from_model(
 
     // TurboQuant cache types work best with flash attention, but fall back to MUL_MAT if not available
     if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
-        (params.type_k == GGML_TYPE_TURBO2_0 || params.type_k == GGML_TYPE_TURBO3_0 || params.type_k == GGML_TYPE_TURBO4_0 ||
-         params.type_v == GGML_TYPE_TURBO2_0 || params.type_v == GGML_TYPE_TURBO3_0 || params.type_v == GGML_TYPE_TURBO4_0)) {
-        const bool v_is_turbo = params.type_v == GGML_TYPE_TURBO2_0 || params.type_v == GGML_TYPE_TURBO3_0 || params.type_v == GGML_TYPE_TURBO4_0;
+        (ggml_type_is_turbo(params.type_k) || ggml_type_is_turbo(params.type_v))) {
+        const bool v_is_turbo = ggml_type_is_turbo(params.type_v);
         LLAMA_LOG_WARN("%s: turbo cache types perform best with flash_attn - falling back to MUL_MAT attention%s\n",
             __func__, v_is_turbo ? " (V is dequantized to F32 at attention time)" : "");
     }
 
     if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
-        params.type_v != GGML_TYPE_TURBO2_0 && params.type_v != GGML_TYPE_TURBO3_0 && params.type_v != GGML_TYPE_TURBO4_0) {
+        !ggml_type_is_turbo(params.type_v)) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
     }

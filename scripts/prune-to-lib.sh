@@ -117,6 +117,7 @@ if [ "$DO_CHECK" = 1 ]; then
             -DLLAMA_BUILD_TESTS=ON \
             -DLLAMA_BUILD_TOOLS=ON \
             -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_SERVER=OFF \
             > "$CHECK_DIR.log" 2>&1; then
         echo "ERROR: CMake configure failed on the pruned tree; branch NOT updated" >&2
         echo "log: $CHECK_DIR.log (worktree preserved: $WT)" >&2

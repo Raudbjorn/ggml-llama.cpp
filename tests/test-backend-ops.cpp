@@ -11146,6 +11146,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const c
     return test_cases;
 }
 
+#if defined(__APPLE__)
 // ---- FA vec (Q,NE): forced-config numerical slice (Metal only) ----
 using set_fa_vec_override_t   = void (*)(int, int);
 using clear_fa_vec_override_t = void (*)(void);
@@ -11240,6 +11241,7 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
 
     return n_fail == 0;
 }
+#endif
 
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
                          printer * output_printer, const char * test_file_path, int parallel_workers) {
@@ -11378,7 +11380,10 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        bool slice_ok = true;
+#if defined(__APPLE__)
+        slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+#endif
 
         return n_ok == tests_run && slice_ok;
     }

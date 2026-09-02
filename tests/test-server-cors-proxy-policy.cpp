@@ -31,6 +31,21 @@ int main() {
 #endif
 
     for (const char * url : {
+            "http://@example.com/",
+            "http://example.com:/",
+            "http://example.com:0/",
+            "http://example.com:65536/",
+            "http://example.com:not-a-port/",
+            "http://[::1]suffix/",
+            "http://example.com?query",
+        }) {
+        if (proxy_target_url_syntax_error(url).empty()) {
+            std::cerr << "expected malformed target URL to be rejected: " << url << std::endl;
+            return 1;
+        }
+    }
+
+    for (const char * url : {
             "http://8.8.8.8/",
             "https://[2606:4700:4700::1111]/",
             "http://192.0.0.9/",

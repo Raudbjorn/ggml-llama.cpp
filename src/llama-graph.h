@@ -1163,6 +1163,26 @@ struct llm_graph_context {
     // attention
     //
 
+    // TurboQuant: zero-pad q to a turbo-typed k's 128-element block width and
+    // apply the matching forward WHT rotation. No-op when k is not turbo-typed.
+    // For attention paths that bypass build_attn_mha (e.g. the DSA lightning
+    // indexer), which must enter the same rotated domain as the cached K.
+    ggml_tensor * build_attn_pad_turbo_query(
+            ggml_tensor       * q,
+      const ggml_tensor       * k,
+            ggml_tensor       * innerq_scale) const;
+
+    // TurboQuant: strip the zero-padding a turbo-typed V introduces to reach
+    // its 128-element block width, restoring the caller's true head width.
+    // No-op when v is not turbo-typed or already matches original_v_head.
+    // For attention paths that call build_attn_mha() directly instead of
+    // through one of the build_attn() overloads above, which already do this.
+    ggml_tensor * build_attn_strip_padded_turbo_v(
+            ggml_tensor       * cur,
+      const ggml_tensor       * v,
+              int64_t            original_v_head,
+              int64_t            n_head) const;
+
     ggml_tensor * build_attn_mha(
             ggml_tensor * q,       // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k,       // [n_embd_head_k, n_head_k, n_tokens]
