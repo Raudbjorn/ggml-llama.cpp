@@ -176,21 +176,7 @@ void llama_kv_cache_dsa::state_write(llama_io_write_i & io, llama_seq_id seq_id,
 
 void llama_kv_cache_dsa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     kv_mla->state_read(io, seq_id, flags);
-
-    // kv_mla and kv_lid are restored as one logical unit - each of their own state_read()
-    // already rolls itself back to a clean state on failure (see llama_kv_cache::state_read_sinfo),
-    // but if kv_lid fails after kv_mla already succeeded, the pair is left mismatched (mla
-    // restored, lid still on its old/empty state) unless kv_mla is rolled back here too.
-    try {
-        kv_lid->state_read(io, seq_id, flags);
-    } catch (...) {
-        if (seq_id == -1) {
-            kv_mla->clear(true);
-        } else {
-            kv_mla->seq_rm(seq_id, -1, -1);
-        }
-        throw;
-    }
+    kv_lid->state_read(io, seq_id, flags);
 }
 
 llama_kv_cache * llama_kv_cache_dsa::get_mla() const {
