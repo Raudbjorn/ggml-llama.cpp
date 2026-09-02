@@ -305,6 +305,13 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    // router-level tool/MCP config (may carry secrets, e.g. env vars embedded in
+    // --mcp-servers-json) must not leak into a spawned model child's environment
+    preset.unset_option("LLAMA_ARG_TOOLS");
+    preset.unset_option("LLAMA_ARG_TOOLS_RUNTIME");
+    preset.unset_option("LLAMA_ARG_TOOLS_CWD_ROOT");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_CONFIG");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_JSON");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");

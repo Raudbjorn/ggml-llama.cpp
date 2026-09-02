@@ -33,7 +33,10 @@ list(APPEND GGML_SOURCES_SYCL ${SRCS})
 
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
-if (LLAMA_BUILD_TESTS)
+# LLAMA_BUILD_TESTS covers this fork's canonical build (a llama.cpp superproject
+# build, where GGML_BUILD_TESTS is off by default per docs/); GGML_BUILD_TESTS
+# covers a ggml-standalone test build, where LLAMA_BUILD_TESTS doesn't apply.
+if (LLAMA_BUILD_TESTS OR GGML_BUILD_TESTS)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_TESTING)
 endif()
 
