@@ -334,8 +334,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
     }
 
     if (params.ui_mcp_proxy) {
-        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
-        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get(params.ui_mcp_proxy_allow)));
+        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post(params.ui_mcp_proxy_allow)));
         warn_names.push_back("MCP proxy (experimental)");
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));

@@ -87,6 +87,71 @@ struct test_object {
     }
 };
 
+static bool is_turbo_kv_type(ggml_type type) {
+    return type == GGML_TYPE_TURBO2_0 ||
+           type == GGML_TYPE_TURBO3_0 ||
+           type == GGML_TYPE_TURBO4_0;
+}
+
+static int count_turbo_wht_on_query_layout_chain(const ggml_tensor * tensor, int direction) {
+    std::set<const ggml_tensor *> visited;
+    int count = 0;
+
+    while (tensor && visited.insert(tensor).second) {
+        switch (tensor->op) {
+            case GGML_OP_TURBO_WHT: {
+                int tensor_direction;
+                memcpy(&tensor_direction, tensor->op_params, sizeof(tensor_direction));
+                count += tensor_direction == direction;
+                tensor = tensor->src[0];
+            } break;
+            case GGML_OP_VIEW:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_PERMUTE:
+            case GGML_OP_TRANSPOSE:
+            case GGML_OP_CONT:
+            case GGML_OP_PAD:
+                tensor = tensor->src[0];
+                break;
+            default:
+                return count;
+        }
+    }
+
+    return count;
+}
+
+static bool check_turbo_attention_query_order(ggml_cgraph * graph, const char * label) {
+    int n_checked = 0;
+
+    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+        const ggml_tensor * node = ggml_graph_node(graph, i);
+        const ggml_tensor * query = nullptr;
+
+        if (node->op == GGML_OP_FLASH_ATTN_EXT && node->src[1] && is_turbo_kv_type(node->src[1]->type)) {
+            query = node->src[0];
+        } else if (node->op == GGML_OP_MUL_MAT && node->src[0] && is_turbo_kv_type(node->src[0]->type)) {
+            query = node->src[1];
+        }
+
+        if (!query) {
+            continue;
+        }
+
+        const int n_forward = count_turbo_wht_on_query_layout_chain(query, 0);
+        if (n_forward != 1) {
+            LOG_ERR("%s: turbo attention node %d has %d forward WHT ops on its query layout chain, expected 1\n",
+                    label, i, n_forward);
+            return false;
+        }
+
+        ++n_checked;
+    }
+
+    LOG_INF("%s: checked forward WHT ordering for %d turbo attention nodes\n", label, n_checked);
+    return true;
+}
+
 static void extract_graph_ops(ggml_cgraph * cgraph, const char * label, std::set<test_object> & tests) {
     int n_nodes = ggml_graph_n_nodes(cgraph);
     int n_skipped = 0;
@@ -204,11 +269,17 @@ int main(int argc, char ** argv) {
         LOG_ERR("failed to reserve prompt processing graph\n");
         return 1;
     }
+    if (!check_turbo_attention_query_order(gf_pp, "pp")) {
+        return 1;
+    }
     extract_graph_ops(gf_pp, "pp", tests);
 
     auto * gf_tg = llama_graph_reserve(ctx, n_seqs, n_seqs, n_seqs);
     if (!gf_tg) {
         LOG_ERR("failed to reserve token generation graph\n");
+        return 1;
+    }
+    if (!check_turbo_attention_query_order(gf_tg, "tg")) {
         return 1;
     }
     extract_graph_ops(gf_tg, "tg", tests);

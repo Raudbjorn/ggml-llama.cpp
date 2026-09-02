@@ -12,6 +12,41 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"
+#endif
+
+#ifdef GGML_USE_SYCL
+static enum ggml_status ggml_backend_maybe_consume_sycl_status(ggml_backend_t backend) {
+    if (backend == NULL || !ggml_backend_is_sycl(backend)) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    return ggml_backend_sycl_consume_last_status(backend);
+}
+#else
+static enum ggml_status ggml_backend_maybe_consume_sycl_status(ggml_backend_t backend) {
+    GGML_UNUSED(backend);
+    return GGML_STATUS_SUCCESS;
+}
+#endif
+
+static enum ggml_status ggml_backend_sched_maybe_consume_sycl_status(ggml_backend_sched_t sched) {
+    if (sched == NULL) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    const int n_backends = ggml_backend_sched_get_n_backends(sched);
+    for (int i = 0; i < n_backends; ++i) {
+        const enum ggml_status status =
+            ggml_backend_maybe_consume_sycl_status(ggml_backend_sched_get_backend(sched, i));
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
+        }
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
 
 #include <assert.h>
 #include <limits.h>
@@ -453,9 +488,10 @@ enum ggml_status ggml_backend_graph_plan_compute(ggml_backend_t backend, ggml_ba
 }
 
 enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
+    const enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
     ggml_backend_synchronize(backend);
-    return err;
+    const enum ggml_status sync_err = ggml_backend_maybe_consume_sycl_status(backend);
+    return err != GGML_STATUS_SUCCESS ? err : sync_err;
 }
 
 enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
@@ -2013,9 +2049,10 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
 }
 
 enum ggml_status ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
-    enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
+    const enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
     ggml_backend_sched_synchronize(sched);
-    return err;
+    const enum ggml_status sync_err = ggml_backend_sched_maybe_consume_sycl_status(sched);
+    return err != GGML_STATUS_SUCCESS ? err : sync_err;
 }
 
 enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {

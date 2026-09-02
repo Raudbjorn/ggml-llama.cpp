@@ -105,6 +105,8 @@ src/llama-turbo-innerq-runtime.cpp
 
 Also preserve TurboQuant template instances under `ggml/src/ggml-sycl/template-instances/`, graph-side WHT calls in `src/llama-graph.cpp`, and auto-asymmetric/layer-adaptive policy in `src/llama-kv-cache.cpp`.
 
+Treat `CONTRIBUTING.md`, `.github/`, `ci/run.sh`, `scripts/`, `vendor/CMakeLists.txt`, and the server proxy policy as fork-owned review surfaces. In particular, preserve `tools/server/server-cors-proxy.h`, its routing in `tools/server/server.cpp`, and `tools/server/tests/unit/test_proxy.py`. Upstream versions may be useful inputs, but they must not restore removed backend automation, weaken private reporting, or remove proxy destination policy.
+
 The list is a floor, not a substitute for comparing the current fork against the merge base. New fork-owned files added after this guide must be inventoried before each merge.
 
 ## Phase 1: establish immutable inputs
@@ -117,6 +119,7 @@ set -euo pipefail
 REPO=/mnt/mrgr/llama-resync
 BASE_BRANCH=resync
 UPSTREAM_URL=https://github.com/ggml-org/llama.cpp
+EXPECTED_UPSTREAM_TIP=3466812d1
 MERGE_BRANCH="merge/upstream-$(date +%F)"
 
 cd "$REPO"
@@ -127,10 +130,12 @@ git fetch upstream master
 
 FORK_TIP=$(git rev-parse "$BASE_BRANCH")
 UPSTREAM_TIP=$(git rev-parse FETCH_HEAD)
+EXPECTED_UPSTREAM_TIP=$(git rev-parse "${EXPECTED_UPSTREAM_TIP}^{commit}")
+test "$UPSTREAM_TIP" = "$EXPECTED_UPSTREAM_TIP"
 MERGE_BASE=$(git merge-base "$FORK_TIP" "$UPSTREAM_TIP")
 
-printf 'REPO=%s\nBASE_BRANCH=%s\nMERGE_BRANCH=%s\nFORK_TIP=%s\nUPSTREAM_TIP=%s\nMERGE_BASE=%s\n' \
-  "$REPO" "$BASE_BRANCH" "$MERGE_BRANCH" "$FORK_TIP" "$UPSTREAM_TIP" "$MERGE_BASE" \
+printf 'REPO=%s\nBASE_BRANCH=%s\nMERGE_BRANCH=%s\nFORK_TIP=%s\nEXPECTED_UPSTREAM_TIP=%s\nUPSTREAM_TIP=%s\nMERGE_BASE=%s\n' \
+  "$REPO" "$BASE_BRANCH" "$MERGE_BRANCH" "$FORK_TIP" "$EXPECTED_UPSTREAM_TIP" "$UPSTREAM_TIP" "$MERGE_BASE" \
   > .git/upstream-merge.env
 
 git switch -c "$MERGE_BRANCH" "$FORK_TIP"
@@ -151,6 +156,7 @@ The merge base, not memory, defines fork-owned work:
 source .git/upstream-merge.env
 
 git diff --name-status "$MERGE_BASE..$FORK_TIP" -- \
+  .github ci scripts vendor CONTRIBUTING.md docs/development/upstream-merge.md \
   ggml/include ggml/src src common tests tools CMakeLists.txt cmake \
   > /tmp/llama-fork-delta.txt
 
@@ -204,6 +210,10 @@ common/
 src/
 tests/
 tools/
+.github/
+ci/
+scripts/
+vendor/
 ```
 
 Remove only blocks that register, compile, include, dispatch, or require excluded backends. Keep shared code merely because an excluded backend also uses it. Keep explanatory documentation unless the documentation falsely claims that the fork ships the backend.
@@ -217,8 +227,13 @@ REMOVED_DIR_RE='ggml-(cann|cuda|et|hexagon|hip|metal|musa|opencl|rpc|virtgpu|web
 REMOVED_MACRO_RE='GGML_(USE_)?(CANN|CUDA|ET|HEXAGON|HIP|METAL|MUSA|OPENCL|RPC|VIRTGPU|WEBGPU|ZDNN|ZENDNN)'
 
 grep -RInE "$REMOVED_DIR_RE|$REMOVED_MACRO_RE" \
-  "$SCRATCH/CMakeLists.txt" "$SCRATCH/cmake" "$SCRATCH/ggml" \
-  "$SCRATCH/common" "$SCRATCH/src" "$SCRATCH/tests" "$SCRATCH/tools"
+  "$SCRATCH/.github" "$SCRATCH/CMakeLists.txt" "$SCRATCH/ci" \
+  "$SCRATCH/cmake" "$SCRATCH/ggml" "$SCRATCH/common" "$SCRATCH/src" \
+  "$SCRATCH/scripts" "$SCRATCH/tests" "$SCRATCH/tools" "$SCRATCH/vendor"
+
+grep -RInE \
+  'ui_mcp_proxy_allow|proxy_handler_(get|post)|proxy_request|metadata\.(google\.internal|goog)' \
+  "$SCRATCH/common" "$SCRATCH/tools/server"
 ```
 
 Treat every hit as a review item, not an automatic deletion instruction. A comment describing unsupported CUDA behavior is different from `add_subdirectory(src/ggml-cuda)`.
@@ -289,6 +304,11 @@ Verify the object before merging:
 source .git/upstream-merge.env
 
 test "$(git show -s --format=%P "$SNAPTIP")" = "$MERGE_BASE"
+test "$(git rev-parse "$SNAPTIP^{tree}")" = "$SANITIZED_TREE"
+test "$(git merge-base "$FORK_TIP" "$SNAPTIP")" = "$MERGE_BASE"
+git merge-base --is-ancestor "$MERGE_BASE" "$FORK_TIP"
+git merge-base --is-ancestor "$MERGE_BASE" "$UPSTREAM_TIP"
+git diff --name-status "$UPSTREAM_TIP" "$SNAPTIP" > /tmp/llama-sanitized-delta.txt
 git diff --stat "$UPSTREAM_TIP" "$SNAPTIP"
 ```
 
@@ -398,7 +418,7 @@ done
 
 git grep -nE \
   'ggml-(cann|cuda|et|hexagon|hip|metal|musa|opencl|rpc|virtgpu|webgpu|zdnn|zendnn)|GGML_(USE_)?(CANN|CUDA|ET|HEXAGON|HIP|METAL|MUSA|OPENCL|RPC|VIRTGPU|WEBGPU|ZDNN|ZENDNN)' \
-  -- CMakeLists.txt cmake ggml/include ggml/src common src tests tools
+  -- .github CMakeLists.txt ci cmake ggml/include ggml/src common scripts src tests tools vendor
 ```
 
 Review any output. The completion condition is not mechanically zero text matches; it is zero compiled or runtime dependency on excluded backends.
@@ -420,11 +440,24 @@ FORK_FILES=(
   ggml/src/ggml-sycl/sycl-mutable-command-list-probe.cpp
   ggml/src/ggml-sycl/sycl-mutable-command-list-probe.cl
   src/llama-turbo-innerq-runtime.cpp
+  .github/labeler.yml
+  .github/ISSUE_TEMPLATE/010-bug-compilation.yml
+  .github/ISSUE_TEMPLATE/011-bug-results.yml
+  ci/run.sh
+  CONTRIBUTING.md
+  vendor/CMakeLists.txt
+  docs/development/upstream-merge.md
+  tools/server/server-cors-proxy.h
+  tools/server/server.cpp
+  tools/server/tests/unit/test_proxy.py
 )
 
 for path in "${FORK_FILES[@]}"; do
   test -f "$path" || { echo "missing: $path"; exit 1; }
 done
+
+test ! -e .github/workflows/build-wasm.yml
+test ! -d scripts/snapdragon
 ```
 
 Then verify symbols and wiring, not only file presence:
@@ -434,6 +467,8 @@ git grep -n 'GGML_OP_TURBO_WHT' -- ggml/include ggml/src src tests
 git grep -n 'ggml_turbo_wht' -- ggml/include ggml/src src tests
 git grep -nE 'TURBO_AUTO_ASYMMETRIC|TURBO_LAYER_ADAPTIVE' -- src
 git grep -n 'llama_memory_clear_data_only' -- include src tests
+git grep -nE 'ui_mcp_proxy_allow|proxy_handler_(get|post)|proxy_request' -- common tools/server
+git grep -nE 'loopback|link-local|metadata|allowlist|private' -- tools/server/tests/unit/test_proxy.py
 ```
 
 Completion means every required symbol has a declaration, implementation, dispatch or call site as appropriate, and a source file registered in CMake.
@@ -460,7 +495,7 @@ git diff --check
 git diff --cached --check
 
 if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- \
-  CMakeLists.txt cmake common ggml include src tests tools; then
+  .github CMakeLists.txt ci cmake common docs ggml include scripts src tests tools vendor; then
   echo "conflict markers remain" >&2
   exit 1
 fi
@@ -634,6 +669,8 @@ Inspect the staged change at subsystem level. Confirm the merge is still active 
 source .git/upstream-merge.env
 
 test "$(git rev-parse MERGE_HEAD)" = "$SNAPTIP"
+test "$(git show -s --format=%P "$SNAPTIP")" = "$MERGE_BASE"
+test "$(git merge-base "$FORK_TIP" "$SNAPTIP")" = "$MERGE_BASE"
 test "$(git branch --show-current)" = "$MERGE_BRANCH"
 ```
 
@@ -649,8 +686,10 @@ Verify parent order and cleanliness:
 source .git/upstream-merge.env
 
 set -- $(git show -s --format='%P' HEAD)
+test "$#" -eq 2
 test "$1" = "$FORK_TIP"
 test "$2" = "$SNAPTIP"
+test "$(git merge-base "$1" "$2")" = "$MERGE_BASE"
 test -z "$(git status --porcelain)"
 
 git show -s --format='%H%n%P%n%s' HEAD
@@ -716,16 +755,21 @@ A verification statement must name the exact command or observable result. "Buil
 
 ## Completion checklist
 
+- [ ] Upstream tip is exactly `3466812d1` and resolves to the recorded full object ID.
 - [ ] Clean fork tip, upstream tip, and merge base recorded before editing.
 - [ ] Current fork delta classified from the merge base.
 - [ ] Sanitized upstream tree excludes all policy-removed backends.
 - [ ] Sanitized tree configures independently.
 - [ ] Snapshot commit has the real merge base as its sole parent.
 - [ ] Snapshot differs from upstream only by intentional sanitization.
+- [ ] Snapshot tree matches the sanitized tree object and its sole parent is the real merge base.
 - [ ] All conflicts resolved by behavior, not blanket side selection.
 - [ ] TurboQuant numeric type ABI remains 43-47 with count 48.
 - [ ] Fork-owned sources, graph wiring, KV policy, and SYCL dispatch remain present.
+- [ ] Fork governance, `.github` automation, `ci/run.sh`, `scripts`, vendor policy, and server proxy policy survived with explicit dispositions.
 - [ ] No excluded backend is compiled, registered, or required at runtime.
+- [ ] Removed backend workflows, labels, issue choices, CI branches, and Snapdragon scripts are absent.
+- [ ] Proxy allowlist consumption and private/metadata rejection tests remain present.
 - [ ] No unresolved paths, conflict markers, or whitespace errors remain.
 - [ ] CPU build and TurboQuant CPU gates pass.
 - [ ] UI source builds with fallback disabled.

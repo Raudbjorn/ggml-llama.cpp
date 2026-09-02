@@ -190,11 +190,13 @@ def container_id(container_engine: str):
         subprocess.run([container_engine, "rm", "-f", cid], capture_output=True)
 
 
-def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
+def test_tools_builtin_runtime_header_exact_configured_target(container_engine: str, container_id: str):
     global server
+    configured_runtime = f"{container_engine}-container:{container_id}"
+    server.server_tools_runtime = configured_runtime
     server.start()
 
-    headers = {"x-tool-runtime": f"{container_engine}-container:{container_id}", "x-tool-cwd": "/tmp"}
+    headers = {"x-tool-runtime": configured_runtime, "x-tool-cwd": "/tmp"}
 
     write_res = call_tool("write_file", {"path": "test.log", "content": "hello container\n"}, headers=headers)
     assert write_res["result"] == "file written successfully"
@@ -206,42 +208,51 @@ def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
     assert "hello container" in exec_res["plain_text_response"]
 
 
-def test_tools_builtin_runtime_header_unknown_scheme():
+@pytest.mark.parametrize("runtime_header", [None, ""], ids=["absent", "empty"])
+def test_tools_builtin_runtime_header_absent_or_empty_uses_configured_target(
+    container_engine: str, container_id: str, runtime_header: str | None,
+):
+    global server
+    server.server_tools_runtime = f"{container_engine}-container:{container_id}"
+    server.start()
+
+    marker_name = f"llama-tools-runtime-{container_id[:12]}-{runtime_header is not None}.txt"
+    host_marker = os.path.join("/tmp", marker_name)
+    headers = {"x-tool-cwd": "/tmp"}
+    if runtime_header is not None:
+        headers["x-tool-runtime"] = runtime_header
+
+    try:
+        call_tool("write_file", {"path": marker_name, "content": "configured runtime\n"}, headers=headers)
+        assert not os.path.exists(host_marker), "tool unexpectedly ran on the host"
+        read_res = call_tool("read_file", {"path": marker_name}, headers=headers)
+        assert read_res["plain_text_response"] == "configured runtime\n"
+    finally:
+        if os.path.exists(host_marker):
+            os.remove(host_marker)
+
+
+def test_tools_builtin_runtime_header_requires_configured_runtime():
     global server
     server.start()
 
-    # an unknown runtime must fail, never silently fall back to running on the host
     res = server.make_request("POST", "/tools",
                               data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
-                              headers={"x-tool-runtime": "fake:does-not-exist"})
-    assert res.status_code == 500, res.body
-    assert "unknown tool runtime" in str(res.body)
+                              headers={"x-tool-runtime": "ssh:unconfigured.example"})
+    assert res.status_code == 400, res.body
+    assert "requires a configured --tools-runtime" in str(res.body)
 
 
-def test_tools_builtin_runtime_header_rejects_ssh_option_injection():
+def test_tools_builtin_runtime_header_rejects_configured_runtime_mismatch():
     global server
+    server.server_tools_runtime = "ssh:configured.example"
     server.start()
 
-    # ssh reads options from its argv, so a target starting with '-' must be rejected
     res = server.make_request("POST", "/tools",
                               data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
-                              headers={"x-tool-runtime": "ssh:-oProxyCommand=touch /tmp/pwned"})
-    assert res.status_code == 500, res.body
-    assert "invalid ssh target" in str(res.body)
-
-
-@pytest.mark.parametrize("engine", ["docker", "podman"])
-def test_tools_builtin_runtime_header_rejects_container_option_injection(engine: str):
-    global server
-    server.start()
-
-    # the container id lands on the `<engine> exec` command line, so an id that looks
-    # like an option must be rejected
-    res = server.make_request("POST", "/tools",
-                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
-                              headers={"x-tool-runtime": f"{engine}-container:--privileged"})
-    assert res.status_code == 500, res.body
-    assert "invalid container id" in str(res.body)
+                              headers={"x-tool-runtime": "ssh:different.example"})
+    assert res.status_code == 400, res.body
+    assert "must exactly match the configured --tools-runtime" in str(res.body)
 
 
 def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
@@ -252,12 +263,14 @@ def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
         pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
     global server
-    server.server_tools_runtime = f"docker:{CONTAINER_IMAGE}"
+    configured_runtime = f"docker:{CONTAINER_IMAGE}"
+    server.server_tools_runtime = configured_runtime
     server.start()
 
-    # exec_shell_command runs inside the container spawned for --tools-runtime; docker sets
-    # the container's hostname to its own short id, so this also tells us which one to check
-    res = call_tool("exec_shell_command", {"command": "hostname"})
+    # The header authorizes the original image spec, while execution must use the
+    # runtime object's effective docker-container:<generated-id> attachment spec.
+    res = call_tool("exec_shell_command", {"command": "hostname"},
+                    headers={"x-tool-runtime": configured_runtime})
     container_id = res["plain_text_response"].splitlines()[0].strip()
     assert len(container_id) >= 8, res
 

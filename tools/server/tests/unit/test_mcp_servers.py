@@ -117,6 +117,42 @@ def test_mcp_tool_invocation():
         server.stop()
 
 
+def test_mcp_tool_ignores_builtin_routing_headers():
+    """Built-in routing headers must not authorize, reject, or rewrite MCP calls."""
+    global server
+    mcp_json = _mcp_config_json({
+        "echo": {
+            "command": sys.executable,
+            "args": [MCP_ECHO_SERVER],
+        }
+    })
+    server = _start_server_with_mcp(mcp_json)
+
+    try:
+        res = server.make_request(
+            "POST",
+            "/tools",
+            data={
+                "tool": "echo_echo",
+                "params": {
+                    "message": "mcp routing boundary",
+                    "cwd": "operator-body-cwd",
+                    "runtime": "operator-body-runtime",
+                    "resp_type": "operator-body-response",
+                },
+            },
+            headers={
+                "x-tool-cwd": "/client/override",
+                "x-tool-runtime": "ssh:client-selected.example",
+                "x-resp-type": "client-response",
+            },
+        )
+        assert res.status_code == 200, res.body
+        assert "mcp routing boundary" in str(res.body)
+    finally:
+        server.stop()
+
+
 def test_mcp_bad_command_does_not_crash():
     """A misconfigured MCP server should not crash the llama-server."""
     global server

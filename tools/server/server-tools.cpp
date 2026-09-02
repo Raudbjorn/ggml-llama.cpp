@@ -1839,21 +1839,24 @@ struct server_mcp_tool : server_tool {
     }
 };
 
-// resolves --tools-runtime into the isolate that every tool call runs through
-// spec() returns the runtime string make_tools_io() takes, and runs once per tool call
+// Resolves --tools-runtime into its original authorization spec and effective execution target.
 struct server_tools_runtime {
+    explicit server_tools_runtime(std::string configured_spec)
+        : configured_spec_(std::move(configured_spec)) {}
     virtual ~server_tools_runtime() = default;
-    virtual std::string spec() = 0;
-};
+    virtual std::string effective_spec() = 0;
 
-// a target that already exists and needs no lifecycle
-// the spec is validated once at startup, then passed straight through
-struct server_tools_static_runtime : server_tools_runtime {
-    explicit server_tools_static_runtime(std::string spec) : runtime_spec(std::move(spec)) {}
-    std::string spec() override { return runtime_spec; }
+    const std::string & configured_spec() const { return configured_spec_; }
 
 private:
-    std::string runtime_spec;
+    std::string configured_spec_;
+};
+
+// A target that already exists has the same configured and effective specs.
+struct server_tools_static_runtime : server_tools_runtime {
+    explicit server_tools_static_runtime(std::string spec)
+        : server_tools_runtime(std::move(spec)) {}
+    std::string effective_spec() override { return configured_spec(); }
 };
 
 // owns the container the tools run in, as set by --tools-runtime "<engine>:<image>"
@@ -1861,7 +1864,8 @@ private:
 struct server_tools_container_runtime : server_tools_runtime {
     server_tools_container_runtime(const server_tools_container_runtime &) = delete;
 
-    explicit server_tools_container_runtime(const std::string & spec) {
+    explicit server_tools_container_runtime(const std::string & spec)
+        : server_tools_runtime(spec) {
         container_runtime_spec parsed;
         if (!container_runtime_spec::parse(spec, parsed)) {
             throw std::runtime_error("unknown --tools-runtime option: " + spec);
@@ -1881,8 +1885,8 @@ struct server_tools_container_runtime : server_tools_runtime {
         proc.join();
     }
 
-    // respawns a container that died on its own, so the returned spec always names a running one
-    std::string spec() override {
+    // Respawns a container that died on its own, so the effective spec always names a running one.
+    std::string effective_spec() override {
         std::lock_guard<std::mutex> lock(mutex);
         if (!proc.alive()) {
             SRV_WRN("%s tools runtime container \"%s\" died, respawning\n", bin.c_str(), container_id.c_str());
@@ -2081,38 +2085,41 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             std::string tool_name = body.at("tool").get<std::string>();
             json params = body.value("params", json::object());
             bool stream = body.value("stream", false);
-
-            // accept x-tool-cwd header to override of the process
-            if (params.contains("cwd")) {
-                params.erase("cwd");
-            }
-            auto cwd = get_header(req.headers, "x-tool-cwd");
-            if (!cwd.empty()) {
-                params["cwd"] = cwd;
-            }
-
-            // accept x-tool-runtime header to route tool I/O through an isolate, e.g. "docker-container:<id>";
-            // falls back to the --tools-runtime isolate, if configured
-            if (params.contains("runtime")) {
-                params.erase("runtime");
-            }
-            auto runtime_header = get_header(req.headers, "x-tool-runtime");
-            if (!runtime_header.empty()) {
-                params["runtime"] = runtime_header;
-            } else if (runtime) {
-                params["runtime"] = runtime->spec();
-            }
-
-            // x-resp-type header is only used by read_file for now
-            if (params.contains("resp_type")) {
-                params.erase("resp_type");
-            }
-            auto resp_type = get_header(req.headers, "x-resp-type");
-            if (!resp_type.empty()) {
-                params["resp_type"] = resp_type;
-            }
-
             server_tool & tool = find_tool(tools, tool_name, stream);
+
+            // Routing headers belong only to built-in tools. MCP transport and arguments are
+            // fixed by the operator configuration and pass through unchanged here.
+            if (tool.type() == "server") {
+                // cwd is execution context, not containment: absolute paths and shell commands
+                // can still address resources outside it.
+                params.erase("cwd");
+                auto cwd = get_header(req.headers, "x-tool-cwd");
+                if (!cwd.empty()) {
+                    params["cwd"] = cwd;
+                }
+
+                params.erase("runtime");
+                auto runtime_header = get_header(req.headers, "x-tool-runtime");
+                if (!runtime_header.empty()) {
+                    if (!runtime) {
+                        throw common_json_error("x-tool-runtime requires a configured --tools-runtime");
+                    }
+                    if (runtime_header != runtime->configured_spec()) {
+                        throw common_json_error(
+                            "x-tool-runtime must exactly match the configured --tools-runtime");
+                    }
+                }
+                if (runtime) {
+                    params["runtime"] = runtime->effective_spec();
+                }
+
+                // x-resp-type is only used by read_file for now.
+                params.erase("resp_type");
+                auto resp_type = get_header(req.headers, "x-resp-type");
+                if (!resp_type.empty()) {
+                    params["resp_type"] = resp_type;
+                }
+            }
 
             if (stream) {
                 int id = res_id.fetch_add(1);

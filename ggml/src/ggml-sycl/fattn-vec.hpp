@@ -601,22 +601,24 @@ void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggm
 
     const auto arch = ggml_sycl_info().devices[ctx.device].hw_info.arch;
     const int nthreads = ggml_sycl_fattn_vec_get_nthreads_device(arch);
-    // 256 threads would overflow the 64 KB work-group local memory at D == 512, so keep 128 there.
-    if (D <= 256 && nthreads == 256) {
-        constexpr int nthreads_hw = 256;
-        constexpr int nwarps = nthreads_hw / warp_size;
-        launch_fattn<D, cols_per_block, 1,
-                     flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                        q8_quants_first, use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
-            ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false, false);
-    } else {
-        constexpr int nthreads_hw = 128;
-        constexpr int nwarps = nthreads_hw / warp_size;
-        launch_fattn<D, cols_per_block, 1,
-                     flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                        q8_quants_first, use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
-            ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false, false);
+    if constexpr (D <= 256) {
+        if (nthreads == 256) {
+            constexpr int nthreads_hw = 256;
+            constexpr int nwarps = nthreads_hw / warp_size;
+            launch_fattn<D, cols_per_block, 1,
+                         flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
+                                            q8_quants_first, use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
+                ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false, false);
+            return;
+        }
     }
+
+    constexpr int nthreads_hw = 128;
+    constexpr int nwarps = nthreads_hw / warp_size;
+    launch_fattn<D, cols_per_block, 1,
+                 flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
+                                    q8_quants_first, use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
+        ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false, false);
 }
 
 template <int D, int type_K, int type_V, bool q8_quants_first>

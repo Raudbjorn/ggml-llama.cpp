@@ -63,3 +63,13 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# Register this after the server libraries exist; tests/ is configured before tools/.
+if (LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
+    llama_build_and_test("${PROJECT_SOURCE_DIR}/tests/test-server-cors-proxy-policy.cpp")
+    target_include_directories(test-server-cors-proxy-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test-server-cors-proxy-policy PRIVATE llama-server-impl)
+    if (WIN32)
+        target_link_libraries(test-server-cors-proxy-policy PRIVATE ws2_32)
+    endif()
+endif()

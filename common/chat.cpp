@@ -1832,7 +1832,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
 
         // Note: this model is CRAZY. It can diverge from its supposed tool calling pattern in so many ways it's not funny.
         // For example, it can call tools at the end of reasoning without closing reasoning...
-        auto reasoning = extract_reasoning ? p.optional(THINK_START + p.reasoning(
+        auto reasoning = extract_reasoning ? p.optional(p.space() + THINK_START + p.reasoning(
             p.until_one_of({ THINK_END, "<|tool_calls_section_begin|>", "<|tool_call_begin|>" })) +
             p.optional(p.literal(THINK_END))) : p.eps();
         auto generation_prompt = p.literal(GEN_PROMPT);
@@ -1963,7 +1963,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
 
         auto reasoning = p.eps();
         if (extract_reasoning) {
-            reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
+            reasoning = p.optional(p.space() + THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
         }
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -2319,8 +2319,8 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
         }
 
         if (extract_reasoning && inputs.enable_thinking) {
-            reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
-            reasoning_with_tc = THINK_START +
+            reasoning = p.optional(p.space() + THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
+            reasoning_with_tc = p.space() + THINK_START +
                 p.reasoning(p.until_one_of({ TC_SEPARATOR + FC_START, FC_START, THINK_END })) +
                 p.space() + obligatory_tool_calls;
             allow_reasoning_with_tc = true;
@@ -2330,7 +2330,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
             // must still be consumed.
             reasoning = is_v4
                 ? p.optional(p.literal(THINK_END))
-                : p.optional(p.literal(THINK_START) + p.until(THINK_END) + p.literal(THINK_END));
+                : p.optional(p.space() + p.literal(THINK_START) + p.until(THINK_END) + p.literal(THINK_END));
         }
 
         if (has_response_format) {
@@ -3337,6 +3337,8 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
     data.generation_prompt = "<|start|>assistant";
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
+    data.thinking_start_tag = " to=self<|message|>";
+    data.thinking_end_tags  = {"<|eom|>"};
 
     data.preserved_tokens = {
         "<|start|>", "<|message|>", "<|eom|>", "<|eot|>",

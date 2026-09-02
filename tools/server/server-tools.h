@@ -40,7 +40,7 @@ struct server_tools {
     server_response queue_res;
     std::atomic<int> res_id{0};
 
-    // set when --tools-runtime is configured; routes every tool call through an isolate
+    // set when --tools-runtime is configured; routes built-in server tool calls through an isolate
     std::unique_ptr<server_tools_runtime> runtime;
 
     void setup(const std::vector<std::string> & enabled_tools,

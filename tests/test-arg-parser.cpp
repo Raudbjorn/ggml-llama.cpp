@@ -3,8 +3,10 @@
 #include "download.h"
 #include "llama.h"
 #include "speculative.h"
+#include "gguf.h"
 
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <string>
 #include <vector>
@@ -90,6 +92,58 @@ static void test(void) {
         spec.synth_len = 3.0;
         assert_invalid(spec, 4);
     }
+    {
+        common_params_speculative spec_params;
+        spec_params.types                = { COMMON_SPECULATIVE_TYPE_NGRAM_MOD };
+        spec_params.ngram_mod.n_match    = 2;
+        spec_params.ngram_mod.n_min      = 1;
+        spec_params.ngram_mod.n_max      = 1;
+        spec_params.ngram_mod.n_dead_off = 2;
+
+        common_speculative_ptr spec(common_speculative_init(spec_params, 2));
+        const llama_tokens corpus = {1, 2, 3, 1, 2, 3};
+        common_speculative_begin(spec.get(), 0, corpus);
+        common_speculative_begin(spec.get(), 1, corpus);
+
+        const llama_tokens too_short = {1};
+        const llama_tokens live      = {9, 1};
+        auto draft = [&](llama_seq_id seq_id, const llama_tokens & prompt) {
+            auto & dp    = common_speculative_get_draft_params(spec.get(), seq_id);
+            dp.drafting  = true;
+            dp.id_last   = 2;
+            dp.prompt    = &prompt;
+            common_speculative_draft(spec.get());
+            auto result = *dp.result;
+            dp.result->clear();
+            return result;
+        };
+
+        assert(draft(0, too_short).empty());
+        common_speculative_accept(spec.get(), 0, 0);
+
+        assert(draft(0, live) == llama_tokens({3}));
+        common_speculative_accept(spec.get(), 0, 0);
+        assert(draft(0, live) == llama_tokens({3}));
+        common_speculative_accept(spec.get(), 0, 0);
+
+        assert(draft(0, live).empty());
+        assert(draft(1, live) == llama_tokens({3}));
+
+        common_speculative_begin(spec.get(), 0, corpus);
+        assert(draft(0, live) == llama_tokens({3}));
+    }
+
+    {
+        const char * path = "test-speculative-missing-block-count.gguf";
+        gguf_context * ctx = gguf_init_empty();
+        gguf_set_val_str(ctx, "general.architecture", "qwen3");
+        assert(gguf_write_to_file(ctx, path, false));
+        gguf_free(ctx);
+
+        assert(common_speculative_types_from_gguf(path).empty());
+        std::remove(path);
+    }
+
 
     {
         common_params base;
