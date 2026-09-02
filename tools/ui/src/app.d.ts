@@ -23,10 +23,6 @@ import type {
 	ApiModelsSseData,
 	ApiModelsSseEvent,
 	ApiModelListResponse,
-	ApiModelLoadStage,
-	ApiModelsSseData,
-	ApiModelsSseEvent,
-	ApiModelsSseProgress,
 	ApiProcessingState,
 	ApiRouterModelMeta,
 	ApiRouterModelsListResponse,
@@ -56,11 +52,10 @@ import type {
 	DatabaseMessageExtraVideoFile,
 	ExportedConversation,
 	ExportedConversations,
-	ModelLoadProgress,
 	// Model types
+	ModelLoadProgress,
 	ModelModalities,
 	ModelOption,
-	ModelLoadProgress,
 	// Settings types
 	SettingsChatServiceOptions,
 	SettingsConfigType,

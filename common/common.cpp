@@ -1861,6 +1861,11 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
     auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
     free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
+    if (!ggml_threadpool_new_fn || !free_fn) {
+        COM_WRN("%s", "threadpool functions not found in CPU backend\n");
+        free_fn = nullptr;
+        return;
+    }
 
     struct ggml_threadpool_params tpp_batch =
             ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
