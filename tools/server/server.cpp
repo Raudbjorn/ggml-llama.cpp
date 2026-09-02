@@ -106,9 +106,6 @@ int llama_server(int argc, char ** argv) {
         return 1;
     }
 
-    llama_backend_init();
-    llama_numa_init(params.numa);
-
     return llama_server(params, argc, argv);
 }
 
@@ -135,6 +132,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
     const bool is_router_server = params.model.path.empty()
                                && params.model.hf_repo.empty()
                                && params.model.docker_repo.empty();
+
+    // accelerator backend/NUMA init also touches the GPU (device enumeration, primary
+    // context creation on some backends), so it must be skipped for router-only servers
+    if (!is_router_server) {
+        llama_backend_init();
+        llama_numa_init(params.numa);
+    }
 
     // skip device enumeration so the CUDA primary context stays uncreated
     common_params_print_info(params, !is_router_server);
@@ -327,11 +331,20 @@ int llama_server(common_params & params, int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
     }
 
+    // mcp_mgr must be started before the API-key gate below so mcp_mgr.empty() reflects
+    // whether any MCP servers are actually configured, not just default-constructed state
+    try {
+        mcp_mgr.start(params);
+    } catch (const std::exception & e) {
+        SRV_ERR("MCP starting failed: %s\n", e.what());
+        return 1;
+    }
+
     // router-spawned children are always bound to loopback only (see CHILD_ADDR in
     // server-models.cpp) and have their API key stripped by design (unset_reserved_args);
     // the network-exposure risk this check guards against does not apply to them
-    if (!params.server_tools.empty() && params.api_keys.empty() && !child.is_child()) {
-        SRV_ERR("%s", "built-in server tools require an API key (use --api-key)\n");
+    if ((!params.server_tools.empty() || !mcp_mgr.empty()) && params.api_keys.empty() && !child.is_child()) {
+        SRV_ERR("%s", "built-in server tools or MCP servers require an API key (use --api-key)\n");
         return 1;
     }
 
@@ -348,13 +361,6 @@ int llama_server(common_params & params, int argc, char ** argv) {
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
-    }
-
-    try {
-        mcp_mgr.start(params);
-    } catch (const std::exception & e) {
-        SRV_ERR("MCP starting failed: %s\n", e.what());
-        return 1;
     }
 
     if (!params.server_tools.empty() || !mcp_mgr.empty()) {
