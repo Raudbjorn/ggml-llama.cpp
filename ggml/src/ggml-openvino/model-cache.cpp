@@ -13,6 +13,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unordered_map>
 #include <vector>
 
 #if defined(_WIN32)
@@ -206,6 +207,25 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // this is the sole guard against importing a blob compiled for a different
     // graph. It also makes the index-based OV tensor names sound, since a hit
     // now implies the same node/leaf ordering.
+    //
+    // A source edge hashes the *identity* of its producer (its index in the
+    // node/leaf arrays), not just its descriptor. Two views of one cache with
+    // the same name, type and shape differ only in offset, so by descriptor
+    // alone a graph whose consumers read them the other way round would
+    // collide with this one while compiling to a different model - the same
+    // non-uniqueness that makes get_tensor_ov_name() disambiguate by index.
+    // Leaves outside the arrays (backend split graphs have no leafs) fall back
+    // to a sentinel plus the descriptor; weights are fingerprinted by content
+    // below and graph inputs have unique names.
+    std::unordered_map<const ggml_tensor *, uint64_t> tensor_index;
+    tensor_index.reserve(static_cast<size_t>(cgraph->n_nodes) + static_cast<size_t>(cgraph->n_leafs));
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        tensor_index[cgraph->nodes[i]] = static_cast<uint64_t>(i);
+    }
+    for (int i = 0; i < cgraph->n_leafs; ++i) {
+        tensor_index[cgraph->leafs[i]] = static_cast<uint64_t>(cgraph->n_nodes) + static_cast<uint64_t>(i);
+    }
+
     h = fnv1a_u64(h, static_cast<uint64_t>(cgraph->n_nodes));
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
@@ -225,6 +245,8 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
                 h = fnv1a_u64(h, 0);
                 continue;
             }
+            const auto idx = tensor_index.find(src);
+            h = fnv1a_u64(h, idx != tensor_index.end() ? idx->second : UINT64_MAX);
             h = fnv1a_u64(h, static_cast<uint64_t>(src->op));
             h = fnv1a(h, src->name, strlen(src->name));
             h = fnv1a_u64(h, static_cast<uint64_t>(src->type));
