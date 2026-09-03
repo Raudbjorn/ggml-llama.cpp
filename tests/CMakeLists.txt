@@ -516,6 +516,12 @@ if (GGML_SYCL)
     add_test(NAME test-sycl-status-propagation COMMAND test-sycl-status-propagation)
     set_property(TEST test-sycl-status-propagation PROPERTY LABELS sycl)
 
+    # scheduler refuses an in-place op assigned to a backend that cannot reach its destination
+    add_executable(test-sycl-sched-inplace-guard test-sycl-sched-inplace-guard.cpp)
+    target_link_libraries(test-sycl-sched-inplace-guard PRIVATE ggml ggml-sycl)
+    add_test(NAME test-sycl-sched-inplace-guard COMMAND test-sycl-sched-inplace-guard)
+    set_property(TEST test-sycl-sched-inplace-guard PROPERTY LABELS sycl)
+
     # DSV4 rollback bookkeeping under a graph failure reported asynchronously:
     # needs a SYCL device for the injection and the generated DSV4 test model.
     if (DEFINED MODEL_DIR)

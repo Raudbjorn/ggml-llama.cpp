@@ -1095,6 +1095,49 @@ static bool ggml_backend_sched_buffer_supported(ggml_backend_sched_t sched, stru
     return buft != NULL && ggml_backend_supports_buft(sched->backends[backend_id], buft);
 }
 
+// An op that computes in place into a view of another tensor (SET_ROWS, CPY, SET, the
+// *_inplace variants) writes through that tensor's buffer. The scheduler copies inputs
+// across backends, never destinations, so such a node has to run on a backend that can
+// address the buffer its view source lives in. When the backend holding that buffer
+// declines the op, the fallback backend would dereference foreign memory during compute.
+// Refuse the graph here instead, at allocation time, before anything runs.
+static bool ggml_backend_sched_check_inplace_dst(ggml_backend_sched_t sched, const struct ggml_cgraph * graph) {
+    for (int i = 0; i < graph->n_nodes; i++) {
+        struct ggml_tensor * node = graph->nodes[i];
+        struct ggml_tensor * vsrc = node->view_src;
+        if (vsrc == NULL || ggml_is_view_op(node->op)) {
+            continue;
+        }
+        const int node_backend_id = tensor_backend_id(node);
+        const int vsrc_backend_id = tensor_backend_id(vsrc);
+        if (node_backend_id == -1 || (vsrc->buffer == NULL && vsrc_backend_id == -1)) {
+            // nothing known yet about where one side lives
+            continue;
+        }
+        if (ggml_backend_sched_buffer_supported(sched, vsrc, node_backend_id)) {
+            continue;
+        }
+
+        const char * holder = vsrc->buffer ? ggml_backend_buffer_name(vsrc->buffer)
+                                           : ggml_backend_name(sched->backends[vsrc_backend_id]);
+        GGML_LOG_ERROR("%s: node '%s' (%s) writes in place into '%s' held by %s but is assigned to %s, "
+                       "which cannot address that buffer; the scheduler copies inputs, not destinations\n",
+                       __func__, node->name, ggml_op_desc(node), vsrc->name, holder,
+                       ggml_backend_name(sched->backends[node_backend_id]));
+        if (vsrc_backend_id != -1 && !ggml_backend_supports_op(sched->backends[vsrc_backend_id], node)) {
+            GGML_LOG_ERROR("%s: %s does not support %s with src0 %s, src1 %s, dst %s: "
+                           "add that support or keep the op off this device\n",
+                           __func__, ggml_backend_name(sched->backends[vsrc_backend_id]), ggml_op_desc(node),
+                           node->src[0] ? ggml_type_name(node->src[0]->type) : "-",
+                           node->src[1] ? ggml_type_name(node->src[1]->type) : "-",
+                           ggml_type_name(node->type));
+        }
+        return false;
+    }
+
+    return true;
+}
+
 static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, struct ggml_tensor * node, int cur_backend_id, int * node_backend_id) {
     if (ggml_backend_supports_op(sched->backends[cur_backend_id], node)) {
         *node_backend_id = cur_backend_id;
@@ -2024,6 +2067,10 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
 
     ggml_backend_sched_split_graph(sched, measure_graph);
 
+    if (!ggml_backend_sched_check_inplace_dst(sched, measure_graph)) {
+        return false;
+    }
+
     if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
         return false;
     }
@@ -2042,6 +2089,10 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
     sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
 
     ggml_backend_sched_split_graph(sched, graph);
+
+    if (!ggml_backend_sched_check_inplace_dst(sched, graph)) {
+        return false;
+    }
 
     if (!ggml_backend_sched_alloc_splits(sched)) {
         return false;

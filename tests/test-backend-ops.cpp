@@ -6177,16 +6177,23 @@ struct test_top_k : public test_case {
     const std::array<int64_t, 4> ne;
     const int k;
     const bool ties;
+    // n_valid >= 0: only n_valid columns per row hold finite values, the rest
+    // are -INFINITY like a masked sparse-attention indexer row. The top-k must
+    // still return k distinct in-range indices (a downstream ggml_set_rows
+    // aborts on anything else), so these cases use the ties comparison.
+    const int n_valid;
     ggml_tensor * input {};
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, k, ties);
+        return VARS_TO_STR5(type, ne, k, ties, n_valid);
     }
 
     test_top_k(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {16, 10, 10, 10},
-            int k = 4, bool ties = false)
-        : type(type), ne(ne), k(k), ties(ties) {}
+            int k = 4, bool ties = false, int n_valid = -1)
+        : type(type), ne(ne), k(k), ties(ties), n_valid(n_valid) {
+        GGML_ASSERT(n_valid < 0 || ties);
+    }
 
     double max_err() override {
         return 0.0;
@@ -6220,6 +6227,18 @@ struct test_top_k : public test_case {
                 for (int64_t c = 0; c < k; c++) {
                     ia[c] = (int32_t)a[r * k + c];
                     ib[c] = (int32_t)b[r * k + c];
+                }
+                // Every index must address the row: penalize and clamp an
+                // out-of-range one instead of reading past the row.
+                for (int64_t c = 0; c < k; c++) {
+                    if (ia[c] < 0 || ia[c] >= cols) {
+                        diff += 1;
+                        ia[c] = 0;
+                    }
+                    if (ib[c] < 0 || ib[c] >= cols) {
+                        diff += 1;
+                        ib[c] = 0;
+                    }
                 }
                 // The src values for each row should match.
                 for (int64_t c = 0; c < k; c++) {
@@ -6283,6 +6302,9 @@ struct test_top_k : public test_case {
                         data[i] = i / tie_denom;
                     } else {
                         data[i] = i;
+                    }
+                    if (n_valid >= 0 && i >= n_valid) {
+                        data[i] = -INFINITY;
                     }
                 }
                 std::shuffle(data.begin(), data.end(), rng);
@@ -10165,6 +10187,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int n = 1; n < 5; ++n) {
         for (int k = 1; k <= n; ++k) {
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {n, 2, 1, 3}, k, true));
+        }
+    }
+    // masked rows: a sparse-attention indexer scores only the live cells and
+    // leaves the rest at -INFINITY, the top-k must still fill every slot
+    for (int n_valid : {0, 2}) {
+        for (int k : {8, 32}) {
+            test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {256, 2, 1, 1}, k, true, n_valid));
         }
     }
     for (int i = 0; i < 20; ++i) {

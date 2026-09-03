@@ -2418,6 +2418,16 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
     }
 }
 
+// Ranks a candidate (val, col) against a top-k slot (slot_val, slot_idx). An
+// empty slot (idx < 0) is always taken, ties go to the lower column. Comparing
+// against a -FLT_MAX sentinel instead left slots empty for -INFINITY scores,
+// so a masked row (a sparse-attention indexer with fewer live cells than k)
+// returned -1 indices and the CPU ggml_set_rows consuming them aborted on its
+// range check.
+static inline bool ggml_sycl_top_k_before(float val, int col, float slot_val, int slot_idx) {
+    return slot_idx < 0 || val > slot_val || (val == slot_val && col < slot_idx);
+}
+
 static void top_k_f32_sycl(
     const float * src,
     int32_t * dst_indices,
@@ -2450,16 +2460,16 @@ static void top_k_f32_sycl(
                 int local_idx[32];
 
                 for (int i = 0; i < k; i++) {
-                    local_vals[i] = -FLT_MAX;
+                    local_vals[i] = -INFINITY;
                     local_idx[i] = -1;
                 }
 
                 for (int col = tid; col < ncols; col += block_size) {
                     float val = src_row[col];
 
-                    if (val > local_vals[k-1]) {
+                    if (ggml_sycl_top_k_before(val, col, local_vals[k-1], local_idx[k-1])) {
                         int pos = k - 1;
-                        while (pos > 0 && val > local_vals[pos - 1]) {
+                        while (pos > 0 && ggml_sycl_top_k_before(val, col, local_vals[pos - 1], local_idx[pos - 1])) {
                             pos--;
                         }
 
@@ -2483,7 +2493,7 @@ static void top_k_f32_sycl(
                     int final_idx[32];
 
                     for (int i = 0; i < k; i++) {
-                        final_vals[i] = -FLT_MAX;
+                        final_vals[i] = -INFINITY;
                         final_idx[i] = -1;
                     }
 
@@ -2492,9 +2502,13 @@ static void top_k_f32_sycl(
                             float val = shared_vals[t * k + i];
                             int idx = shared_idx[t * k + i];
 
-                            if (val > final_vals[k-1]) {
+                            if (idx < 0) {
+                                // the thread saw fewer than k columns; its list is packed at the front
+                                break;
+                            }
+                            if (ggml_sycl_top_k_before(val, idx, final_vals[k-1], final_idx[k-1])) {
                                 int pos = k - 1;
-                                while (pos > 0 && val > final_vals[pos - 1]) {
+                                while (pos > 0 && ggml_sycl_top_k_before(val, idx, final_vals[pos - 1], final_idx[pos - 1])) {
                                     pos--;
                                 }
 
@@ -6518,9 +6532,14 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                          op->type == GGML_TYPE_Q1_0 ||
                          op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_IQ4_NL ||
                          op->type == GGML_TYPE_MXFP4 || op->type == GGML_TYPE_NVFP4 ||
-                         ggml_type_is_turbo(op->type) ||
-                         op->type == GGML_TYPE_TQ3_1S || op->type == GGML_TYPE_TQ4_1S) &&
-                        op->src[0]->type == GGML_TYPE_F32 &&
+                         // TQ3_1S/TQ4_1S are weight-only types: ggml_sycl_op_set_rows has no kernel for them
+                         ggml_type_is_turbo(op->type)) &&
+                        (op->src[0]->type == GGML_TYPE_F32 ||
+                         // an f16 source only feeds the float destinations; the quantizers read float.
+                         // Declining it here is not free: SET_ROWS returns a view of its destination,
+                         // so a fallback backend would write into this device's memory.
+                         (op->src[0]->type == GGML_TYPE_F16 &&
+                          (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16))) &&
                         (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32));
                 return res;
             }
