@@ -196,13 +196,42 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
                                          uint64_t extra_cfg) {
     uint64_t h = FNV_OFFSET;
 
-    // Topology: node count + each node's op and name (cheap, and distinguishes
-    // graphs that share weights but differ structurally).
+    // Everything about the graph other than weight contents: node count, and
+    // for every node its op, name, element type, shape, strides, flags, view
+    // offset, the raw op_params block (rope freq/scale, norm eps, permute
+    // axes, clamp bounds, ... all baked into the ov::Model as attributes or
+    // Constants) and the identity of each source edge. Two cgraphs that agree
+    // on the op/name sequence but differ in activation geometry or an op
+    // parameter must not share a key: the manifest re-checks weights only, so
+    // this is the sole guard against importing a blob compiled for a different
+    // graph. It also makes the index-based OV tensor names sound, since a hit
+    // now implies the same node/leaf ordering.
     h = fnv1a_u64(h, static_cast<uint64_t>(cgraph->n_nodes));
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
         h = fnv1a_u64(h, static_cast<uint64_t>(node->op));
         h = fnv1a(h, node->name, strlen(node->name));
+        h = fnv1a_u64(h, static_cast<uint64_t>(node->type));
+        h = fnv1a_u64(h, static_cast<uint64_t>(node->flags));
+        h = fnv1a_u64(h, static_cast<uint64_t>(node->view_offs));
+        for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+            h = fnv1a_u64(h, static_cast<uint64_t>(node->ne[d]));
+            h = fnv1a_u64(h, static_cast<uint64_t>(node->nb[d]));
+        }
+        h = fnv1a(h, node->op_params, sizeof(node->op_params));
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            const ggml_tensor * src = node->src[s];
+            if (src == nullptr) {
+                h = fnv1a_u64(h, 0);
+                continue;
+            }
+            h = fnv1a_u64(h, static_cast<uint64_t>(src->op));
+            h = fnv1a(h, src->name, strlen(src->name));
+            h = fnv1a_u64(h, static_cast<uint64_t>(src->type));
+            for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+                h = fnv1a_u64(h, static_cast<uint64_t>(src->ne[d]));
+            }
+        }
     }
 
     // Weights: the model identity.
@@ -231,13 +260,24 @@ std::string ggml_openvino_model_cache_manifest_path(const std::string & dir, uin
 
 bool ggml_openvino_model_cache_write_manifest(const std::string & path,
                                               const ggml_cgraph * cgraph,
-                                              uint64_t fingerprint) {
+                                              uint64_t fingerprint,
+                                              const std::vector<std::string> & input_names,
+                                              const std::vector<std::string> & output_names) {
     std::ofstream f(path, std::ios::trunc);
     if (!f.is_open()) {
         return false;
     }
     f << "fingerprint " << hex64(fingerprint) << "\n";
     f << "ov_version " << ov_version_string() << "\n";
+    // one name per line: ggml names can contain spaces (e.g. "cache_k_l0 (view)")
+    f << "inputs " << input_names.size() << "\n";
+    for (const auto & n : input_names) {
+        f << n << "\n";
+    }
+    f << "outputs " << output_names.size() << "\n";
+    for (const auto & n : output_names) {
+        f << n << "\n";
+    }
     for_each_weight(cgraph, [&](const ggml_tensor * t) {
         f << t->name << " " << t->ne[0] << " " << t->ne[1] << " " << t->ne[2] << " " << t->ne[3] << " "
           << static_cast<int>(t->type) << " " << hex64(weight_fingerprint(t)) << "\n";
@@ -247,18 +287,42 @@ bool ggml_openvino_model_cache_write_manifest(const std::string & path,
 
 bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
                                                const ggml_cgraph * cgraph,
-                                               uint64_t fingerprint) {
+                                               uint64_t fingerprint,
+                                               std::vector<std::string> & input_names,
+                                               std::vector<std::string> & output_names) {
+    input_names.clear();
+    output_names.clear();
+
     std::ifstream f(path);
     if (!f.is_open()) {
         return false;
     }
-    std::string tag, val;
+    std::string tag, val, line;
     // header: fingerprint
     if (!(f >> tag >> val) || tag != "fingerprint" || val != hex64(fingerprint)) {
         return false;
     }
     // header: ov_version
     if (!(f >> tag >> val) || tag != "ov_version" || val != ov_version_string()) {
+        return false;
+    }
+
+    // port names, one per line, each section prefixed by its count
+    const auto read_names = [&](const char * section, std::vector<std::string> & out) -> bool {
+        size_t n = 0;
+        if (!(f >> tag >> n) || tag != section) {
+            return false;
+        }
+        std::getline(f, line);  // consume rest of the count line
+        for (size_t i = 0; i < n; ++i) {
+            if (!std::getline(f, line)) {
+                return false;
+            }
+            out.push_back(line);
+        }
+        return true;
+    };
+    if (!read_names("inputs", input_names) || !read_names("outputs", output_names)) {
         return false;
     }
 
@@ -272,8 +336,6 @@ bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
     });
 
     size_t idx = 0;
-    std::string line;
-    std::getline(f, line);  // consume rest of ov_version line
     while (std::getline(f, line)) {
         if (line.empty()) {
             continue;

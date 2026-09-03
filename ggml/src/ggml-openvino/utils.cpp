@@ -373,7 +373,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
 
                 std::ifstream blob_in(blob_path, std::ios::binary);
                 bool blob_ok = blob_in.is_open();
-                bool manifest_ok = blob_ok && ggml_openvino_model_cache_verify_manifest(manifest_path, cgraph, model_fp);
+                std::vector<std::string> manifest_inputs, manifest_outputs;
+                bool manifest_ok = blob_ok && ggml_openvino_model_cache_verify_manifest(manifest_path, cgraph, model_fp,
+                                                                                       manifest_inputs, manifest_outputs);
                 if (blob_ok && manifest_ok) {
                     int64_t import_start = ggml_time_us();
                     try {
@@ -383,6 +385,18 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                             cm = core.import_model(blob_in, remote_context.value(), mc_config);
                         } else {
                             cm = core.import_model(blob_in, device, mc_config);
+                        }
+                        // Bind by the port names the compile path used, persisted in the
+                        // manifest - never by names re-derived from the imported ports. A
+                        // port's friendly name is not what the frontend assigned once the
+                        // serializer has uniquified a collision (a stateless KV cache is both
+                        // Parameter and Result "cache_k_lN" and comes back as "cache_k_lN_1"),
+                        // and a name that misses the decoder's key is left unbound with
+                        // nothing written back. Only port order survives export/import and
+                        // binding is positional, so the counts must agree.
+                        if (manifest_inputs.size() != cm.inputs().size() ||
+                            manifest_outputs.size() != cm.outputs().size()) {
+                            throw std::runtime_error("manifest port count does not match the imported model");
                         }
                         // Lightweight decoder: names-only weight map (membership is all the
                         // decoder needs; weights live in the imported model).
@@ -394,18 +408,8 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                                                                        is_static, stateful, model_is_splitted);
                         infer_request = std::make_shared<ov::InferRequest>(cm.create_infer_request());
                         entry->ptr = ggml_decoder;
-                        // Names must match the decoder's ggml-tensor keys. The non-cached
-                        // path keys off Parameter/Result *friendly names* (set by the
-                        // frontend); export_model preserves these, and each compiled-model
-                        // port's node is exactly that Parameter/Result. Use the port nodes
-                        // directly (NOT get_runtime_model(), whose graph differs and is
-                        // unsafe to deref this way).
-                        for (const auto & p : cm.inputs()) {
-                            ov_input_names.push_back(p.get_node()->get_friendly_name());
-                        }
-                        for (const auto & o : cm.outputs()) {
-                            ov_output_names.push_back(o.get_node()->get_friendly_name());
-                        }
+                        ov_input_names = manifest_inputs;
+                        ov_output_names = manifest_outputs;
                         imported = true;
                         if (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING")) {
                             GGML_LOG_INFO("  - Model cache import time: %.3f ms \n",
@@ -453,13 +457,23 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 }
                 compile_end_time = ggml_time_us();
 
+                for (const auto & ov_param : model->get_parameters()) {
+                    ov_input_names.push_back(ov_param->get_friendly_name());
+                }
+                for (const auto & ov_output : model->get_results()) {
+                    ov_output_names.push_back(ov_output->get_friendly_name());
+                }
+
                 // Export to the frontend model cache for next time. Publish the blob first,
-                // then the manifest, so a cache hit only sees fully written artifacts.
+                // then the manifest, so a cache hit only sees fully written artifacts. The
+                // manifest carries the port names above so an import binds by exactly the
+                // names this path bound by.
                 if (!model_cache_dir.empty() && !model_is_splitted && model_fp != 0) {
                     try {
                         const std::string blob_tmp = blob_path + ".tmp";
                         const std::string manifest_tmp = manifest_path + ".tmp";
-                        if (ggml_openvino_model_cache_write_manifest(manifest_tmp, cgraph, model_fp)) {
+                        if (ggml_openvino_model_cache_write_manifest(manifest_tmp, cgraph, model_fp,
+                                                                     ov_input_names, ov_output_names)) {
                             std::ofstream blob_out(blob_tmp, std::ios::binary | std::ios::trunc);
                             if (blob_out.is_open()) {
                                 compiled_model.export_model(blob_out);
@@ -487,13 +501,6 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
 
                 infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
                 entry->ptr = ggml_decoder;
-
-                for (const auto & ov_param : model->get_parameters()) {
-                    ov_input_names.push_back(ov_param->get_friendly_name());
-                }
-                for (const auto & ov_output : model->get_results()) {
-                    ov_output_names.push_back(ov_output->get_friendly_name());
-                }
             }  // end non-imported (compile) path
 
             if (cache_enabled) {
@@ -533,6 +540,21 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             const auto & model_outputs = ggml_decoder->get_model_outputs();
             auto model_output_it = model_outputs.find(ov_output_names[i]);
             if (model_output_it == model_outputs.end()) {
+                // Only debug-node extras are expected to be unbindable. Any other
+                // miss means a real model output will never reach its ggml tensor
+                // (the caller reads back whatever was in that buffer - typically
+                // zeros), so never let it pass silently: this is exactly how an
+                // imported compiled-model blob whose baked output names no longer
+                // matched the decoder's produced all-zero logits without a single
+                // error.
+                if (!ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
+                    std::string have;
+                    for (const auto & kv : model_outputs) {
+                        have += kv.first + " ";
+                    }
+                    GGML_LOG_WARN("ggml-openvino: model output '%s' has no matching decoder output, leaving it unbound "
+                                  "(decoder outputs: %s)\n", ov_output_names[i].c_str(), have.c_str());
+                }
                 continue;
             }
             auto * ggml_tensor = model_output_it->second;

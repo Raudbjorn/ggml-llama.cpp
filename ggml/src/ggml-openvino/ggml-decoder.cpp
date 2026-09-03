@@ -176,14 +176,35 @@ bool is_moe_expert_sum_add(const ggml_tensor * node) {
 }
 }  // namespace
 
+// ggml tensor names are not unique (per-layer intermediates and KV-cache views
+// repeat them), so compute nodes and KV-cache tensors get a disambiguating
+// suffix. That suffix must be stable across processes: it becomes the OV
+// Parameter/Result/state name, which the compiled-model cache bakes into an
+// exported blob, and a later process must derive the very same name to bind
+// the imported blob's ports. The tensor's slot in visited_hash_set was used
+// before, but that hashes the tensor's address, so every process produced a
+// different suffix and an imported blob could never bind its outputs (all-zero
+// logits) or its KV inputs (map::at). The position in the cgraph's node/leaf
+// arrays is deterministic for a given graph, and the cache key hashes the full
+// graph, so a cache hit now implies identical names. Backend split graphs are
+// ggml_graph_view()s with no leafs array, so leaf tensors there (KV-cache
+// buffers, weights) keep their plain ggml name, which is already unique per
+// layer. Construction-time only.
 static std::string get_tensor_ov_name(const ggml_cgraph * cgraph, const ggml_tensor * tensor) {
     if (tensor == nullptr) {
         return "";
     }
-    const size_t hash_pos = ggml_hash_find(&cgraph->visited_hash_set, tensor);
-    if (((tensor->flags & GGML_TENSOR_FLAG_COMPUTE) || GgmlOvDecoder::is_kvcache(tensor, nullptr)) &&
-        hash_pos != GGML_HASHSET_FULL && ggml_bitset_get(cgraph->visited_hash_set.used, hash_pos)) {
-        return std::string(tensor->name) + "#" + std::to_string(hash_pos);
+    if ((tensor->flags & GGML_TENSOR_FLAG_COMPUTE) || GgmlOvDecoder::is_kvcache(tensor, nullptr)) {
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            if (cgraph->nodes[i] == tensor) {
+                return std::string(tensor->name) + "#n" + std::to_string(i);
+            }
+        }
+        for (int i = 0; i < cgraph->n_leafs; ++i) {
+            if (cgraph->leafs[i] == tensor) {
+                return std::string(tensor->name) + "#l" + std::to_string(i);
+            }
+        }
     }
     return tensor->name;
 }
