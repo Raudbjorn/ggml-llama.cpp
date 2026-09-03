@@ -1579,10 +1579,18 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     last_sync_status = status;
     if (status != GGML_STATUS_SUCCESS) {
+        // this return value already reports the failure: consume the backend's
+        // sticky record now, or the next synchronize would report it again
+        // against the graphs enqueued after this one
+        const ggml_backend_sycl_failure failure = llama_backend_sched_consume_sycl_failure(sched.get());
+        const int abort_reason = failure.cause == GGML_SYCL_FAILURE_CAUSE_DEVICE_LOST
+            ? GGML_INNERQ_ABORT_DEVICE_LOST
+            : GGML_INNERQ_ABORT_NONE;
         if (mctx) {
-            mctx->on_graph_compute_failure(status, GGML_INNERQ_ABORT_NONE);
+            mctx->on_graph_compute_failure(status, abort_reason);
         }
-        LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+        LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d cause: %d raw_code: %d\n",
+                __func__, status, (int) failure.cause, failure.raw_code);
         ret = status;
         return nullptr;
     }

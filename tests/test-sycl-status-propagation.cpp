@@ -89,7 +89,7 @@ int main() {
         return 1;
     }
 
-    // Check consumption before the next graph submission can clear pending state.
+    // The synchronous wrapper consumes the status it reports: nothing stays pending.
     if (!expect_status("status consumed by synchronous wrapper",
                        ggml_backend_sycl_consume_last_status(resources.backend),
                        GGML_STATUS_SUCCESS)) {
@@ -97,6 +97,34 @@ int main() {
     }
 
     if (!expect_status("graph compute after one-shot failure",
+                       ggml_backend_graph_compute(resources.backend, graph),
+                       GGML_STATUS_SUCCESS)) {
+        return 1;
+    }
+
+    // The scheduler synchronizes a backend between splits without consuming
+    // its status. A failure that surfaces there must survive the next graph
+    // submission until a consumer sees it.
+    if (!ggml_backend_sycl_test_inject_sync_failure_once(resources.backend)) {
+        std::fprintf(stderr, "failed to arm one-shot SYCL synchronization failure\n");
+        return 1;
+    }
+    ggml_backend_synchronize(resources.backend);
+
+    if (!expect_status("graph submission after unconsumed sync failure",
+                       ggml_backend_graph_compute_async(resources.backend, graph),
+                       GGML_STATUS_SUCCESS)) {
+        return 1;
+    }
+    ggml_backend_synchronize(resources.backend);
+
+    if (!expect_status("sync failure survives graph submission",
+                       ggml_backend_sycl_consume_last_status(resources.backend),
+                       GGML_STATUS_FAILED)) {
+        return 1;
+    }
+
+    if (!expect_status("graph compute after consumed sync failure",
                        ggml_backend_graph_compute(resources.backend, graph),
                        GGML_STATUS_SUCCESS)) {
         return 1;

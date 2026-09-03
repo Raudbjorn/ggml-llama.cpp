@@ -610,7 +610,6 @@ static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_t
 struct ggml_backend_sycl_device_context;
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev);
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_backend(ggml_backend_t backend);
-static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx);
 static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx);
 static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_context * dev_ctx, const sycl::exception & exc);
 #ifdef GGML_SYCL_TESTING
@@ -6006,7 +6005,9 @@ static void ggml_sycl_graph_prepare_fattn_buffers(
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
-    ggml_backend_sycl_clear_pending_status(dev_ctx);
+    // The pending failure is sticky until consumed. The scheduler synchronizes
+    // this backend between splits without consuming, so clearing here would
+    // drop a failure that surfaced in such a sync before the next consume.
     ggml_sycl_profile_rope_fusion(cgraph);
     ggml_sycl_profile_ffn_fusion(cgraph);
     const bool graph_profile_enabled = ggml_sycl_graph_profile_enabled();
@@ -6218,6 +6219,8 @@ struct ggml_backend_sycl_device_context {
     std::string name;
     std::string description;
     int op_offload_min_batch_size;
+    // first failure since the last ggml_backend_sycl_consume_last_failure();
+    // every graph submission, synchronize and event wait records into it
     std::atomic<int> pending_status = GGML_STATUS_SUCCESS;
     std::atomic<int> pending_cause  = GGML_SYCL_FAILURE_CAUSE_NONE;
     std::atomic<int> pending_raw_code = 0;
@@ -6256,14 +6259,6 @@ static ggml_backend_sycl_failure_cause ggml_backend_sycl_classify_exception(cons
 #endif
 
     return GGML_SYCL_FAILURE_CAUSE_OTHER;
-}
- 
-static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx) {
-    if (dev_ctx != nullptr) {
-        dev_ctx->pending_status.store(GGML_STATUS_SUCCESS);
-        dev_ctx->pending_cause.store(GGML_SYCL_FAILURE_CAUSE_NONE);
-        dev_ctx->pending_raw_code.store(0);
-    }
 }
  
 static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx) {
