@@ -515,4 +515,13 @@ if (GGML_SYCL)
     target_link_libraries(test-sycl-status-propagation PRIVATE ggml ggml-sycl)
     add_test(NAME test-sycl-status-propagation COMMAND test-sycl-status-propagation)
     set_property(TEST test-sycl-status-propagation PROPERTY LABELS sycl)
+
+    # DSV4 rollback bookkeeping under a graph failure reported asynchronously:
+    # needs a SYCL device for the injection and the generated DSV4 test model.
+    if (DEFINED MODEL_DIR)
+        add_executable(test-dsv4-async-failure test-dsv4-async-failure.cpp)
+        target_link_libraries(test-dsv4-async-failure PRIVATE llama ggml ggml-sycl)
+        add_test(NAME test-dsv4-async-failure COMMAND test-dsv4-async-failure -m "${MODEL_DIR}/deepseek4-moe.gguf")
+        set_tests_properties(test-dsv4-async-failure PROPERTIES LABELS sycl FIXTURES_REQUIRED generate-models)
+    endif()
 endif()

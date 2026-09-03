@@ -1497,6 +1497,8 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
             return false;
         }
 
+        commit_settle(seq_id);
+
         // Drop uncommitted tokens first: their raw-KV slots were assigned by a
         // ubatch's apply() but the graph never completed, so no compressor
         // state or snapshot reflects them. They must not feed the rollback
@@ -1566,6 +1568,9 @@ void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_ds
     lid_state->seq_cp(seq_id_src, seq_id_dst);
 
     if (seq_id_src != seq_id_dst) {
+        commit_settle(seq_id_src);
+        commit_settle(seq_id_dst);
+
         // seq_id_src may have a pending rollback snapshot (rs_idx[seq_id_src] != 0)
         // from an earlier partial seq_rm. The *_state->seq_cp() calls above only
         // copy each stream's current compressor-state plane, not its rollback
@@ -1725,6 +1730,7 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
 
     // a loaded state carries no uncommitted tokens: everything now in the raw
     // cache is the committed baseline
+    commit_settle(seq_id);
     if (seq_id >= 0) {
         GGML_ASSERT((uint32_t) seq_id < n_seq_max);
         rs_idx[seq_id] = 0;
@@ -1777,10 +1783,53 @@ void llama_kv_cache_dsv4::commit_ubatch(const llama_ubatch & ubatch) {
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
             const llama_seq_id seq_id = ubatch.seq_id[i][s];
-            if (seq_id >= 0 && (uint32_t) seq_id < n_seq_max) {
-                rs_idx[seq_id] = 0;
-                rs_pos[seq_id] = kv_raw->seq_pos_max(seq_id);
+            if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max) {
+                continue;
             }
+
+            bool logged = false;
+            for (const auto & undo : commit_log) {
+                if (undo.seq_id == seq_id) {
+                    logged = true;
+                    break;
+                }
+            }
+            if (!logged) {
+                commit_log.push_back({ seq_id, rs_idx[seq_id], rs_pos[seq_id] });
+            }
+
+            rs_idx[seq_id] = 0;
+            rs_pos[seq_id] = kv_raw->seq_pos_max(seq_id);
+        }
+    }
+}
+
+void llama_kv_cache_dsv4::on_graph_compute_synced(ggml_status status) {
+    if (status != GGML_STATUS_SUCCESS) {
+        // The graphs behind these commits did not complete: put back the
+        // markers they consumed and drop the raw tokens they slotted, so the
+        // retry restores from the snapshot and re-feeds them. Compressed rows
+        // are positional and get overwritten by that retry.
+        for (const auto & undo : commit_log) {
+            rs_idx[undo.seq_id] = undo.rs_idx;
+            rs_pos[undo.seq_id] = undo.rs_pos;
+            if (kv_raw->seq_pos_max(undo.seq_id) > undo.rs_pos) {
+                kv_raw->seq_rm(undo.seq_id, undo.rs_pos + 1, -1);
+            }
+        }
+    }
+    commit_log.clear();
+}
+
+void llama_kv_cache_dsv4::commit_settle(llama_seq_id seq_id) {
+    if (seq_id < 0) {
+        commit_log.clear();
+        return;
+    }
+    for (size_t i = 0; i < commit_log.size(); ++i) {
+        if (commit_log[i].seq_id == seq_id) {
+            commit_log.erase(commit_log.begin() + i);
+            return;
         }
     }
 }
@@ -1815,6 +1864,7 @@ void llama_kv_cache_dsv4::clear_compressed(llama_seq_id seq_id, bool data) {
 
     // compressor state is gone, so whatever raw tokens remain are the new
     // committed baseline for rollback-distance purposes
+    commit_settle(seq_id);
     if (seq_id >= 0) {
         rs_idx[seq_id] = 0;
         rs_pos[seq_id] = kv_raw->seq_pos_max(seq_id);

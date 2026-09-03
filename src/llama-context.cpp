@@ -829,6 +829,11 @@ void llama_context::synchronize() {
 
     ggml_backend_sched_synchronize(sched.get());
     const ggml_backend_sycl_failure sync_failure = llama_backend_sched_consume_sycl_failure(sched.get());
+    // everything enqueued so far has now completed or failed: let the memory
+    // finalize or undo the bookkeeping its batch contexts did in next()
+    if (memory) {
+        memory->on_graph_compute_synced(sync_failure.status);
+    }
     if (sync_failure.status != GGML_STATUS_SUCCESS) {
         last_sync_status = sync_failure.status;
         LLAMA_LOG_ERROR("%s: backend synchronize failed, status: %d cause: %d raw_code: %d\n",
@@ -1478,6 +1483,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             const ggml_backend_sycl_failure sync_failure = llama_backend_sched_consume_sycl_failure(sched.get());
             const ggml_status sync_status = sync_failure.status;
             last_sync_status = sync_status;
+            if (memory) {
+                memory->on_graph_compute_synced(sync_status);
+            }
             if (sync_status != GGML_STATUS_SUCCESS) {
                 const int abort_reason = sync_failure.cause == GGML_SYCL_FAILURE_CAUSE_DEVICE_LOST
                     ? GGML_INNERQ_ABORT_DEVICE_LOST
