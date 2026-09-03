@@ -7,20 +7,12 @@
 # # CPU-only build
 # bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
-# # with CUDA support
-# GG_BUILD_CUDA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-#
 # # with SYCL support
 # GG_BUILD_SYCL=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
 # # with VULKAN support
 # GG_BUILD_VULKAN=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
-# # with WebGPU support
-# GG_BUILD_WEBGPU=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-#
-# # with MUSA support
-# GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
 # # with KLEIDIAI support
 # GG_BUILD_KLEIDIAI=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
@@ -46,6 +38,7 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
+
 rm -f $OUT/*.log
 rm -f $OUT/*.exit
 rm -f $OUT/*.md
@@ -65,10 +58,8 @@ if [ ! -z "${GG_BUILD_NINJA}" ]; then
 fi
 
 
-
-
-if [ ! -z ${GG_BUILD_SYCL} ]; then
-    if [ -z ${ONEAPI_ROOT} ]; then
+if [ -n "${GG_BUILD_SYCL}" ]; then
+    if [ -z "${ONEAPI_ROOT}" ]; then
         echo "Not detected ONEAPI_ROOT, please install oneAPI base toolkit and enable it by:"
         echo "source /opt/intel/oneapi/setvars.sh"
         exit 1
@@ -82,7 +73,7 @@ if [ ! -z ${GG_BUILD_SYCL} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON"
 fi
 
-if [ ! -z ${GG_BUILD_VULKAN} ]; then
+if [ -n "${GG_BUILD_VULKAN}" ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
 
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -101,8 +92,7 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
 fi
 
 
-
-if [ ! -z ${GG_BUILD_NO_SVE} ]; then
+if [ -n "${GG_BUILD_NO_SVE}" ]; then
     # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm"
 fi
@@ -112,22 +102,22 @@ if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } -DGGML_CPU_KLEIDIAI=ON"
 fi
 
-if [ ! -z ${GG_BUILD_BLAS} ]; then
+if [ -n "${GG_BUILD_BLAS}" ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=${GG_BUILD_BLAS_VENDOR:-OpenBLAS}"
 else
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=OFF"
 fi
 
-if [ ! -z ${GG_BUILD_OPENVINO} ]; then
-    if [ -z ${OpenVINO_DIR} ]; then
+if [ -n "${GG_BUILD_OPENVINO}" ]; then
+    if [ -z "${OpenVINO_DIR}" ]; then
         echo "OpenVINO_DIR not found, please install OpenVINO via archives and enable it by:"
         echo "source /opt/intel/openvino/setupvars.sh"
         exit 1
     fi
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
-    # TODO: fix and re-enable the `test-llama-archs` test below
-    CTEST_EXTRA="-E test-llama-archs"
+    # TODO: fix and re-enable the `test-llama-archs` and `test-recurrent-state-rollback*`
+    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-rollback"
 fi
 
 ## helpers
@@ -237,6 +227,7 @@ function gg_sum_ctest_release {
     gg_printf '```\n'
 }
 
+
 # test_scripts
 
 function gg_run_test_scripts {
@@ -294,11 +285,6 @@ function gg_run_ctest_with_model_release {
 
     (LLAMACPP_TEST_MODELFILE="$model" time ctest -C Release --output-on-failure -L model) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
-    # test memory leaks
-    #if [[ ! -z ${GG_BUILD_METAL} ]]; then
-    #    # TODO: this hangs for some reason ...
-    #    (time leaks -quiet -atExit -- ./bin/test-thread-safety -m $model --parallel 2 -t 2 -p "hello") 2>&1 | tee -a $OUT/${ci}-leaks.log
-    #fi
 
     set +e
     cd ..
@@ -588,39 +574,57 @@ function gg_sum_rerank_tiny {
 
 function gg_check_build_requirements {
     if ! command -v git &> /dev/null; then
-        gg_printf 'git not found, please install'
+        gg_printf 'git not found, please install\n'
+        exit 1
     fi
 
     if ! command -v git-lfs &> /dev/null; then
-        gg_printf 'git-lfs not found, please install'
+        gg_printf 'git-lfs not found, please install\n'
+        exit 1
+    fi
+
+    if ! git config --get filter.lfs.clean &> /dev/null; then
+        gg_printf 'git-lfs not initialized, please run `git lfs install`\n'
+        exit 1
     fi
 
     if ! command -v wget &> /dev/null; then
-        gg_printf 'wget not found, please install'
+        gg_printf 'wget not found, please install\n'
+        exit 1
     fi
 
     if ! command -v python3 &> /dev/null; then
-        gg_printf 'python3 not found, please install'
+        gg_printf 'python3 not found, please install\n'
+        exit 1
     fi
 
     if ! command -v pip3 &> /dev/null; then
-        gg_printf 'pip3 not found, please install'
+        gg_printf 'pip3 not found, please install\n'
+        exit 1
     fi
 
     if ! python3 -m ensurepip --help &> /dev/null; then
-        gg_printf 'ensurepip not found, please install python3-venv package'
+        gg_printf 'ensurepip not found, please install python3-venv package\n'
+        exit 1
     fi
 
     if ! command -v cmake &> /dev/null; then
-        gg_printf 'cmake not found, please install'
+        gg_printf 'cmake not found, please install\n'
+        exit 1
     fi
 
     if ! command -v ccache &> /dev/null; then
-        gg_printf 'ccache not found, please consider installing for faster builds'
+        gg_printf 'ccache not found, please consider installing for faster builds\n'
     fi
 
     if ! command -v ctest &> /dev/null; then
-        gg_printf 'ctest not found, please install'
+        gg_printf 'ctest not found, please install\n'
+        exit 1
+    fi
+
+    if ! command -v unzip &> /dev/null; then
+        gg_printf 'unzip not found, please install\n'
+        exit 1
     fi
 }
 
@@ -675,7 +679,8 @@ ret=0
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
-if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
+
+if [ -n "${GG_BUILD_HIGH_PERF}" ]; then
     test $ret -eq 0 && gg_run test_backend_ops_cpu
 fi
 

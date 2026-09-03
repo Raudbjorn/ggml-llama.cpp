@@ -12,14 +12,18 @@ on:
       '**/*.h',
       '**/*.hpp',
       '**/*.c',
-      '**/*.cpp'
+      '**/*.cpp',
+      'scripts/check-required-targets.sh'
     ]
 
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-sycl.yml',
-      'ggml/src/ggml-sycl/**'
+      'ggml/src/ggml-sycl/**',
+      'tests/CMakeLists.txt',
+      'tests/test-sycl-*.cpp',
+      'scripts/check-required-targets.sh'
     ]
 
 concurrency:
@@ -52,7 +56,6 @@ jobs:
       LEVEL_ZERO_VERSION: "1.28.2"
       LEVEL_ZERO_UBUNTU_VERSION: "u24.04"
 
-    continue-on-error: true
 
     steps:
       - name: Clone
@@ -75,7 +78,7 @@ jobs:
           sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: sycl-ubuntu-24-${{ matrix.build }}
           evict-old-files: 1d
@@ -89,12 +92,26 @@ jobs:
             -G "Ninja" \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_SYCL=ON \
+            -DLLAMA_BUILD_TESTS=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx \
             -DLLAMA_OPENSSL=OFF \
             -DGGML_NATIVE=OFF \
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
+
+      - name: Required SYCL targets
+        run: scripts/check-required-targets.sh build sycl
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: sycl-ubuntu-24-${{ matrix.build }}
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   windows-latest-sycl:
     runs-on: windows-2022
@@ -127,7 +144,7 @@ jobs:
           "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: sycl-windows-latest
           variant: ccache
@@ -139,3 +156,13 @@ jobs:
       - name: Build
         id: cmake_build
         run:  examples/sycl/win-build-sycl.bat
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: sycl-windows-latest
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

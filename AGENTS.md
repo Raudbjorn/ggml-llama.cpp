@@ -85,7 +85,7 @@ Q (f32/f16)
 ### Type System (ggml/include/ggml.h:435-440)
 
 | Type | Enum | Block | Layout |
-|------|------|-------|--------|
+| ------ | ------ | ------- | -------- |
 | TURBO2_0 | 43 | 34B | norm(f16) + qs[32] (2-bit) |
 | TURBO3_0 | 44 | 50B | norm(f16) + qs[32] (low 2-bit) + signs[16] (high 1-bit) |
 | TURBO4_0 | 45 | 68B | norm(f16) + rnorm(f16) + qs[64] (4-bit nibble) |
@@ -100,7 +100,7 @@ All turbo KV: `QK_TURBO* = 128`. Block layouts in `ggml-common.h:260-343` with `
 ## Key Directories
 
 | Directory | Purpose |
-|-----------|---------|
+| ----------- | --------- |
 | `ggml/src/ggml-sycl/` | SYCL backend (~110 files): FA kernels, turbo quant, op handlers, MMVQ/DMMV |
 | `ggml/src/ggml-sycl/template-instances/` | 50 pre-compiled FA instantiation units (39 VEC + 11 TILE) |
 | `ggml/src/` | ggml core: `ggml-turbo-quant.c` (CPU reference), `ggml-common.h`, `ggml-innerq.c` |
@@ -110,6 +110,7 @@ All turbo KV: `QK_TURBO* = 128`. Block layouts in `ggml-common.h:260-343` with `
 | `tools/` | CLI: `llama-server`, `llama-bench`, `llama-perplexity`, `llama-completion` |
 | `tests/` | Oracle gate + backend ops + turbo unit tests |
 | `scripts/` | Bench harnesses, quality gates, sweep orchestrators |
+| `docs/development/upstream-merge.md` | Canonical runbook for syncing upstream while preserving backend pruning and TurboQuant/SYCL surfaces |
 | `docs/research/` | Per-campaign benchmark reports, build pins, fork-vs-upstream diffs |
 | `docs/backend/SYCL.md` | Upstream SYCL docs port (39.7KB): build recipes, env vars, known-good stack |
 
@@ -141,7 +142,7 @@ ninja -C build-aot   # ~14 min
 ### Key CMake Options
 
 | Option | Default | Purpose |
-|--------|---------|---------|
+| -------- | --------- | --------- |
 | `GGML_SYCL` | OFF | Enable SYCL backend |
 | `GGML_SYCL_F16` | OFF | 16-bit float SYCL calculations |
 | `GGML_SYCL_DEVICE_ARCH` | "" (JIT) | AOT target (`acm-g10`) |
@@ -213,7 +214,7 @@ bash scripts/turbo-quality-gate.sh
 ### Naming
 
 | Prefix | Scope | Example |
-|--------|-------|---------|
+| -------- | ------- | --------- |
 | `ggml_sycl_op_*` | Backend op handler | `ggml_sycl_op_turbo_wht` |
 | `ggml_sycl_flash_attn_ext*` | FA entry/variants | `ggml_sycl_flash_attn_ext_vec_case` |
 | `flash_attn_ext_*` | Internal FA helpers | `flash_attn_ext_vec<D, ncols, type_K, type_V>` |
@@ -263,7 +264,7 @@ Gate: `v->type == GGML_TYPE_TURBO{2,3,4}_0`. Three call sites: standard KV, K-on
 ### SYCL Backend
 
 | File | Role |
-|------|------|
+| ------ | ------ |
 | `ggml-sycl/ggml-sycl.cpp` | Entry: device init, op dispatch, mul_mat routing, env flags (273KB) |
 | `ggml-sycl/common.hpp` | Macros: `WARP_SIZE`, `SYCL_FLASH_ATTN`, `SYCL_CHECK` |
 | `ggml-sycl/fattn.cpp` | FA routing: `ggml_sycl_get_best_fattn_kernel()` |
@@ -279,7 +280,7 @@ Gate: `v->type == GGML_TYPE_TURBO{2,3,4}_0`. Three call sites: standard KV, K-on
 ### Llama Core
 
 | File | Role |
-|------|------|
+| ------ | ------ |
 | `src/llama-graph.cpp` | WHT wiring around `build_attn_mha()` |
 | `src/llama-kv-cache.cpp` | Auto-asymmetric, layer-adaptive, zero-padding, rotation init |
 | `ggml/src/ggml-turbo-quant.c` | CPU reference: centroids, WHT, quantize/dequantize |
@@ -313,7 +314,7 @@ Gate: `v->type == GGML_TYPE_TURBO{2,3,4}_0`. Three call sites: standard KV, K-on
 `tests/test-sycl-turbo-correctness.cpp` (1565 lines). CPU-vs-SYCL oracle. **No external model files** -- all synthetic data with fixed seeds.
 
 | Section | Tests |
-|---------|-------|
+| --------- | ------- |
 | [1/1b] | WHT isolation (group 64/128, with/without scale_inv) |
 | [2/2b/2c] | CPY turbo->F32, SET_ROWS quantize, Q8_0 layout |
 | [3] | MUL_MAT turbo (MMVQ single column) |
@@ -354,7 +355,7 @@ ctest --test-dir build-sycl -L sycl --timeout 180 -V
 ### Other SYCL Tests
 
 | Test | Purpose |
-|------|---------|
+| ------ | --------- |
 | `test-sycl-turbo.cpp` | Smoke: SET_ROWS + MUL_MAT for turbo/TQ |
 | `test-sycl-fuzz.cpp` | Random-index SET_ROWS fuzzer (10k iter) |
 | `test-sycl-stress-deep.cpp` | Memory pressure (100k iter, 32k ctx, 512MB) |
@@ -379,7 +380,7 @@ ctest --test-dir build-sycl -L sycl --timeout 180 -V
 ### Killed (do not re-propose without new external evidence)
 
 | Avenue | Kill evidence |
-|--------|--------------|
+| -------- | -------------- |
 | SLM centroid LUT in FA VEC | Measured -8% at depth; Intel 16x4B bank conflicts + GRF spill |
 | nthreads_KQ=1 for turbo | Bundled with reverted LUT; SG=16 occupancy didn't transfer |
 | joint_matrix XMX @ SG=16 | Hard IGC ICE, reproduced 3x |

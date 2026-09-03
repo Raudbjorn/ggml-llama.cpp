@@ -1,8 +1,10 @@
-import pytest
-from openai import OpenAI
-from utils import *
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+
+from openai import OpenAI
+import pytest
+
+from utils import ServerPreset
 
 server = ServerPreset.tinyllama2()
 
@@ -15,7 +17,7 @@ def create_server():
     server.api_key = TEST_API_KEY
 
 
-@pytest.mark.parametrize("endpoint", ["/health", "/models"])
+@pytest.mark.parametrize("endpoint", ["/health", "/models", "/v1/models"])
 def test_access_public_endpoint(endpoint: str):
     global server
     server.start()
@@ -227,6 +229,58 @@ def test_cors_explicit_origin_retains_credentials():
     assert actual.headers["Access-Control-Allow-Credentials"] == "true"
 
 
+@pytest.mark.parametrize("origin", ["https://trusted.example.evil", "https://evil.example"])
+def test_cors_explicit_origin_rejects_near_matches(origin: str):
+    global server
+    server.cors_origins = "https://trusted.example"
+    server.cors_credentials = True
+    server.start()
+
+    preflight = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+    })
+    assert preflight.status_code == 200
+    assert "Access-Control-Allow-Origin" not in preflight.headers
+    assert preflight.headers["Access-Control-Allow-Credentials"] == "false"
+
+    actual = server.make_request("GET", "/health", headers={"Origin": origin})
+    assert actual.status_code == 200
+    assert "Access-Control-Allow-Origin" not in actual.headers
+    assert "Access-Control-Allow-Credentials" not in actual.headers
+
+
+def test_cors_explicit_origin_list_reflects_only_matching_origin():
+    global server
+    server.cors_origins = "https://one.example, https://two.example"
+    server.cors_credentials = True
+    server.start()
+
+    actual = server.make_request("GET", "/health", headers={"Origin": "https://two.example"})
+    assert actual.status_code == 200
+    assert actual.headers["Access-Control-Allow-Origin"] == "https://two.example"
+    assert actual.headers["Access-Control-Allow-Credentials"] == "true"
+
+
+def test_cors_explicit_origin_omits_headers_without_origin():
+    global server
+    server.cors_origins = "https://trusted.example"
+    server.cors_credentials = True
+    server.start()
+
+    preflight = server.make_request("OPTIONS", "/completions", headers={
+        "Access-Control-Request-Method": "POST",
+    })
+    assert preflight.status_code == 200
+    assert "Access-Control-Allow-Origin" not in preflight.headers
+    assert preflight.headers["Access-Control-Allow-Credentials"] == "false"
+
+    actual = server.make_request("GET", "/health")
+    assert actual.status_code == 200
+    assert "Access-Control-Allow-Origin" not in actual.headers
+    assert "Access-Control-Allow-Credentials" not in actual.headers
+
+
 def test_cors_explicitly_disabled_credentials_remain_disabled():
     global server
     server.cors_origins = "https://trusted.example"
@@ -240,6 +294,13 @@ def test_cors_explicitly_disabled_credentials_remain_disabled():
     assert res.status_code == 200
     assert res.headers["Access-Control-Allow-Origin"] == "https://trusted.example"
     assert res.headers["Access-Control-Allow-Credentials"] == "false"
+
+    actual = server.make_request("GET", "/health", headers={
+        "Origin": "https://trusted.example",
+    })
+    assert actual.status_code == 200
+    assert actual.headers["Access-Control-Allow-Origin"] == "https://trusted.example"
+    assert "Access-Control-Allow-Credentials" not in actual.headers
 
 
 @pytest.mark.parametrize("origin", [
@@ -296,6 +357,7 @@ def test_cors_origins_defaults_to_localhost_with_tools_enabled():
     global server
     server = ServerPreset.router()
     server.server_tools = "all"
+    server.api_key = TEST_API_KEY
     server.start()
     res = server.make_request("OPTIONS", "/completions", headers={
         "Origin": "http://localhost:8080",

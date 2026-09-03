@@ -155,6 +155,15 @@ struct llama_memory_i {
 
     virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const = 0;
     virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
+
+    // called by the context each time it learns the outcome of every graph
+    // enqueued so far. An asynchronous backend reports a failure only at a
+    // later synchronize, after the batch context whose next() already
+    // accounted for the ubatch is gone; memory types that book-keep in next()
+    // undo that accounting here on failure. Default: nothing to undo.
+    virtual void on_graph_compute_synced(ggml_status status) {
+        (void) status;
+    }
 };
 
 using llama_memory_ptr = std::unique_ptr<llama_memory_i>;

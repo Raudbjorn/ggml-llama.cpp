@@ -190,6 +190,7 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_ONEDNN   = 150, // added enum for onednn==150
     BEST_FATTN_KERNEL_TILE     = 200,
     BEST_FATTN_KERNEL_XMX      = 300,
+    BEST_FATTN_KERNEL_MKL      = 350,
 };
 
 struct ggml_sycl_fattn_profile_bucket {
@@ -445,6 +446,8 @@ static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_t
             route_name = "XMX";
             break;
         case BEST_FATTN_KERNEL_NONE:
+        case BEST_FATTN_KERNEL_ONEDNN:
+        case BEST_FATTN_KERNEL_MKL:
             return;
     }
 
@@ -552,10 +555,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // pair so Qwen3 GQA 8:1 (after the auto-asymmetric K downgrade at
     // src/llama-kv-cache.cpp:152 fires) can reach the VEC kernel.
     const bool k_q8_0_v_turbo =
-        (K->type == GGML_TYPE_Q8_0) &&
-        (V->type == GGML_TYPE_TURBO2_0 ||
-         V->type == GGML_TYPE_TURBO3_0 ||
-         V->type == GGML_TYPE_TURBO4_0);
+        K->type == GGML_TYPE_Q8_0 && ggml_type_is_turbo(V->type);
     if (K->type != V->type && !k_q8_0_v_turbo) {
         return BEST_FATTN_KERNEL_NONE;
     }
@@ -589,8 +589,8 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // with complete K and V dequant (need_f16 = false). VEC tiles over Q columns,
     // so it serves both decode and prefill. TILE turbo is unsupported. Turbo blocks
     // span 128 elements, so only head sizes that are multiples of 128 are usable.
-    const bool K_turbo = K->type == GGML_TYPE_TURBO2_0 || K->type == GGML_TYPE_TURBO3_0 || K->type == GGML_TYPE_TURBO4_0;
-    const bool V_turbo = V->type == GGML_TYPE_TURBO2_0 || V->type == GGML_TYPE_TURBO3_0 || V->type == GGML_TYPE_TURBO4_0;
+    const bool K_turbo = ggml_type_is_turbo(K->type);
+    const bool V_turbo = ggml_type_is_turbo(V->type);
     if (K_turbo || V_turbo) {
         if (K->ne[0] % 128 != 0) {
             return BEST_FATTN_KERNEL_NONE;
@@ -604,6 +604,39 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         }
         return BEST_FATTN_KERNEL_VEC;
     }
+
+    // MKL path: XMX-accelerated GEMM for prompt processing (all KV cache types,
+    // reached here only for non-turbo K/V since the turbo branch above always
+    // returns). The MKL kernel converts non-F16 K/V to F16 via to_fp16_sycl
+    // before GEMM, so quantized, F16, BF16, and F32 caches all qualify.
+    // Validated envelope: grouped-query (gqa_ratio >= 2), head_dim a multiple
+    // of 64 in [64,512] with matching K/V head size, mask present, no
+    // sinks/ALiBi/softcap, single-sequence batch. Everything else falls
+    // through to XMX/oneDNN/VEC/TILE below. Set GGML_SYCL_ENABLE_MKL_FA=0 to
+    // force the fallback path for A/B testing.
+    static const int mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
+    if (mkl_enable == 1 && mask && dst->src[4] == nullptr && gqa_ratio >= 2 &&
+        Q->ne[0] >= 64 && Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 &&
+        Q->ne[0] == V->ne[0] &&
+        Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
+        max_bias == 0.0f && logit_softcap == 0.0f &&
+        (Q->ne[3] == K->ne[3] || K->ne[3] == 1)) {
+        // F16 K/V strides must be a multiple of ne[0]*2 (the natural row size
+        // in bytes). This passes both dense (nb1 == ne0*2) and interleaved
+        // (nb1 == H * ne0*2) layouts; only pathological test strides fall
+        // through to TILE.
+        bool kv_strides_ok = true;
+        for (const ggml_tensor * t : {K, V}) {
+            if (t->type == GGML_TYPE_F16 && t->nb[1] % (t->ne[0] * 2) != 0) {
+                kv_strides_ok = false;
+                break;
+            }
+        }
+        if (kv_strides_ok) {
+            return BEST_FATTN_KERNEL_MKL;
+        }
+    }
+
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
     // TILE's quantized staging uses the source-aware non-contiguous converter,
     // so both canonical and quants-first q8_0 rows are supported here.
@@ -689,6 +722,9 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             break;
         case BEST_FATTN_KERNEL_XMX:
             ggml_sycl_flash_attn_ext_xmx(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_MKL:
+            ggml_sycl_flash_attn_ext_mkl(ctx, dst);
             break;
     }
 }

@@ -611,6 +611,13 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
         GGML_ASSERT(int64_t(ctx->kv.size()) == n_kv);
 
         const int alignment_idx = gguf_find_key(ctx, GGUF_KEY_GENERAL_ALIGNMENT);
+        if (alignment_idx != -1 && gguf_get_kv_type(ctx, alignment_idx) != GGUF_TYPE_UINT32) {
+            GGML_LOG_ERROR("%s: key '%s' must be of type %s but is %s\n",
+                __func__, GGUF_KEY_GENERAL_ALIGNMENT, gguf_type_name(GGUF_TYPE_UINT32),
+                gguf_type_name(gguf_get_kv_type(ctx, alignment_idx)));
+            gguf_free(ctx);
+            return nullptr;
+        }
         ctx->alignment = alignment_idx == -1 ? GGUF_DEFAULT_ALIGNMENT : gguf_get_val_u32(ctx, alignment_idx);
 
         if (ctx->alignment == 0 || (ctx->alignment & (ctx->alignment - 1)) != 0) {
@@ -682,10 +689,19 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
 
             // check that the total number of elements is representable
-            if (ok && ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
-                       (INT64_MAX/info.t.ne[2] <= info.t.ne[0]*info.t.ne[1]) ||
-                       (INT64_MAX/info.t.ne[3] <= info.t.ne[0]*info.t.ne[1]*info.t.ne[2]))) {
+            // checked incrementally, testing for overflow before each multiply, so this guard
+            // never itself performs (or calls ggml_nelements() to perform) an overflowing multiply
+            bool ne_overflow = false;
+            int64_t ne_total = info.t.ne[0];
+            for (uint32_t j = 1; ok && j < GGML_MAX_DIMS; ++j) {
+                if (info.t.ne[j] != 0 && ne_total != 0 && INT64_MAX/info.t.ne[j] <= ne_total) {
+                    ne_overflow = true;
+                    break;
+                }
+                ne_total *= info.t.ne[j];
+            }
 
+            if (ok && ne_overflow) {
                 GGML_LOG_ERROR("%s: total number of elements in tensor '%s' with shape "
                     "(%" PRIi64 ", %" PRIi64 ", %" PRIi64 ", %" PRIi64 ") is >= %" PRIi64 "\n",
                     __func__, info.t.name, info.t.ne[0], info.t.ne[1], info.t.ne[2], info.t.ne[3], INT64_MAX);
@@ -774,7 +790,17 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 gguf_free(ctx);
                 return nullptr;
             }
-            size_t padded_size = GGML_PAD(ggml_nbytes(&ti.t), ctx->alignment);
+            const size_t raw_size = ggml_nbytes(&ti.t);
+            // GGML_PAD does (raw_size + alignment - 1) internally; check that add can't wrap
+            // before doing it, since a wrapped (small) padded_size would pass the accumulation
+            // check below and silently under-count ctx->size for a crafted/corrupt GGUF file.
+            if (raw_size > SIZE_MAX - (ctx->alignment - 1)) {
+                GGML_LOG_ERROR("%s: tensor '%s' size overflow computing padded size (%zu + alignment %zu)\n",
+                    __func__, ti.t.name, raw_size, ctx->alignment);
+                gguf_free(ctx);
+                return nullptr;
+            }
+            size_t padded_size = GGML_PAD(raw_size, ctx->alignment);
             if (SIZE_MAX - ctx->size < padded_size) {
                 GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %zu + %zu\n",
                     __func__, ti.t.name, ctx->size, padded_size);
@@ -1424,7 +1450,7 @@ void gguf_set_tensor_data(struct gguf_context * ctx, const char * name, const vo
 struct gguf_writer_base {
     size_t written_bytes {0u};
 
-    ~gguf_writer_base(void) = default;
+    virtual ~gguf_writer_base(void) = default;
 
     // we bet on devirtualization
     virtual void write(int8_t val) = 0;

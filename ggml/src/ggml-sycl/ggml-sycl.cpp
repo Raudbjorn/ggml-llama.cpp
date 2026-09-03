@@ -58,10 +58,15 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#ifdef GGML_SYCL_TESTING
+#include "ggml-sycl/ggml-sycl-test.h"
+#endif
+
 #include "ggml-sycl/add-id.hpp"
 #include "ggml-sycl/backend.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/element_wise.hpp"
+#include "ggml-sycl/fwht.hpp"
 #include "ggml-sycl/gemm.hpp"
 #include "ggml-sycl/getrows.hpp"
 #include "ggml-sycl/norm.hpp"
@@ -70,6 +75,8 @@
 #include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/set_rows.hpp"
 #include "ggml-sycl/set.hpp"
+#include "ggml-sycl/dsv4-hc.hpp"
+#include "ggml-sycl/lightning-indexer.hpp"
 #include "ggml-sycl/conv2d.hpp"
 #include "ggml-sycl/conv2d-dw.hpp"
 #include "ggml-sycl/conv2d-transpose.hpp"
@@ -80,6 +87,7 @@
 #include "ggml-sycl/fill.hpp"
 #include "ggml-sycl/cumsum.hpp"
 #include "ggml-sycl/diag.hpp"
+#include "ggml-sycl/opt-step.hpp"
 #include "ggml-sycl/solve_tri.hpp"
 #include "ggml-sycl/gated_delta_net.hpp"
 #include "ggml-sycl/pool.hpp"
@@ -602,9 +610,11 @@ static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_t
 struct ggml_backend_sycl_device_context;
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev);
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_backend(ggml_backend_t backend);
-static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx);
 static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx);
 static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_context * dev_ctx, const sycl::exception & exc);
+#ifdef GGML_SYCL_TESTING
+static void ggml_backend_sycl_test_maybe_record_sync_failure(ggml_backend_sycl_device_context * dev_ctx);
+#endif
 
 
 static bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
@@ -2407,6 +2417,16 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
     }
 }
 
+// Ranks a candidate (val, col) against a top-k slot (slot_val, slot_idx). An
+// empty slot (idx < 0) is always taken, ties go to the lower column. Comparing
+// against a -FLT_MAX sentinel instead left slots empty for -INFINITY scores,
+// so a masked row (a sparse-attention indexer with fewer live cells than k)
+// returned -1 indices and the CPU ggml_set_rows consuming them aborted on its
+// range check.
+static inline bool ggml_sycl_top_k_before(float val, int col, float slot_val, int slot_idx) {
+    return slot_idx < 0 || val > slot_val || (val == slot_val && col < slot_idx);
+}
+
 static void top_k_f32_sycl(
     const float * src,
     int32_t * dst_indices,
@@ -2439,16 +2459,16 @@ static void top_k_f32_sycl(
                 int local_idx[32];
 
                 for (int i = 0; i < k; i++) {
-                    local_vals[i] = -FLT_MAX;
+                    local_vals[i] = -INFINITY;
                     local_idx[i] = -1;
                 }
 
                 for (int col = tid; col < ncols; col += block_size) {
                     float val = src_row[col];
 
-                    if (val > local_vals[k-1]) {
+                    if (ggml_sycl_top_k_before(val, col, local_vals[k-1], local_idx[k-1])) {
                         int pos = k - 1;
-                        while (pos > 0 && val > local_vals[pos - 1]) {
+                        while (pos > 0 && ggml_sycl_top_k_before(val, col, local_vals[pos - 1], local_idx[pos - 1])) {
                             pos--;
                         }
 
@@ -2472,7 +2492,7 @@ static void top_k_f32_sycl(
                     int final_idx[32];
 
                     for (int i = 0; i < k; i++) {
-                        final_vals[i] = -FLT_MAX;
+                        final_vals[i] = -INFINITY;
                         final_idx[i] = -1;
                     }
 
@@ -2481,9 +2501,13 @@ static void top_k_f32_sycl(
                             float val = shared_vals[t * k + i];
                             int idx = shared_idx[t * k + i];
 
-                            if (val > final_vals[k-1]) {
+                            if (idx < 0) {
+                                // the thread saw fewer than k columns; its list is packed at the front
+                                break;
+                            }
+                            if (ggml_sycl_top_k_before(val, idx, final_vals[k-1], final_idx[k-1])) {
                                 int pos = k - 1;
-                                while (pos > 0 && val > final_vals[pos - 1]) {
+                                while (pos > 0 && ggml_sycl_top_k_before(val, idx, final_vals[pos - 1], final_idx[pos - 1])) {
                                     pos--;
                                 }
 
@@ -4477,17 +4501,28 @@ static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_
                                     2*GGML_SYCL_DMMV_X : GGML_SYCL_DMMV_X;
     return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
            src0->ne[0] % dmmv_x_required == 0 && src1->ne[1] == 1 &&
-           src0->type != GGML_TYPE_TURBO2_0 && src0->type != GGML_TYPE_TURBO3_0 && src0->type != GGML_TYPE_TURBO4_0;
+           !ggml_type_is_turbo(src0->type);
 }
 
 static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE &&
-           src0->type != GGML_TYPE_TURBO2_0 && src0->type != GGML_TYPE_TURBO3_0 && src0->type != GGML_TYPE_TURBO4_0;
+           src1->ne[1] <= MMVQ_MAX_BATCH_SIZE && !ggml_type_is_turbo(src0->type);
 }
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+
+    // Handle HADAMARAD hint given from further up the pipeline and pass it to the correct
+    // kernel.
+    //
+    // The op check is not redundant: this backend also routes MUL_MAT_ID through here with a
+    // stack copy of dst, which carries MUL_MAT_ID's own op_params. ggml_mul_mat_set_hint()
+    // asserts GGML_OP_MUL_MAT for the same reason.
+    if (dst->op == GGML_OP_MUL_MAT && ggml_get_op_params_i32(dst, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+        ggml_sycl_op_fwht(ctx, src1, dst)) {
+        return;
+    }
+
     const bool split = ggml_backend_buffer_is_sycl_split(src0->buffer);
     int64_t min_compute_capability = INT_MAX;
 
@@ -5026,6 +5061,18 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, ggml_back
         case GGML_OP_SET_ROWS:
             ggml_sycl_op_set_rows(ctx, dst);
             break;
+        case GGML_OP_DSV4_HC_PRE:
+            ggml_sycl_op_dsv4_hc_pre(ctx, dst);
+            break;
+        case GGML_OP_DSV4_HC_COMB:
+            ggml_sycl_op_dsv4_hc_comb(ctx, dst);
+            break;
+        case GGML_OP_DSV4_HC_POST:
+            ggml_sycl_op_dsv4_hc_post(ctx, dst);
+            break;
+        case GGML_OP_LIGHTNING_INDEXER:
+            ggml_sycl_op_lightning_indexer(ctx, dst);
+            break;
         case GGML_OP_DUP:
             ggml_sycl_dup(ctx, dst);
             break;
@@ -5296,6 +5343,12 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, ggml_back
         case GGML_OP_GATED_DELTA_NET:
             ggml_sycl_gated_delta_net(ctx, dst);
             break;
+        case GGML_OP_OPT_STEP_ADAMW:
+            ggml_sycl_opt_step_adamw(ctx, dst);
+            break;
+        case GGML_OP_OPT_STEP_SGD:
+            ggml_sycl_opt_step_sgd(ctx, dst);
+            break;
         case GGML_OP_SSM_CONV:
             ggml_sycl_ssm_conv(ctx, dst);
             break;
@@ -5468,6 +5521,9 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) {
     try {
         const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
         SYCL_CHECK(CHECK_TRY_ERROR((stream)->wait()));
+#ifdef GGML_SYCL_TESTING
+        ggml_backend_sycl_test_maybe_record_sync_failure(dev_ctx);
+#endif
     } catch (sycl::exception const & exc) {
         ggml_backend_sycl_record_failed_exception(dev_ctx, exc);
         GGML_LOG_ERROR("%s: SYCL synchronize failed: %s\n", __func__, exc.what());
@@ -5505,6 +5561,18 @@ static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_contex
         // Fused dense FFN consumes this MUL_MAT, the next MUL_MAT and the GLU.
         if (node->op == GGML_OP_MUL_MAT && ggml_sycl_try_fuse_ffn_swiglu(*sycl_ctx, cgraph, i)) {
             i += 2;
+            continue;
+        }
+        if (node->op == GGML_OP_RMS_NORM &&
+            ggml_sycl_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
+            ggml_sycl_op_rms_norm_fused(*sycl_ctx, node, cgraph->nodes[i + 1]);
+            i++;
+            continue;
+        }
+        if (node->op == GGML_OP_UNARY &&
+            ggml_sycl_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL }, { ggml_get_unary_op(node) })) {
+            ggml_sycl_op_unary_mul_fused(*sycl_ctx, node, cgraph->nodes[i + 1]);
+            i++;
             continue;
         }
 
@@ -5937,7 +6005,9 @@ static void ggml_sycl_graph_prepare_fattn_buffers(
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
-    ggml_backend_sycl_clear_pending_status(dev_ctx);
+    // The pending failure is sticky until consumed. The scheduler synchronizes
+    // this backend between splits without consuming, so clearing here would
+    // drop a failure that surfaced in such a sync before the next consume.
     ggml_sycl_profile_rope_fusion(cgraph);
     ggml_sycl_profile_ffn_fusion(cgraph);
     const bool graph_profile_enabled = ggml_sycl_graph_profile_enabled();
@@ -6149,9 +6219,14 @@ struct ggml_backend_sycl_device_context {
     std::string name;
     std::string description;
     int op_offload_min_batch_size;
+    // first failure since the last ggml_backend_sycl_consume_last_failure();
+    // every graph submission, synchronize and event wait records into it
     std::atomic<int> pending_status = GGML_STATUS_SUCCESS;
     std::atomic<int> pending_cause  = GGML_SYCL_FAILURE_CAUSE_NONE;
     std::atomic<int> pending_raw_code = 0;
+#ifdef GGML_SYCL_TESTING
+    std::atomic<bool> test_sync_failure_once = false;
+#endif
 };
  
 static ggml_backend_sycl_device_context * ggml_backend_sycl_device_context_from_device(ggml_backend_dev_t dev) {
@@ -6186,14 +6261,6 @@ static ggml_backend_sycl_failure_cause ggml_backend_sycl_classify_exception(cons
     return GGML_SYCL_FAILURE_CAUSE_OTHER;
 }
  
-static void ggml_backend_sycl_clear_pending_status(ggml_backend_sycl_device_context * dev_ctx) {
-    if (dev_ctx != nullptr) {
-        dev_ctx->pending_status.store(GGML_STATUS_SUCCESS);
-        dev_ctx->pending_cause.store(GGML_SYCL_FAILURE_CAUSE_NONE);
-        dev_ctx->pending_raw_code.store(0);
-    }
-}
- 
 static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_context * dev_ctx) {
     if (dev_ctx != nullptr && dev_ctx->pending_status.load() == GGML_STATUS_SUCCESS) {
         dev_ctx->pending_status.store(GGML_STATUS_FAILED);
@@ -6201,6 +6268,23 @@ static void ggml_backend_sycl_record_failed_status(ggml_backend_sycl_device_cont
         dev_ctx->pending_raw_code.store(0);
     }
 }
+#ifdef GGML_SYCL_TESTING
+static void ggml_backend_sycl_test_maybe_record_sync_failure(ggml_backend_sycl_device_context * dev_ctx) {
+    if (dev_ctx != nullptr && dev_ctx->test_sync_failure_once.exchange(false)) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+    }
+}
+
+bool ggml_backend_sycl_test_inject_sync_failure_once(ggml_backend_t backend) {
+    ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
+    if (dev_ctx == nullptr) {
+        return false;
+    }
+
+    dev_ctx->test_sync_failure_once.store(true);
+    return true;
+}
+#endif
  
 static void ggml_backend_sycl_record_failed_exception(ggml_backend_sycl_device_context * dev_ctx, const sycl::exception & exc) {
     if (dev_ctx != nullptr) {
@@ -6272,6 +6356,7 @@ static void ggml_backend_sycl_device_get_props(ggml_backend_dev_t dev, ggml_back
         /* .host_buffer           = */ host_buffer,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ events,
+        /* .mmap_support          = */ true,
     };
 }
 
@@ -6442,13 +6527,39 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                          op->type == GGML_TYPE_Q1_0 ||
                          op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_IQ4_NL ||
                          op->type == GGML_TYPE_MXFP4 || op->type == GGML_TYPE_NVFP4 ||
-                         op->type == GGML_TYPE_TURBO2_0 || op->type == GGML_TYPE_TURBO3_0 || op->type == GGML_TYPE_TURBO4_0 ||
-                         op->type == GGML_TYPE_TQ3_1S || op->type == GGML_TYPE_TQ4_1S) &&
-                        op->src[0]->type == GGML_TYPE_F32 &&
+                         // TQ3_1S/TQ4_1S are weight-only types: ggml_sycl_op_set_rows has no kernel for them
+                         ggml_type_is_turbo(op->type)) &&
+                        (op->src[0]->type == GGML_TYPE_F32 ||
+                         // an f16 source only feeds the float destinations; the quantizers read float.
+                         // Declining it here is not free: SET_ROWS returns a view of its destination,
+                         // so a fallback backend would write into this device's memory.
+                         (op->src[0]->type == GGML_TYPE_F16 &&
+                          (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16))) &&
                         (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32));
                 return res;
             }
             break;
+        case GGML_OP_DSV4_HC_PRE:
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32;
+        case GGML_OP_DSV4_HC_COMB:
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
+                op->src[2]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        case GGML_OP_DSV4_HC_POST:
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
+                op->src[2]->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32;
+        case GGML_OP_LIGHTNING_INDEXER:
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                (op->src[1]->type == GGML_TYPE_F16 || op->src[1]->type == GGML_TYPE_F32 ||
+                 op->src[1]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_Q8_0 ||
+                 op->src[1]->type == GGML_TYPE_Q5_1 || op->src[1]->type == GGML_TYPE_Q5_0 ||
+                 op->src[1]->type == GGML_TYPE_Q4_1 || op->src[1]->type == GGML_TYPE_Q4_0 ||
+                 op->src[1]->type == GGML_TYPE_IQ4_NL) &&
+                op->src[2]->type == GGML_TYPE_F32 &&
+                op->src[3]->type == GGML_TYPE_F16 &&
+                op->type == GGML_TYPE_F32 &&
+                op->src[0]->ne[0] == WARP_SIZE * 8;
         case GGML_OP_CPY:
             {
                 ggml_type src0_type = op->src[0]->type;
@@ -6654,6 +6765,8 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_RWKV_WKV7:
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_GATED_DELTA_NET:
+        case GGML_OP_OPT_STEP_ADAMW:
+        case GGML_OP_OPT_STEP_SGD:
             return true;
         case GGML_OP_SSM_CONV:
             return op->type == GGML_TYPE_F32 &&

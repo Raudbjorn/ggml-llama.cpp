@@ -30,6 +30,73 @@ struct proxy_target_policy_result {
     std::string message;
 };
 
+static std::string proxy_target_url_syntax_error(const std::string & target_url) {
+    const size_t scheme_end = target_url.find("://");
+    if (scheme_end == std::string::npos) {
+        return "";
+    }
+
+    const size_t authority_begin = scheme_end + 3;
+    const size_t authority_end = target_url.find_first_of("/?#", authority_begin);
+    if (authority_end != std::string::npos && target_url[authority_end] != '/') {
+        return "target URL query or fragment must follow a path";
+    }
+
+    const std::string authority = target_url.substr(
+            authority_begin,
+            authority_end == std::string::npos ? std::string::npos : authority_end - authority_begin);
+    if (authority.find('@') != std::string::npos) {
+        return "userinfo in target URLs is not allowed";
+    }
+    if (std::any_of(authority.begin(), authority.end(), [](unsigned char c) {
+            return std::isspace(c) != 0 || std::iscntrl(c) != 0;
+        })) {
+        return "whitespace in target URL authority is not allowed";
+    }
+
+    bool has_port = false;
+    std::string port;
+    if (!authority.empty() && authority.front() == '[') {
+        const size_t close = authority.find(']');
+        if (close != std::string::npos && close + 1 < authority.size()) {
+            if (authority[close + 1] != ':') {
+                return "invalid bracketed target URL authority";
+            }
+            has_port = true;
+            port = authority.substr(close + 2);
+        }
+    } else {
+        const size_t colon = authority.find(':');
+        if (colon != std::string::npos) {
+            if (authority.find(':', colon + 1) != std::string::npos) {
+                return "IPv6 target URL literals must be bracketed";
+            }
+            has_port = true;
+            port = authority.substr(colon + 1);
+        }
+    }
+
+    if (has_port) {
+        if (port.empty() || !std::all_of(port.begin(), port.end(), [](unsigned char c) {
+                return std::isdigit(c) != 0;
+            })) {
+            return "invalid target URL port";
+        }
+        uint32_t port_number = 0;
+        for (const unsigned char c : port) {
+            port_number = port_number * 10 + static_cast<uint32_t>(c - '0');
+            if (port_number > 65535) {
+                return "target URL port is out of range";
+            }
+        }
+        if (port_number == 0) {
+            return "target URL port is out of range";
+        }
+    }
+
+    return "";
+}
+
 static std::string proxy_normalize_host(std::string host) {
     std::transform(host.begin(), host.end(), host.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
@@ -161,6 +228,15 @@ static bool proxy_sockaddr_is_global(const sockaddr * address) {
     return false;
 }
 
+// Residual risk, documented and not fixed here: this checks the target host string once, at
+// request time. A hostname target (not a numeric IP) is not resolved here (see the AI_NUMERICHOST
+// probe and its "Tier 4a" comment below), and the outbound request is made later by
+// server_http_proxy (server-models.cpp), which does its own DNS lookup and follows HTTP redirects
+// (cpp-httplib set_follow_location(true)) without calling back into this policy. So a hostname
+// that resolves to a non-global address at connection time (DNS rebinding) or a redirect to a
+// non-global target is not caught. Closing this needs the HTTP client to connect to the specific
+// IP validated here (and to re-validate each redirect hop), which is a client-level change outside
+// this policy function's scope.
 static proxy_target_policy_result proxy_target_policy(
         const common_http_url & parsed_url,
         const std::vector<std::string> & allowlist) {
@@ -298,9 +374,15 @@ static server_http_res_ptr proxy_request(
         const server_http_req & req,
         const std::string & method,
         const std::vector<std::string> & allowlist) {
+    const std::string target_url = req.get_param("url");
+    const std::string syntax_error = proxy_target_url_syntax_error(target_url);
+    if (!syntax_error.empty()) {
+        return proxy_policy_error(syntax_error);
+    }
+
     common_http_url parsed_url;
     try {
-        parsed_url = common_http_parse_url(req.get_param("url"));
+        parsed_url = common_http_parse_url(target_url);
     } catch (const std::exception & e) {
         return proxy_policy_error(std::string("invalid target URL: ") + e.what());
     }

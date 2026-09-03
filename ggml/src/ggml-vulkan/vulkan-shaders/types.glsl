@@ -13,6 +13,11 @@
 #extension GL_EXT_float_e4m3 : require
 #endif
 
+#ifdef USE_OCP_FP4
+#extension GL_EXT_float_e2m1 : require
+#extension GL_EXT_float_e4m3 : require
+#endif
+
 #if defined(DATA_A_F32)
 #define QUANT_K 1
 #define QUANT_R 1
@@ -301,6 +306,30 @@ struct block_q2_K_packed32
 #define A_TYPE_PACKED16 block_q2_K_packed16
 #define A_TYPE_PACKED32 block_q2_K_packed32
 #define SCALES_PER_32 2
+#define DATA_A_QUANT_K
+#endif
+
+#define QUANT_K_TQ2_0 256
+
+// ternary (BitNet): 2-bit codes, w = (q - 1) * d; qs layout matches q2_K's
+// two 32-byte groups with four bit-levels per byte
+struct block_tq2_0
+{
+    uint8_t qs[QUANT_K_TQ2_0/4];
+    float16_t d;
+};
+
+struct block_tq2_0_packed16
+{
+    uint16_t qs[QUANT_K_TQ2_0/4/2];
+    float16_t d;
+};
+
+#if defined(DATA_A_TQ2_0)
+#define QUANT_K QUANT_K_TQ2_0
+#define QUANT_R 1
+#define A_TYPE block_tq2_0
+#define A_TYPE_PACKED16 block_tq2_0_packed16
 #define DATA_A_QUANT_K
 #endif
 

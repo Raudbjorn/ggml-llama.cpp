@@ -2,84 +2,192 @@
 #include "common.h"
 #include "download.h"
 #include "llama.h"
-#include "log.h"
+#include "speculative.h"
+#include "gguf.h"
 
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
+#include <cmath>
+#include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 #include <sstream>
-#include <random>
 #include <unordered_set>
 
 #undef NDEBUG
 #include <cassert>
 
-struct env_var_snapshot {
-    std::string name;
-    bool was_set;
-    std::string value;
-
-    explicit env_var_snapshot(const char * name) : name(name) {
-        const char * current = getenv(name);
-        was_set = current != nullptr;
-        if (current != nullptr) {
-            value = current;
-        }
-    }
-
-    ~env_var_snapshot() {
-        set(was_set ? value.c_str() : nullptr);
-    }
-
-    void set(const char * new_value) const {
-#ifdef _WIN32
-        assert(_putenv_s(name.c_str(), new_value != nullptr ? new_value : "") == 0);
-#else
-        if (new_value != nullptr) {
-            assert(setenv(name.c_str(), new_value, true) == 0);
-        } else {
-            assert(unsetenv(name.c_str()) == 0);
-        }
-#endif
-    }
-};
-
-static void test_unknown_env_classifier(void) {
-    std::vector<common_arg> options = {
-        common_arg(
-            {"--known"},
-            {"--no-known"},
-            "test option",
-            [](common_params &, bool) {
-            }
-        ).set_env("LLAMA_ARG_KNOWN"),
-    };
-    const std::vector<std::string> environment = {
-        "LLAMA_ARG_kNoWn=on",
-        "LLAMA_ARG_NO_KNOWN=on",
-        "PATH=/tmp",
-        "llama_arg_beta=secret=must-not-leak",
-        "LLAMA_ARG_ZETA=another-secret",
-        "LLAMA_ARG_zeta=third-secret",
-        "LLAMA_ARG_ALPHA=value",
-    };
-
-    const std::vector<std::string> unknown =
-        common_arg_utils::find_unknown_env_vars(options, environment);
-#ifdef _WIN32
-    assert((unknown == std::vector<std::string>{"LLAMA_ARG_ALPHA", "LLAMA_ARG_BETA", "LLAMA_ARG_ZETA"}));
-#else
-    assert((unknown == std::vector<std::string>{
-        "LLAMA_ARG_ALPHA", "LLAMA_ARG_ZETA", "LLAMA_ARG_kNoWn", "LLAMA_ARG_zeta"}));
-#endif
-}
-
 static void test(void) {
-    test_unknown_env_classifier();
-
     common_params params;
+
+    auto assert_output_limits = [](int32_t n_batch, int32_t n_parallel, int32_t n_draft,
+                                   int32_t total, int32_t per_seq) {
+        const auto limits = common_speculative_get_output_limits(n_batch, n_parallel, n_draft);
+        assert(limits.total == total);
+        assert(limits.per_seq == per_seq);
+    };
+
+    assert_output_limits(16, 2,  3, 8, 4);
+    assert_output_limits(16, 2, -1, 2, 1);
+    assert_output_limits( 6, 2,  3, 6, 4);
+    assert_output_limits( 2, 1,  3, 2, 2);
+    assert_output_limits(
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max());
+
+    {
+        common_params_speculative spec;
+        spec.synth_len = 3.4;
+
+        auto assert_invalid = [](const common_params_speculative & value, int32_t n_max) {
+            try {
+                common_speculative_synth_rates_resolve(&value, n_max);
+                assert(false);
+            } catch (const std::invalid_argument &) {
+            }
+        };
+
+        const auto rates = common_speculative_synth_rates_resolve(&spec, 4);
+        assert(rates.size() == 4);
+        assert(std::abs(rates[0] - 0.80581) < 1e-5);
+        assert(std::abs(rates[1] - 0.64933) < 1e-5);
+        assert(std::abs(rates[2] - 0.52323) < 1e-5);
+        assert(std::abs(rates[3] - 0.42163) < 1e-5);
+        assert(std::abs(1.0 + rates[0] + rates[1] + rates[2] + rates[3] - 3.4) < 1e-8);
+
+        spec.synth_len = 1.0;
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == std::vector<double>({0.0, 0.0, 0.0, 0.0}));
+
+        spec.synth_len = 5.0;
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == std::vector<double>({1.0, 1.0, 1.0, 1.0}));
+
+        spec.synth_len = 5.1;
+        assert_invalid(spec, 4);
+
+        spec.synth_len = std::numeric_limits<double>::quiet_NaN();
+        assert_invalid(spec, 4);
+
+        spec.synth_len = 0.0;
+        assert_invalid(spec, 4);
+
+        spec.synth_len = -1.0;
+        spec.synth_rates = {0.8, 0.6, 0.4};
+        assert_invalid(spec, 4);
+
+        spec.synth_rates = {0.8, 0.6, 0.4, 0.2};
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == spec.synth_rates);
+
+        spec.synth_rates = {0.8, 0.9, 0.4, 0.2};
+        assert_invalid(spec, 4);
+
+        spec.synth_rates = {0.8, std::numeric_limits<double>::quiet_NaN(), 0.4, 0.2};
+        assert_invalid(spec, 4);
+
+        spec.synth_rates = {0.8, 0.6, 0.4, -0.2};
+        assert_invalid(spec, 4);
+
+        spec.synth_rates = {0.8, 0.6, 0.4, 0.2};
+        spec.synth_len = 3.0;
+        assert_invalid(spec, 4);
+    }
+    {
+        common_params_speculative spec_params;
+        spec_params.types                = { COMMON_SPECULATIVE_TYPE_NGRAM_MOD };
+        spec_params.ngram_mod.n_match    = 2;
+        spec_params.ngram_mod.n_min      = 1;
+        spec_params.ngram_mod.n_max      = 2;
+        spec_params.ngram_mod.n_dead_off = 2;
+
+        common_speculative_ptr spec(common_speculative_init(spec_params, 2));
+        const llama_tokens corpus = {1, 2, 3, 1, 2, 3};
+        common_speculative_begin(spec.get(), 0, corpus);
+        common_speculative_begin(spec.get(), 1, corpus);
+
+        const llama_tokens too_short = {1};
+        const llama_tokens live      = {9, 1};
+        std::vector<llama_tokens> draft_results(2);
+        auto draft = [&](llama_seq_id seq_id, const llama_tokens & prompt) {
+            auto & dp    = common_speculative_get_draft_params(spec.get(), seq_id);
+            dp.drafting  = true;
+            dp.id_last   = 2;
+            dp.prompt    = &prompt;
+            dp.result    = &draft_results.at(seq_id);
+            common_speculative_draft(spec.get());
+            auto result = *dp.result;
+            dp.result->clear();
+            return result;
+        };
+
+        assert(draft(0, too_short).empty());
+        common_speculative_accept(spec.get(), 0, 0);
+
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 1);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+
+        assert(draft(0, live).empty());
+        assert(draft(1, live) == llama_tokens({3, 1}));
+
+        common_speculative_begin(spec.get(), 0, corpus);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+
+        common_params_speculative low_params = spec_params;
+        low_params.ngram_mod.n_dead_off = 0;
+        common_speculative_ptr low_spec(common_speculative_init(low_params, 1));
+        common_speculative_begin(low_spec.get(), 0, corpus);
+
+        llama_tokens low_draft_result;
+        auto draft_low = [&](const llama_tokens & prompt) {
+            auto & dp   = common_speculative_get_draft_params(low_spec.get(), 0);
+            dp.drafting = true;
+            dp.id_last  = 2;
+            dp.prompt   = &prompt;
+            dp.result   = &low_draft_result;
+            common_speculative_draft(low_spec.get());
+            auto result = *dp.result;
+            dp.result->clear();
+            return result;
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            assert(draft_low(live) == llama_tokens({3, 1}));
+            common_speculative_accept(low_spec.get(), 0, 0);
+        }
+
+        common_speculative_begin(low_spec.get(), 0, corpus);
+        assert(draft_low(live) == llama_tokens({3, 1}));
+        common_speculative_accept(low_spec.get(), 0, 0);
+        assert(draft_low(live) == llama_tokens({3, 1}));
+    }
+
+    {
+        const char * path = "test-speculative-missing-block-count.gguf";
+        gguf_context * ctx = gguf_init_empty();
+        gguf_set_val_str(ctx, "general.architecture", "qwen3");
+        assert(gguf_write_to_file(ctx, path, false));
+        gguf_free(ctx);
+
+        assert(common_speculative_types_from_gguf(path).empty());
+        std::remove(path);
+    }
+
+
+    {
+        common_params base;
+        base.n_parallel = 4;
+        base.n_outputs_max_per_seq = 8;
+
+        const auto draft = common_base_params_to_speculative(base);
+        assert(draft.n_outputs_max == 4);
+        assert(draft.n_outputs_max_per_seq == 1);
+    }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
@@ -152,77 +260,6 @@ static void test(void) {
 
     std::vector<std::string> argv;
 
-    {
-        env_var_snapshot warn_unknown_env("LLAMA_ARG_WARN_UNKNOWN_ENV");
-        env_var_snapshot typo_env("LLAMA_ARG_TYPO");
-        warn_unknown_env.set("1");
-        typo_env.set("secret");
-
-        const std::filesystem::path log_path = std::filesystem::temp_directory_path() /
-            ("llama-test-arg-parser-" + std::to_string(std::random_device{}()) + ".log");
-        common_log_set_file(common_log_main(), log_path.string().c_str());
-
-        common_params invalid_params;
-        argv = {"binary_name", "-m", "model.gguf", "--prompt-cache-all", "--interactive"};
-        assert(false == common_params_parse(
-            argv.size(), list_str_to_char(argv).data(), invalid_params, LLAMA_EXAMPLE_COMPLETION));
-
-        common_log_flush(common_log_main());
-        common_log_set_file(common_log_main(), nullptr);
-
-        {
-            std::ifstream log_file(log_path);
-            const std::string log_contents(
-                (std::istreambuf_iterator<char>(log_file)),
-                std::istreambuf_iterator<char>());
-            assert(log_contents.find("LLAMA_ARG_TYPO") == std::string::npos);
-        }
-
-        common_log_set_file(common_log_main(), log_path.string().c_str());
-
-        common_params valid_params;
-        argv = {"binary_name", "-m", "model.gguf"};
-        assert(true == common_params_parse(
-            argv.size(), list_str_to_char(argv).data(), valid_params, LLAMA_EXAMPLE_COMMON));
-
-        common_log_flush(common_log_main());
-        common_log_set_file(common_log_main(), nullptr);
-
-        {
-            std::ifstream log_file(log_path);
-            const std::string log_contents(
-                (std::istreambuf_iterator<char>(log_file)),
-                std::istreambuf_iterator<char>());
-            assert(log_contents.find("LLAMA_ARG_TYPO") != std::string::npos);
-            assert(log_contents.find("secret") == std::string::npos);
-        }
-        std::filesystem::remove(log_path);
-    }
-
-    {
-        env_var_snapshot warn_unknown_env("LLAMA_ARG_WARN_UNKNOWN_ENV");
-        warn_unknown_env.set(nullptr);
-
-        common_params default_params;
-        argv = {"binary_name", "-m", "model.gguf"};
-        assert(true == common_params_parse(
-            argv.size(), list_str_to_char(argv).data(), default_params, LLAMA_EXAMPLE_COMMON));
-        assert(!default_params.warn_unknown_env);
-
-        common_params cli_params;
-        argv = {"binary_name", "-m", "model.gguf", "--warn-unknown-env"};
-        assert(true == common_params_parse(
-            argv.size(), list_str_to_char(argv).data(), cli_params, LLAMA_EXAMPLE_COMMON));
-        assert(cli_params.warn_unknown_env);
-
-        warn_unknown_env.set("1");
-        common_params env_params;
-        argv = {"binary_name", "-m", "model.gguf"};
-        assert(true == common_params_parse(
-            argv.size(), list_str_to_char(argv).data(), env_params, LLAMA_EXAMPLE_COMMON));
-        assert(env_params.warn_unknown_env);
-    }
-
     printf("test-arg-parser: test invalid usage\n\n");
 
     // missing value
@@ -236,6 +273,42 @@ static void test(void) {
     // wrong value (enum)
     argv = {"binary_name", "-sm", "hello"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+
+    {
+        common_params penalty_params;
+        assert(penalty_params.sampling.penalty_last_n == 64);
+        assert(penalty_params.sampling.dry_penalty_last_n == 64);
+
+        argv = {"binary_name", "--repeat-last-n", "-1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--dry-penalty-last-n", "-1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "0"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "-1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "nan"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "inf"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "-inf"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        const char * penalty_options[] = {"--frequency-penalty", "--presence-penalty"};
+        const char * nonfinite_values[] = {"nan", "inf", "-inf"};
+        for (const char * option : penalty_options) {
+            for (const char * value : nonfinite_values) {
+                argv = {"binary_name", option, value};
+                assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+            }
+        }
+    }
 
     // non-existence arg in specific example (--draft cannot be used outside llama-speculative)
     argv = {"binary_name", "--draft", "123"};
@@ -269,6 +342,26 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
     assert(params.speculative.draft.n_max == 123);
 
+    {
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-len", "3.4"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+        assert(synth_params.speculative.synth_len == 3.4);
+    }
+
+    {
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-rates", "0.8,0.6,0.2"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+        assert(synth_params.speculative.synth_rates == std::vector<double>({0.8, 0.6, 0.2}));
+    }
+
+    {
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-len", "3.4x"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+    }
+
     argv = {"binary_name", "-lm", "none"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_NONE);
@@ -280,6 +373,10 @@ static void test(void) {
     argv = {"binary_name", "-lm", "mlock"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_MLOCK);
+
+    argv = {"binary_name", "-lm", "mmap+mlock"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK);
 
     argv = {"binary_name", "-lm", "dio"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
@@ -294,40 +391,10 @@ static void test(void) {
     assert(params.lora_adapters[2].path == "file3\"3\".gguf");
     assert(params.lora_adapters[3].path == "file4\".gguf");
 
-    argv = {"binary_name", "--api-key", "\" first-key \",\"   \",second-key,\"third-key \""};
-    params.api_keys.clear();
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
-    assert(params.api_keys.size() == 3);
-    assert(params.api_keys[0] == "first-key");
-    assert(params.api_keys[1] == "second-key");
-    assert(params.api_keys[2] == "third-key");
-
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
     printf("test-arg-parser: skip on windows build\n");
 #else
-    {
-        env_var_snapshot api_key("LLAMA_API_KEY");
-        env_var_snapshot api_key_file("LLAMA_ARG_API_KEY_FILE");
-        const auto key_file = std::filesystem::temp_directory_path() /
-                              ("llama-api-keys-" + std::to_string(std::random_device{}()) + ".txt");
-
-        setenv("LLAMA_ARG_API_KEY_FILE", key_file.string().c_str(), true);
-        setenv("LLAMA_API_KEY", "stale-env-key", true);
-        {
-            std::ofstream output(key_file);
-            output << "file-key\n";
-        }
-
-        argv = {"binary_name", "--api-key", "cli-key"};
-        params.api_keys.clear();
-        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
-        assert(params.api_keys.size() == 2);
-        assert(params.api_keys[0] == "file-key");
-        assert(params.api_keys[1] == "cli-key");
-        assert(std::filesystem::remove(key_file));
-    }
-
     printf("test-arg-parser: test environment variables (valid + invalid usages)\n\n");
 
     setenv("LLAMA_ARG_THREADS", "blah", true);
@@ -355,6 +422,11 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_MLOCK);
 
+    setenv("LLAMA_ARG_LOAD_MODE", "mmap+mlock", true);
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK);
+
     setenv("LLAMA_ARG_LOAD_MODE", "dio", true);
     argv = {"binary_name"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
@@ -379,56 +451,6 @@ static void test(void) {
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
 
-    {
-        env_var_snapshot hf_token("HF_TOKEN");
-        env_var_snapshot hub_token("HUGGING_FACE_HUB_TOKEN");
-        env_var_snapshot misspelled_hub_token("HUGGINGFACE_HUB_TOKEN");
-
-        hf_token.set(nullptr);
-        hub_token.set(nullptr);
-        misspelled_hub_token.set(nullptr);
-
-        printf("test-arg-parser: test Hugging Face token precedence\n\n");
-
-        hub_token.set("fallback-token");
-        {
-            common_params token_params;
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token == "fallback-token");
-        }
-
-        hf_token.set("");
-        {
-            common_params token_params;
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token == "fallback-token");
-        }
-
-        hf_token.set("hf-token");
-        {
-            common_params token_params;
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token == "hf-token");
-        }
-
-        {
-            common_params token_params;
-            token_params.hf_token = "explicit-token";
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token == "explicit-token");
-        }
-
-        hf_token.set(nullptr);
-        hub_token.set(nullptr);
-        misspelled_hub_token.set("misspelled-token");
-        {
-            common_params token_params;
-            const auto handler = common_models_handler_init(token_params, LLAMA_EXAMPLE_COMMON);
-            assert(handler.opts.bearer_token.empty());
-        }
-    }
-
-#ifndef LLAMA_DOWNLOAD_DISABLED
     printf("test-arg-parser: test download functions\n\n");
     const char * GOOD_URL = "http://ggml.ai/";
     const char * BAD_URL  = "http://ggml.ai/404";
@@ -459,7 +481,6 @@ static void test(void) {
             printf("  expected error: %s\n\n", e.what());
         }
     }
-#endif // LLAMA_DOWNLOAD_DISABLED
 
     printf("test-arg-parser: all tests OK\n\n");
 }

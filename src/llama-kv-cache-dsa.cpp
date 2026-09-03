@@ -23,7 +23,8 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
                  uint32_t   n_pad,
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
-    const layer_filter_cb & filter,
+    const layer_filter_cb & filter_mla,
+    const layer_filter_cb & filter_lid,
     const  layer_reuse_cb & reuse) :
     hparams_lid(model.hparams), n_stream(unified ? 1 : n_seq_max) {
 
@@ -32,7 +33,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     kv_mla = std::make_unique<llama_kv_cache>(
             model, model.hparams, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
-            n_swa, swa_type, nullptr, filter, reuse, nullptr);
+            n_swa, swa_type, nullptr, filter_mla, reuse, nullptr);
 
     // we use llama_kv_cache for caching indexer keys
     // by hand-tweaking some hparams we fool it to create
@@ -42,14 +43,17 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     // DSA lightning indexer uses MQA with single key head
     std::fill(hparams_lid.n_head_kv_arr.begin(), hparams_lid.n_head_kv_arr.end(), 1);
     hparams_lid.n_embd_head_k_full = model.hparams.indexer_head_size;
-    hparams_lid.rope_type          = LLAMA_ROPE_TYPE_NEOX;
+    hparams_lid.n_embd_head_v_full = model.hparams.indexer_head_size;
+    hparams_lid.n_embd_head_k_swa  = model.hparams.indexer_head_size;
+    hparams_lid.n_embd_head_v_swa  = model.hparams.indexer_head_size;
+    hparams_lid.rope_type           = LLAMA_ROPE_TYPE_NEOX;
 
     LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
     kv_lid = std::make_unique<llama_kv_cache>(
             model, hparams_lid, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
-            n_swa, swa_type, nullptr, filter, reuse, nullptr);
+            n_swa, swa_type, nullptr, filter_lid, reuse, nullptr);
 }
 
 void llama_kv_cache_dsa::clear(bool data) {

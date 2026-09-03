@@ -665,7 +665,7 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         }
         ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv, n_q_pad, 1, 1);
         ggml_set_name(m, "m");
-        const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
+        const bool turbo = ggml_type_is_turbo(kvt);
         // InnerQ scale_inv: matches llama-graph.cpp / llama-kv-cache.cpp
         // production value (1D F32, 128 floats, all-1.0 at init). Passing
         // nullptr takes a different ggml_turbo_wht kernel path ("NULL = no
@@ -696,8 +696,7 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
                  name, layout, (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv);
     }
 
-    const bool turbo_kv = kv_type == GGML_TYPE_TURBO2_0 || kv_type == GGML_TYPE_TURBO3_0 ||
-                          kv_type == GGML_TYPE_TURBO4_0;
+    const bool turbo_kv = ggml_type_is_turbo(kv_type);
     if (turbo_kv && !turbo_fa_enabled()) {
         skip(label, "turbo FA gated off; set LLAMA_TEST_TURBO_FA=1 to probe");
         return;
@@ -797,7 +796,7 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_set_name(k, "k");
         ggml_tensor * v = ggml_new_tensor_3d(ctx, kvt, d, n_kv, nh_kv);
         ggml_set_name(v, "v");
-        const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
+        const bool turbo = ggml_type_is_turbo(kvt);
         // InnerQ scale_inv: matches production (1D F32, 128 floats, all-1.0 at
         // init). Passing nullptr takes a different ggml_turbo_wht kernel path
         // ("NULL = no scaling" in ggml.c); pass a matching tensor so the probe

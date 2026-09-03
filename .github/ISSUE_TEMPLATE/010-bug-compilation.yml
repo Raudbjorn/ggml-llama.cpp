@@ -13,7 +13,7 @@ body:
         If the compilation succeeds with ccache disabled you should be able to permanently fix the issue
         by clearing `~/.cache/ccache` (on Linux).
 
-        Please fill out this template yourself, copypasting language model outputs is [strictly prohibited](https://github.com/ggml-org/llama.cpp/blob/master/CONTRIBUTING.md#ai-usage-policy).
+        Please fill out this template yourself, copypasting language model outputs is [strictly prohibited](https://github.com/Raudbjorn/ggml-llama.cpp/blob/master/CONTRIBUTING.md#ai-usage-policy).
   - type: textarea
     id: commit
     attributes:
@@ -43,7 +43,7 @@ body:
     attributes:
         label: GGML backends
         description: Which GGML backends do you know to be affected?
-        options: [AMX, BLAS, CANN, CPU, CUDA, Hexagon, HIP, Metal, Musa, OpenCL, OpenVINO, RPC, SYCL, VirtGPU, Vulkan, WebGPU, zDNN, ZenDNN]
+        options: [BLAS, CPU, OpenVINO, SYCL, Vulkan]
         multiple: true
     validations:
       required: true
@@ -55,7 +55,7 @@ body:
         Please give us a summary of the problem and tell us how to reproduce it.
         If you can narrow down the bug to specific compile flags, that information would be very much appreciated by us.
       placeholder: >
-        I'm trying to compile llama.cpp with CUDA support on a fresh install of Ubuntu and get error XY.
+        I'm trying to compile llama.cpp with SYCL support on an Intel Arc system and get error XY.
         Here are the exact commands that I used: ...
     validations:
       required: true

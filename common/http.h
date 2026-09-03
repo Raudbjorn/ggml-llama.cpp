@@ -187,10 +187,8 @@ static int common_http_get_free_port() {
     WSACleanup();
 #endif
 
-    return port;
-}
-
-// http.h is a header: leaving these defined would leak them into every
-// translation unit that includes it.
 #undef INVALID_SOCKET_VAL
 #undef CLOSE_SOCKET
+
+    return port;
+}
