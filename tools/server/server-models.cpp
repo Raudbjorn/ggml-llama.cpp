@@ -982,6 +982,13 @@ void server_models::unload_lru() {
     }
 }
 
+// thrown when the capacity re-check under the lock finds the slot taken:
+// a queued waiter that lost that race stays in line, every other failure
+// of load() is final and reaches the client
+struct server_models_capacity_error : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 void server_models::load(const std::string & name) {
     load(name, load_options{});
 }
@@ -1022,7 +1029,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
             }
         }
         if (count_active >= (size_t)base_params.models_max) {
-            throw std::runtime_error("model limit reached, try again later");
+            throw server_models_capacity_error("model limit reached, try again later");
         }
     }
 
@@ -1484,10 +1491,15 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
                     SRV_INF("slot available, loading queued model name=%s\n", name.c_str());
                     load(name);
                     did_load = true;
-                } catch (const std::exception & e) {
+                } catch (const server_models_capacity_error & e) {
                     // lost a race for the slot, stay in line and retry
                     SRV_WRN("queued load of name=%s did not go through: %s\n", name.c_str(), e.what());
                     ok = false;
+                } catch (...) {
+                    // not a race: give the turn back and let the caller report it
+                    lk.lock();
+                    sched->claim_done(lk, name, false);
+                    throw;
                 }
                 lk.lock();
                 sched->claim_done(lk, name, ok);
