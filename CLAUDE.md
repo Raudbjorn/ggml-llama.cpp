@@ -179,17 +179,24 @@ This file, not the kernels, decides which types each layer actually gets:
 - **Layer-adaptive modes** via `TURBO_LAYER_ADAPTIVE` (modes 1/2/5/6/7; "Boundary V" mode 7
   auto-enables for turbo2-V, opt out with `=0`). Modes are inert for non-turbo types and log a
   warning when requested inertly.
-- **q8_0 "quants-first" KV layout**: `GGML_SYCL_Q8_KV_QUANTS_FIRST=1` repacks groups of 4 q8_0
+- **q8_0 "quants-first" KV layout**: **default-on** since #33 (`754dc99e2`) for SYCL q8_0 K *and* V
+  with 128-wide heads; `GGML_SYCL_Q8_KV_QUANTS_FIRST=0` opts out. It repacks groups of 4 q8_0
   blocks so all quants precede all scales; the flag rides on the tensor and is queried by
   `ggml_tensor_is_kv_q8_quants_first()` (`ggml/include/ggml.h`). Kernels have distinct
-  `*_quants_first` variants - any new q8_0 KV consumer must handle both layouts or reject one.
+  `*_quants_first` variants - any new q8_0 KV consumer must handle both layouts or reject one,
+  and any consumer that converts K/V through `ggml_get_to_fp16_sycl` /
+  `ggml_get_to_fp16_nc_sycl` must pass the K/V tensor itself (the converters read the flag from
+  it). The MKL FA route passed the dst tensor instead and decoded quants-first rows as canonical
+  q8_0, which produced NaN for every q8_0/q8_0 run past n_kv 512 (fixed 2026-09-05; oracle
+  section [4c] now covers the route).
 
 ### SYCL flash-attention routing (`ggml/src/ggml-sycl/fattn.cpp`)
 
 `ggml_sycl_get_best_fattn_kernel()` is the single decision point; kernels are VEC
-(`fattn-vec.hpp`), TILE (`fattn-tile.hpp`), XMX/DPAS (`fattn-xmx.cpp`) and oneDNN Graph SDPA
-(`fattn-onednn.cpp`), with shared dequant/combine helpers in `fattn-common.hpp` and scratch
-management in `fattn-buffers.cpp`. Decision order, roughly:
+(`fattn-vec.hpp`), TILE (`fattn-tile.hpp`), MKL GEMM prefill (`fattn-mkl.cpp`), XMX/DPAS
+(`fattn-xmx.cpp`) and oneDNN Graph SDPA (`fattn-onednn.cpp`), with shared dequant/combine
+helpers in `fattn-common.hpp` and scratch management in `fattn-buffers.cpp` (TILE/VEC only; MKL
+allocates from the context pool). Decision order, roughly:
 
 1. Head-dim and type gates; without `GGML_SYCL_FA_ALL_QUANTS`, mixed K/V types are rejected except
    the `K=q8_0, V=turbo*` pair produced by the auto-asymmetric downgrade.
@@ -197,9 +204,15 @@ management in `fattn-buffers.cpp`. Decision order, roughly:
    K *and* V turbo dequant with `need_f16 = false`), gated to `K->ne[0] % 128 == 0`. Opt-in XMX
    turbo requires same turbo type on both sides and D in {128, 256} (D=512 exceeds the 64 KB SLM
    budget).
-3. Forced overrides: `GGML_SYCL_FA_Q8_GQA_TILE`, `GGML_SYCL_FA_FORCE_VEC_STANDARD`.
-4. Opt-in XMX for f16/q8_0 KV, then oneDNN SDPA if statically supported, else VEC/TILE by
-   `Q->ne[1]` and `gqa_opt_applies`.
+3. **MKL prefill (default on, `GGML_SYCL_ENABLE_MKL_FA=0` disables)**: non-turbo K/V, mask
+   present, no sinks/ALiBi/softcap, `gqa_ratio >= 2`, D a multiple of 64 in [64, 512],
+   `Q->ne[1] >= 32` **and `K->ne[1] >= 1024`**. Stages K/V to dense f16 per chunk through the
+   tensor-aware converters, then oneMKL GEMM plus an f32 online softmax. Because of the n_kv gate,
+   a ctx-512 run never reaches it while ctx >= 1024 prefill always does; test at n_kv >= 1024.
+4. Forced overrides (decode only, `Q->ne[1] == 1`): `GGML_SYCL_FA_Q8_GQA_TILE`,
+   `GGML_SYCL_FA_FORCE_VEC_STANDARD`. They do not affect prefill.
+5. Opt-in XMX for f16/q8_0 KV (canonical rows only), then oneDNN SDPA if statically supported,
+   else VEC/TILE by `Q->ne[1]` and `gqa_opt_applies`.
 
 XMX and oneDNN paths are **off by default and feature-gated**: XMX ignores ALiBi, logit softcap,
 attention sinks and multi-sequence batches, so those must fall through to VEC/TILE rather than
@@ -221,9 +234,10 @@ hazards.
 ### Runtime env knobs (fork-specific)
 
 `GGML_SYCL_FA_XMX`, `GGML_SYCL_FA_XMX_DEBUG`, `GGML_SYCL_FA_ONEDNN`, `GGML_SYCL_FA_Q8_GQA_TILE`,
-`GGML_SYCL_FA_FORCE_VEC_STANDARD`, `GGML_SYCL_FA_PROFILE` (per-route launch/us buckets),
-`GGML_SYCL_GRAPH_PROFILE`, `GGML_SYCL_ROPE_FUSION_PROFILE`, `GGML_SYCL_Q8_KV_QUANTS_FIRST`,
-`TURBO_LAYER_ADAPTIVE`. Read them through `ggml_sycl_get_env` (upstream helper) rather than bare
+`GGML_SYCL_FA_FORCE_VEC_STANDARD`, `GGML_SYCL_ENABLE_MKL_FA` (default 1), `GGML_SYCL_MKL_FA_DEBUG`,
+`GGML_SYCL_MKL_FA_Q_TILE`, `GGML_SYCL_FA_PROFILE` (per-route launch/us buckets, now including the
+MKL and ONEDNN routes), `GGML_SYCL_GRAPH_PROFILE`, `GGML_SYCL_ROPE_FUSION_PROFILE`,
+`GGML_SYCL_Q8_KV_QUANTS_FIRST` (default on, `=0` opts out), `TURBO_LAYER_ADAPTIVE`. Read them through `ggml_sycl_get_env` (upstream helper) rather than bare
 `getenv` in new code. Upstream knobs (`GGML_SYCL_ENABLE_GRAPH`, `GGML_SYCL_ENABLE_DNN`,
 `GGML_SYCL_USE_LEVEL_ZERO_API`, `GGML_SYCL_DEBUG`, ...) keep their upstream meaning.
 
@@ -245,8 +259,9 @@ Full evidence lives in `docs/research/` (dated artifacts, notably
   pass re-records and re-finalizes. Re-probe after any compute-runtime upgrade before reopening.
 - Speculative decoding changing temperature-0 output is **expected upstream behavior** (kernels are
   not batch-invariant), not a fork bug - gate acceptance on logit tolerance, not exact hashes.
-- Promoted and retained: per-kernel device-code split (default ON), opt-in
-  `GGML_SYCL_Q8_KV_QUANTS_FIRST`, FA KV scratch buffers that pre-grow in 16 MiB chunks before
+- Promoted and retained: per-kernel device-code split (default ON), default-on
+  `GGML_SYCL_Q8_KV_QUANTS_FIRST` (#33; measured +8 to +21% decode at depth <= 512, and since
+  2026-09-05 also correct on the MKL prefill route), FA KV scratch buffers that pre-grow in 16 MiB chunks before
   graph capture (`fattn-buffers.hpp`), fused MoE `mul_mat_id` MMVQ, and the graph-fusion entry
   point `ggml_sycl_fuse` (`topk-moe.cpp`, called from `ggml-sycl.cpp`, gated by
   `GGML_SYCL_ENABLE_FUSION`) - which currently fuses top-k MoE only, so it is the hook to extend
