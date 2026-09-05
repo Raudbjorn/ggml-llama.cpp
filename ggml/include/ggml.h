@@ -2658,7 +2658,7 @@ extern "C" {
     //     the recurrence already passes through that exact intermediate value on its way to the
     //     final state, so capturing it here is free relative to a separate K=1 call over the same
     //     prefix. Omitted (and not counted in the output size) when n_tokens <= K.
-    GGML_API struct ggml_tensor * ggml_gated_delta_net(
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
             struct ggml_tensor  * k,
@@ -2668,6 +2668,18 @@ extern "C" {
             struct ggml_tensor  * state,
             int64_t               K,
             int32_t               emit_mode);
+
+    // Upstream-compatible form: emit_mode == 0 (full state snapshots). Kept so ggml-org
+    // call sites compile unchanged on every sync; fork replay callers use the _ext form.
+    GGML_API struct ggml_tensor * ggml_gated_delta_net(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state,
+            int64_t               K);
 
     // TurboQuant Walsh-Hadamard Transform (O(d log d) rotation for KV cache compression)
     // Applies WHT rotation to 128-element groups along ne[0]: sign1 -> butterfly -> sign2 -> normalize

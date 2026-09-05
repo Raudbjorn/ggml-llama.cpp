@@ -173,6 +173,20 @@ llama_memory_recurrent::llama_memory_recurrent(
     }
 }
 
+// Upstream-compatible constructor: no GDN ingredient replay.
+llama_memory_recurrent::llama_memory_recurrent(
+        const llama_model & model,
+                ggml_type   type_r,
+                ggml_type   type_s,
+                     bool   offload,
+                 uint32_t   mem_size,
+                 uint32_t   n_seq_max,
+                 uint32_t   n_rs_seq,
+    const layer_filter_cb & filter) :
+    llama_memory_recurrent(model, type_r, type_s, offload, mem_size, n_seq_max, n_rs_seq,
+                           /*gdn_replay_req=*/false, filter) {
+}
+
 void llama_memory_recurrent::clear(bool data) {
     for (int32_t i = 0; i < (int32_t) size; ++i) {
         cells[i].pos = -1;
