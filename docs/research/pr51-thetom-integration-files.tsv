@@ -7,7 +7,7 @@ path	disposition
 .github/workflows/build-cann.yml	excluded or superseded path absent
 .github/workflows/build-openvino.yml	fork content retained
 .github/workflows/build-self-hosted.yml	excluded or superseded path absent
-.github/workflows/build-wasm.yml	source content present
+.github/workflows/build-wasm.yml	excluded or superseded path absent
 .github/workflows/build-webgpu.yml	excluded or superseded path absent
 .github/workflows/docker.yml	excluded or superseded path absent
 .github/workflows/hip-quality-check.yml	excluded or superseded path absent
@@ -219,7 +219,7 @@ gguf-py/gguf/quants.py	source content present
 gguf-py/gguf/tensor_mapping.py	reconciled with fork
 include/llama.h	reconciled with fork
 scripts/hip/gcn-cdna-vgpr-check.py	excluded or superseded path absent
-scripts/ppl_test.sh	source content present
+scripts/ppl_test.sh	excluded or superseded path absent
 skills/add-new-model/SKILL.md	fork content retained
 skills/code-review/SKILL.md	fork content retained
 src/CMakeLists.txt	fork content retained
