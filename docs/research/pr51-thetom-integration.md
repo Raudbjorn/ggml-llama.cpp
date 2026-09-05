@@ -5,10 +5,11 @@ This integrates the compatible delta from TheTom's default branch pinned at
 later upstream work, supported backends, TurboQuant ABI, and SYCL implementation.
 It does not import CUDA, HIP, Metal, OpenCL, RPC, or other excluded backends.
 
-The validated code is commit `0bc989ac4169e2cdd1600fbee3b6366bfb34b2b2`;
-subsequent commits only record additional validation evidence.
+The original integration was validated at `0bc989ac4`. The review corrections
+and their additional validation are recorded below; quality probes were not
+rerun for these corrections.
 
-## Source and ancestry
+## Source and linear history
 
 - Destination: `sync/thetom-on-master-fresh`, PR 51 into
   `Raudbjorn/ggml-llama.cpp:master`.
@@ -20,19 +21,22 @@ subsequent commits only record additional validation evidence.
 Fork upstream syncs were squashed. The June ancestry merge base is therefore
 not the correct content base: merging from it replays upstream content that the
 fork already contains. The integration uses the common upstream content base
-while recording TheTom as a real merge parent.
+and is submitted as a linear content integration onto fork master. Rebase or
+squash merging is supported. TheTom and the superseded sync branches are source
+provenance, not extra merge parents; their redundant upstream commits and
+damaged intermediate trees are not imported into master history.
 
 The three historical remote branches are accounted for without rewriting them:
 
 | Branch | Pinned tip | Disposition |
 | --- | --- | --- |
 | `sync/thetom-turboquant-3` | `54d02625c723d2482abe20e9856113e8a6f1afc5` | Already an ancestor of the destination |
-| `sync/thetom-turboquant-2` | `21680f772306205d1b580689fe73c2b093439b7a` | Ancestry recorded; conflicted core and mass deletion superseded; its 12 added files match the pinned TheTom payload |
-| `merge/sycl-turboquant` | `987015aa257a32e46a659958bc9ed90d66dd5f06` | Ancestry recorded; its SYCL TurboQuant disablement is superseded by the working fork implementation |
+| `sync/thetom-turboquant-2` | `21680f772306205d1b580689fe73c2b093439b7a` | History excluded; conflicted core and mass deletion superseded; its 12 added files match the pinned TheTom payload |
+| `merge/sycl-turboquant` | `987015aa257a32e46a659958bc9ed90d66dd5f06` | History excluded; its SYCL TurboQuant disablement is superseded by the working fork implementation |
 
 The [file disposition ledger](pr51-thetom-integration-files.tsv) covers all 311
-paths changed between the content base and TheTom: 40 source contents present,
-95 reconciled, 43 fork contents retained, and 133 excluded/superseded paths
+paths changed between the content base and TheTom: 38 source contents present,
+95 reconciled, 43 fork contents retained, and 135 excluded/superseded paths
 absent. These are content comparisons, not a claim that every upstream feature
 is supported on every backend. Governance files retain fork policy; `AGENTS.md`
 only updates the factual type table for the new CR types.
@@ -68,7 +72,60 @@ only updates the factual type table for the new CR types.
   uses synchronous fills on one device and has no fused SwiGLU cache dispatch;
   its documented limits differ from TheTom's CUDA provider.
 
-## Validation on this host
+## Review corrections and continuing fork divergences
+
+- Restore the upstream `ExaoneMoeForCausalLM` conversion registry alias alongside
+  `ExaoneMoEForCausalLM`; a real-import regression test checks both names.
+- Remove `scripts/ppl_test.sh`: its foreign paths, CUDA selection, and OSCAR2
+  settings do not describe a runnable fork benchmark.
+- Restore llama-bench CSV/JSON examples, labeled as historical upstream output
+  so their older schema and hardware are not presented as current measurements.
+  Multi-value arguments remain documented; newly added scalar options are listed.
+- New CR `general.file_type` values are 512/513/514 in C and Python, below the
+  `GUESSED=1024` flag. These are fork-selected extension values, not an official
+  upstream reservation. Tensor IDs remain 48/49/50; existing serialized IDs are
+  unchanged. Python tests serialize/read all three metadata values and check
+  agreement with the public C header. Audit both namespaces on future syncs.
+- Vulkan FA now uses `fa_types.glsl` instead of incorrect hardcoded TurboQuant
+  IDs 42/43/44. Vulkan Turbo4 centroids/midpoints now agree with the fork CPU
+  table. These fix existing fork kernels as well as integrating source changes.
+  The Turbo3 sign ballot selects the correct 32-bit word for wave64 lanes;
+  SET_ROWS source indexing uses source extents and guards broadcast overruns.
+  The imported FA fixture now honors the fork's 68-byte Turbo4 block and leaves
+  reserved `rnorm` zero. A770 tests do not validate wave64 hardware execution.
+- `ggml_gated_delta_net` adds `emit_mode`; `llama_memory_recurrent` adds the
+  GDN replay request to its constructor. Upstream callers require reconciliation
+  on future syncs. SYCL/OpenVINO ingredient emission falls back to CPU.
+- Tensor-split and fit-target parsers use `>` rather than `>=` against the
+  maximum device count, allowing exactly the array capacity.
+- `--cache-ram -1` now selects half of free host RAM, with an 8192 MiB fallback
+  if free memory cannot be determined, rather than upstream's unlimited cache.
+  This user-visible policy and the API changes above are accepted divergences.
+
+## Review validation
+
+On the review-corrected source, CPU and SYCL full builds pass. All four required
+SYCL tests pass; the safe oracle again reports 52 PASS, zero GATE-FAIL/XPASS.
+The complete A770 Vulkan turbo FA selection passes 2594/2594 cases:
+
+```bash
+cmake --build /home/svnbjrn/build-pr51-vulkan --target test-backend-ops -j8
+timeout 300 /home/svnbjrn/build-pr51-vulkan/bin/test-backend-ops \
+  -b Vulkan1 -o FLASH_ATTN_EXT -p turbo
+PYTHONPATH=. python3 tests/test-conversion-registry.py
+PYTHONPATH=gguf-py python3 -m pytest gguf-py/tests -q
+```
+
+The Python checks pass (one conversion regression, 11 GGUF tests and seven
+subtests). The Vulkan binary includes the fixture correction; the later CR
+file-type metadata change does not affect these tensor-only FA cases. Both
+visible GPUs report subgroup size 32; no wave64 runtime claim is made.
+The CPU CTest selection again passes 67 tests with one expected no-provider
+skip (68 total), including model architecture and state save/load tests.
+Pruning and required-target checks pass. Review logs are in
+`/home/svnbjrn/.cache/pr51-review-fixes/`.
+
+## Original integration validation on this host
 
 Builds are outside mergerfs under `/home/svnbjrn/build-pr51-*`.
 CPU uses OpenBLAS; SYCL uses oneAPI icx/icpx 2026.0 with F16 enabled and empty
@@ -136,7 +193,8 @@ this model/configuration. No threshold was relaxed.
 An additional context-2048 Q8 SYCL control produced NaNs, both with 512-token
 and 2048-token batches. A separate SYCL build of the pre-integration tree
 reproduces the NaNs with context/batch/ubatch 2048 and two chunks: this failure
-predates the integration. Its corresponding KLD run is invalid and is not
+predates the integration and is tracked in [the open defect note](sycl-q8-context-2048-nan.md).
+Its corresponding KLD run is invalid and is not
 counted as quality evidence. The synthetic oracle's green status does not
 establish that every model/context configuration is usable.
 
@@ -145,5 +203,4 @@ is claimed. Imported architecture/conversion support, graph tests, replay tests,
 and successful builds are narrower evidence.
 
 Full local logs and commands: `/home/svnbjrn/.cache/pr51-integration/`.
-PR 51 remains open for the owner to review and merge; a squash merge would lose
-the ancestry reconciliation described above.
+PR 51 remains open for the owner to review and merge using rebase or squash.
