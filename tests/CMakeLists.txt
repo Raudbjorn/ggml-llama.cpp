@@ -176,6 +176,8 @@ llama_build(test-recurrent-state-rollback.cpp)
 llama_build(test-save-load-state.cpp)
 
 llama_build_and_test(test-gdn-ingredient-replay.cpp LABEL "turbo")
+llama_build_and_test(test-upstream-api-shims.cpp LABEL "main")
+target_include_directories(test-upstream-api-shims PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)

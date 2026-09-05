@@ -4756,7 +4756,11 @@ struct test_gated_delta_net : public test_case {
         // q/k are L2-normalised in qwen35/kimi-linear before delta_net
         q = ggml_l2_norm(ctx, q, 1e-6f);
         k = ggml_l2_norm(ctx, k, 1e-6f);
-        ggml_tensor * out   = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, K, emit_mode);
+        // emit_mode 0 goes through the upstream-shaped entry point so the shim stays
+        // exercised; ingredient emission needs the fork's _ext variant.
+        ggml_tensor * out = emit_mode == 0
+            ? ggml_gated_delta_net(ctx, q, k, v, g, beta, state, K)
+            : ggml_gated_delta_net_ext(ctx, q, k, v, g, beta, state, K, emit_mode);
         return out;
     }
 

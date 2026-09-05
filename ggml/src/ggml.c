@@ -6397,6 +6397,19 @@ struct ggml_tensor * ggml_gated_delta_net(
         struct ggml_tensor  * g,
         struct ggml_tensor  * beta,
         struct ggml_tensor  * state,
+        int64_t               K) {
+    // upstream signature: op_params[1] (emit_mode) stays 0, matching upstream's meaning
+    return ggml_gated_delta_net_ext(ctx, q, k, v, g, beta, state, K, 0);
+}
+
+struct ggml_tensor * ggml_gated_delta_net_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
         int64_t               K,
         int32_t               emit_mode) {
     GGML_ASSERT(emit_mode == 0 || emit_mode == 1);

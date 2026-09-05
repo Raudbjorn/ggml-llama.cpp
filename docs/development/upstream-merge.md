@@ -804,3 +804,26 @@ A verification statement must name the exact command or observable result. "Buil
 - [ ] Optional AOT/model/performance gaps are stated explicitly.
 - [ ] Merge commit parent order is correct and the worktree is clean.
 - [ ] Nothing was pushed without explicit authorization.
+
+## API shims and kept divergences (2026-09-05)
+
+Upstream call sites must compile unchanged after a sync. Two upstream signatures
+are preserved as thin shims; keep them when resolving conflicts:
+
+- `ggml_gated_delta_net(ctx, q, k, v, g, beta, state, K)` is the upstream form and
+  wraps `ggml_gated_delta_net_ext(..., K, emit_mode)` with `emit_mode = 0`.
+  `op_params[0] = K` as upstream, `op_params[1] = emit_mode` (0 for upstream callers).
+  Fork ingredient-replay callers (`src/models/delta-net-base.cpp`,
+  `tests/test-gdn-ingredient-replay.cpp`) use the `_ext` form.
+- `llama_memory_recurrent(model, type_r, type_s, offload, mem_size, n_seq_max, n_rs_seq, filter)`
+  is the upstream constructor and delegates to the fork constructor with
+  `gdn_replay_req = false`. Fork callers pass the flag explicitly.
+- `tests/test-upstream-api-shims.cpp` fails to compile if either shim is removed.
+
+Kept product divergences (owner decision, expect conflicts in these hunks):
+
+- `--cache-ram -1` means half of the free host memory at startup
+  (`tools/server/server-context.cpp`, `common/common.h`, `common/arg.cpp` help text,
+  `tools/cli/README.md`, `tools/server/README.md`); upstream means unlimited.
+- `common/arg.cpp` tensor-split and fit-target parsing accept exactly
+  `llama_max_devices()` entries (`>` bound); upstream rejects that count (`>=`).
