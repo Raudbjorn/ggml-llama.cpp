@@ -84,6 +84,13 @@ GGUF serializes `ggml_type` numerically. Preserve these values unless a separate
 
 Never resolve an enum conflict by accepting whichever side compiles. First compare numeric assignments, serialized consumers, block definitions, static assertions, quantizers, and backend switches. A renumbered type can compile and still silently misread existing GGUF files.
 
+The separate `llama_ftype` / Python `LlamaFileType` namespace is serialized as
+`general.file_type`. PR 51 assigns its new Q8_CR/Q5_CR/Q6_CR values 512/513/514,
+below the `GUESSED=1024` flag and away from the next upstream slots. This is a
+fork-selected range, not an upstream reservation. Existing TQ3_1S/TQ4_1S values
+43/44 remain unchanged. Audit both enum namespaces on every future sync; never
+confuse these file-type IDs with tensor-type IDs 48/49/50.
+
 `GGML_OP_TURBO_WHT` must also remain present in the op enum, name tables, graph builder, CPU implementation, and SYCL dispatch.
 
 ### Fork-owned surfaces
