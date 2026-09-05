@@ -77,7 +77,10 @@ GGUF serializes `ggml_type` numerically. Preserve these values unless a separate
 | `GGML_TYPE_TURBO4_0` | 45 |
 | `GGML_TYPE_TQ3_1S` | 46 |
 | `GGML_TYPE_TQ4_1S` | 47 |
-| `GGML_TYPE_COUNT` | 48 |
+| `GGML_TYPE_Q8_CR` | 48 |
+| `GGML_TYPE_Q5_CR` | 49 |
+| `GGML_TYPE_Q6_CR` | 50 |
+| `GGML_TYPE_COUNT` | 51 |
 
 Never resolve an enum conflict by accepting whichever side compiles. First compare numeric assignments, serialized consumers, block definitions, static assertions, quantizers, and backend switches. A renumbered type can compile and still silently misread existing GGUF files.
 
@@ -372,7 +375,10 @@ expected = {
     'GGML_TYPE_TURBO4_0': 45,
     'GGML_TYPE_TQ3_1S': 46,
     'GGML_TYPE_TQ4_1S': 47,
-    'GGML_TYPE_COUNT': 48,
+    'GGML_TYPE_Q8_CR': 48,
+    'GGML_TYPE_Q5_CR': 49,
+    'GGML_TYPE_Q6_CR': 50,
+    'GGML_TYPE_COUNT': 51,
 }
 for name, value in expected.items():
     match = re.search(rf'\b{name}\s*=\s*(\d+)', text)

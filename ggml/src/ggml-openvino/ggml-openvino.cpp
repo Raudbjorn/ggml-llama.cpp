@@ -1328,6 +1328,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_GATED_DELTA_NET: {
+        if (ggml_get_op_params_i32(op, 1) != 0) {
+            return {false, "GATED_DELTA_NET ingredient replay is not supported"};
+        }
         // enable after https://github.com/openvinotoolkit/openvino/pull/35917 is included in OV release
         // return true;
         // if (ggml_openvino_get_device_name() == "GPU" && op->src[0]->ne[2] > 1) {

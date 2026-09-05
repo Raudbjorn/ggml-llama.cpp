@@ -6,6 +6,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 static llama_context * make_ctx(const common_params & params, llama_model * model) {
@@ -213,6 +214,7 @@ int main(int argc, char ** argv) {
     common_params params;
     params.sampling.seed = 1234;
     params.n_predict = 1;
+    params.gdn_replay = std::getenv("LLAMA_TEST_GDN_REPLAY") != nullptr;
 
     common_init();
 

@@ -546,3 +546,36 @@ def test_slot_restore_media_file_without_mmproj(mmproj_server):
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == 0
     assert res.body["content"] == content
+
+
+@pytest.mark.parametrize("damage", ["stale", "truncated", "oversized"])
+def test_slot_restore_ignores_invalid_checkpoint_sidecar(damage):
+    server.start()
+    prompt = "What is the capital of France?"
+    result = server.make_request("POST", "/completion", data={
+        "prompt": prompt, "id_slot": 1, "cache_prompt": True,
+    })
+    assert result.status_code == 200
+    result = server.make_request("POST", "/slots/1?action=save", data={"filename": "checkpoint.bin"})
+    assert result.status_code == 200
+
+    # Make a version-2 sidecar bound to this primary file, then damage it.
+    state_hash = 14695981039346656037
+    with open("tmp/checkpoint.bin", "rb") as state:
+        for value in state.read():
+            state_hash = ((state_hash ^ value) * 1099511628211) & ((1 << 64) - 1)
+    if damage == "stale":
+        state_hash ^= 1
+    sidecar = struct.pack("=IIQI", 0x4C434B50, 2, state_hash, 1)
+    if damage == "oversized":
+        sidecar += struct.pack("=qiiQ", 1, 0, 0, 1 << 63)
+    with open("tmp/checkpoint.bin.ckpt", "wb") as output:
+        output.write(sidecar)
+
+    result = server.make_request("POST", "/slots/0?action=restore", data={"filename": "checkpoint.bin"})
+    assert result.status_code == 200
+    result = server.make_request("POST", "/completion", data={
+        "prompt": prompt, "id_slot": 0, "cache_prompt": True,
+    })
+    assert result.status_code == 200
+    assert match_regex("(Whiskers|Flana)+", result.body["content"])

@@ -26,7 +26,8 @@
 GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size);
 
 /* Global: WHT group size for CPU quantize path (set by CPU SET_ROWS handler) */
-GGML_API int turbo3_cpu_wht_group_size = 0;
+GGML_API int turbo3_cpu_wht_group_size;
+int turbo3_cpu_wht_group_size = 0;
 
 /* ---------- constants ---------- */
 
@@ -41,8 +42,8 @@ static const float CENTROIDS_2BIT[4] = { -0.133462f, -0.039994f, 0.039994f, 0.13
 
 /* 3-bit: Lloyd-Max for N(0, 1/128), pre-computed */
 static const float CENTROIDS_3BIT[8] = {
-    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
-     0.021460f,  0.065717f,  0.117832f,  0.190685f
+    -0.190207f, -0.118786f, -0.066822f, -0.021663f,
+     0.021663f,  0.066822f,  0.118786f,  0.190207f
 };
 
 /* ---------- rotation matrix (lazy init) ---------- */
@@ -75,14 +76,12 @@ static void turbo_init_rotation(void) {
 
     /* Generate random Gaussian matrix */
     turbo_prng_seed(TURBO_SEED_ROTATION);
-    float G[TURBO_D * TURBO_D];
     for (int i = 0; i < d * d; i++) {
-        G[i] = (float)turbo_prng_normal();
+        turbo_rotation[i] = (float)turbo_prng_normal();
     }
 
     /* QR decomposition via modified Gram-Schmidt */
     /* Q stored column-major in turbo_rotation */
-    memcpy(turbo_rotation, G, d * d * sizeof(float));
 
     for (int j = 0; j < d; j++) {
         /* Normalize column j */
@@ -170,13 +169,13 @@ static int nearest_centroid_2bit(float val) {
 
 static int nearest_centroid_3bit(float val) {
     /* 8 centroids, find nearest via midpoints */
-    if (val < -0.154259f) return 0;
-    if (val < -0.091775f) return 1;
-    if (val < -0.043589f) return 2;
+    if (val < -0.154496f) return 0;
+    if (val < -0.092804f) return 1;
+    if (val < -0.044243f) return 2;
     if (val <  0.000000f) return 3;
-    if (val <  0.043589f) return 4;
-    if (val <  0.091775f) return 5;
-    if (val <  0.154259f) return 6;
+    if (val <  0.044243f) return 4;
+    if (val <  0.092804f) return 5;
+    if (val <  0.154496f) return 6;
     return 7;
 }
 
