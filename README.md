@@ -37,7 +37,7 @@ This is a single-maintainer fork. No production deployments are tracked here -- 
 | `TQ3_1S` | weights | ~3.5 | smaller VRAM than `q8_0` | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
 | `TQ4_1S` | weights | ~4.5 | smaller VRAM than `q8_0`; requires GPU backend (Vulkan or SYCL) to be built in | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
 | `turbo2` | KV cache | ~2.0 | aggressive; pair with Boundary V | [block-size-experiment](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/block-size-experiment.md) |
-| `turbo3` | KV cache | ~3.5 | ~4.6x compression at <1.5% PPL loss | [attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md) |
+| `turbo3` | KV cache | ~3.5 | 5.1x compression; +5.1% PPL vs q8_0 on Llama-3.1-8B Q4_K_M at ctx 512 on this fork (see [turbo3 gate note](docs/research/turbo3-quality-gate-llama31-8b-2026-09.md)) | [attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md) |
 | `turbo4` | KV cache | ~4.5 | rehabilitated to beat `q4_0` on fidelity | [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md) |
 
 All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantization on 128-element blocks. Why this works where MSE-driven codecs fail: [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md).
