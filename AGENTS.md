@@ -91,7 +91,10 @@ Q (f32/f16)
 | TURBO4_0 | 45 | 68B | norm(f16) + rnorm(f16) + qs[64] (4-bit nibble) |
 | TQ3_1S | 46 | 16B | weight quant, block=32 |
 | TQ4_1S | 47 | 20B | weight quant, block=32 |
-| COUNT | 48 | | |
+| Q8_CR | 48 | 272B | ConvRot weight quant, block=256 |
+| Q5_CR | 49 | 176B | ConvRot weight quant, block=256 |
+| Q6_CR | 50 | 210B | ConvRot weight quant, block=256 |
+| COUNT | 51 | | |
 
 All turbo KV: `QK_TURBO* = 128`. Block layouts in `ggml-common.h:260-343` with `static_assert` guards.
 

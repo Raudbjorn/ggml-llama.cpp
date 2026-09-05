@@ -18,6 +18,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -340,6 +341,8 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->s_copy(i);
         }
     }
+
+    mctx->consume_replay_len();
 }
 
 bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
@@ -356,6 +359,10 @@ bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
 
     res &= head == mctx->get_head();
     res &= rs_z == mctx->get_rs_z();
+
+    // DRC phase 2: a nonzero (or changed) replay length needs a differently-shaped extra
+    // reconstruction node in the graph, so it can't be satisfied by reusing existing topology.
+    res &= replay_len == mctx->get_replay_len();
 
     return res;
 }
@@ -678,6 +685,7 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     return res;
 }
+
 
 void llm_graph_input_attn_k_iswa::set_input(const llama_ubatch * ubatch) {
     // base tensors may not be allocated if there are no non-SWA attention layers
@@ -1035,6 +1043,7 @@ bool llm_graph_input_dsv4::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
+
 void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     GGML_ASSERT(cross_kq_mask);
 
@@ -1096,6 +1105,8 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    mctx->get_recr()->consume_replay_len();
 }
 
 bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
@@ -1117,6 +1128,10 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+
+    // DRC phase 2: same guard as llm_graph_input_rs::can_reuse -- a changed replay length means a
+    // differently-shaped reconstruction subtree, which reused topology cannot express.
+    res &= inp_rs->replay_len == mctx->get_recr()->get_replay_len();
 
     return res;
 }
@@ -1140,6 +1155,8 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    mctx->get_recr()->consume_replay_len();
 }
 
 bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
@@ -1160,6 +1177,10 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+
+    // DRC phase 2: same guard as llm_graph_input_rs::can_reuse -- a changed replay length means a
+    // differently-shaped reconstruction subtree, which reused topology cannot express.
+    res &= inp_rs->replay_len == mctx->get_recr()->get_replay_len();
 
     return res;
 }
@@ -1214,6 +1235,8 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    mctx->get_recr()->consume_replay_len();
 }
 
 bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params) {
@@ -1248,6 +1271,10 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+
+    // DRC phase 2: same guard as llm_graph_input_rs::can_reuse -- a changed replay length means a
+    // differently-shaped reconstruction subtree, which reused topology cannot express.
+    res &= inp_rs->replay_len == mctx->get_recr()->get_replay_len();
 
     return res;
 }
@@ -1542,6 +1569,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         s = ggml_get_rows(ctx0, s, ids);
         res = ggml_mul(ctx0, res, s);
     }
+
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
         if (lw == nullptr) {
@@ -1763,6 +1791,8 @@ ggml_tensor * llm_graph_context::build_ffn(
                 if (il >= 0) {
                     const float limit = hparams.swiglu_clamp_shexp[il];
                     constexpr float eps = 1e-6f;
+                    // default zero-filled - only archs loading clamp metadata
+                    // (Step35, DSv4) get non-zero.
                     if (limit > eps) {
                         tmp = ggml_clamp(ctx0, tmp, -limit, limit);
                         cb(tmp, "ffn_up_clamped", il);
@@ -2160,6 +2190,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 if (il >= 0) {
                     const float limit = hparams.swiglu_clamp_exp[il];
                     constexpr float eps = 1e-6f;
+                    // default zero-filled - only archs loading clamp metadata
+                    // (Step35, DSv4) get non-zero.
                     if (limit > eps) {
                         up = ggml_clamp(ctx0, up, -limit, limit);
                         cb(up, "ffn_moe_up_clamped", il);
@@ -2259,32 +2291,32 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     ggml_build_forward_expand(gf, experts);
 
-    ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
-
     assert(n_expert_used > 0);
 
-    // order the views before the adds
-    for (uint32_t i = 0; i < hparams.n_expert_used; ++i) {
-        cur_experts[i] = ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
-
-        ggml_build_forward_expand(gf, cur_experts[i]);
-    }
-
-    // aggregate experts
-    // note: here we explicitly use hparams.n_expert_used instead of n_expert_used
-    //       to avoid potentially a large number of add nodes during warmup
-    //       ref: https://github.com/ggml-org/llama.cpp/pull/14753
-    ggml_tensor * moe_out = cur_experts[0];
-
-    for (uint32_t i = 1; i < hparams.n_expert_used; ++i) {
-        moe_out = ggml_add(ctx0, moe_out, cur_experts[i]);
-
-        ggml_build_forward_expand(gf, moe_out);
-    }
-
+    // experts layout: [n_embd, n_expert_used, n_tokens]
+    // Decode (n_tokens==1): permute+sum_rows beats 10 views + 9 adds.
+    // Prefill: the cont/permute of a large expert slab is slower than the
+    // classic view/add tree - keep that path for multi-token.
+    ggml_tensor * moe_out;
     if (hparams.n_expert_used == 1) {
-        // avoid returning a non-contiguous tensor
-        moe_out = ggml_cont(ctx0, moe_out);
+        moe_out = ggml_cont(ctx0, ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], 0));
+    } else if (n_tokens == 1) {
+        ggml_tensor * experts_pe = ggml_cont(ctx0, ggml_permute(ctx0, experts, 1, 0, 2, 3));
+        ggml_tensor * summed     = ggml_sum_rows(ctx0, experts_pe); // [1, n_embd, 1]
+        moe_out = ggml_reshape_2d(ctx0, summed, n_embd, n_tokens);
+    } else {
+        // note: use hparams.n_expert_used (not n_expert_used) so warmup stays small
+        // ref: https://github.com/ggml-org/llama.cpp/pull/14753
+        ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
+        for (uint32_t i = 0; i < hparams.n_expert_used; ++i) {
+            cur_experts[i] = ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
+            ggml_build_forward_expand(gf, cur_experts[i]);
+        }
+        moe_out = cur_experts[0];
+        for (uint32_t i = 1; i < hparams.n_expert_used; ++i) {
+            moe_out = ggml_add(ctx0, moe_out, cur_experts[i]);
+            ggml_build_forward_expand(gf, moe_out);
+        }
     }
 
     cb(moe_out, "ffn_moe_out", il);
@@ -2606,6 +2638,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * kq_mask,
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
+             int64_t   n_kv_max,
                float   kq_scale,
                  int   il) const {
     q = llm_graph_prepare_turbo_kv_query(
@@ -2649,6 +2682,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
+        GGML_ASSERT(n_kv_max >= 0 && n_kv_max <= INT32_MAX);
+        ggml_flash_attn_ext_set_n_kv_max(cur, static_cast<int32_t>(n_kv_max));
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
         // TurboQuant: inverse WHT on FA output when V values are WHT-rotated.
@@ -2845,7 +2880,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2944,7 +2979,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     cur = llm_graph_strip_padded_turbo_v_heads(
@@ -3038,7 +3073,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = llm_graph_view_k_as_v(ctx0, k, v_cur->ne[0]);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     cur = llm_graph_strip_padded_turbo_v_heads(
@@ -3126,7 +3161,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = llm_graph_view_k_as_v(ctx0, k, v_cur->ne[0]);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, top_k->ne[0], kq_scale, il);
     cb(cur, "kqv_out", il);
     cur = llm_graph_strip_padded_turbo_v_heads(
             ctx0, cur, v, v_cur->ne[0], hparams.n_head(il));
@@ -3207,7 +3242,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     cur = llm_graph_strip_padded_turbo_v_heads(
@@ -3281,7 +3316,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = llm_graph_view_k_as_v(ctx0, k, v_cur->ne[0]);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
     cur = llm_graph_strip_padded_turbo_v_heads(
             ctx0, cur, v, v_cur->ne[0], hparams.n_head(il));
@@ -3342,7 +3377,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -3590,6 +3625,7 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
 
     inp->head = mctx_cur->get_head();
     inp->rs_z = mctx_cur->get_rs_z();
+    inp->replay_len = mctx_cur->get_replay_len();
 
     return inp;
 }

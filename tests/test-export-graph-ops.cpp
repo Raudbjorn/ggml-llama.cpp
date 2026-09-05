@@ -388,5 +388,6 @@ int main(int argc, char ** argv) {
         test.serialize(f);
     }
 
+    common_log_flush(common_log_main());
     return 0;
 }

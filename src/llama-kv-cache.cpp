@@ -245,7 +245,7 @@ llama_kv_cache::llama_kv_cache(
         // mistral).
         LLAMA_LOG_DEBUG("%s: a2a3c-pre-auto: k_is_turbo=%d type_k=%s type_v=%s\n",
                         __func__, (int)k_is_turbo, ggml_type_name(type_k), ggml_type_name(type_v));
-        if (k_is_turbo) {
+        if (k_is_turbo && !hparams.is_mla() && model.arch != LLM_ARCH_DEEPSEEK4) {
             const uint32_t n_head    = hparams.n_head(0);
             const uint32_t n_head_kv = hparams.n_head_kv(0);
             const uint32_t gqa_ratio = (n_head_kv > 0) ? n_head / n_head_kv : 1;
@@ -296,7 +296,7 @@ llama_kv_cache::llama_kv_cache(
                 // Size this for the actual layer loop below. Some models expose extra
                 // KV-bearing layers through n_layer_all, and under-reserving tensor
                 // metadata corrupts later KV/checkpoint operations.
-                /*.mem_size   =*/ size_t((2u*(1 + n_stream)*n_layer + 3)*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t((3u*(1 + n_stream)*n_layer + 3)*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -426,6 +426,11 @@ llama_kv_cache::llama_kv_cache(
             n_embd_head_k_all = -1;
         }
 
+        // MLA caches V in latent (compressed) form - n_embd_head_v is not the
+        // head dimension of the stored values, so V-head-dim tracking and the
+        // LLAMA_ATTN_ROT_V_OVERRIDE V-rotation path (which depends on
+        // n_embd_head_v_all) are intentionally skipped. V-rotation on MLA latent
+        // KV is numerically invalid.
         if (!is_mla) {
             if (n_embd_head_v_all == 0) {
                 n_embd_head_v_all = (int32_t) hparams.n_embd_head_v(il);
@@ -816,6 +821,7 @@ void llama_kv_cache::do_clear(bool data, bool reset_innerq) {
         for (auto & [_, buf] : ctxs_bufs) {
             ggml_backend_buffer_clear(buf.get(), 0);
         }
+
     }
 
     if (turbo_rotation != nullptr && turbo_rotation->buffer != nullptr && (data || reset_innerq)) {
@@ -1712,6 +1718,16 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
     return layers[ikv].k;
 }
 
+ggml_tensor * llama_kv_cache::get_v_storage(int32_t il) const {
+    const int32_t ikv = map_layer_ids.at(il);
+
+    return layers[ikv].v;
+}
+
+bool llama_kv_cache::get_v_transposed() const {
+    return v_trans;
+}
+
 const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
@@ -2334,6 +2350,11 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
 }
 
 void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
+    if (!dst) {
+        // rotation disabled for this cache (attn_rot_k == false): the graph
+        // never created the input tensor - nothing to fill.
+        return;
+    }
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
     const auto n_rot = dst->ne[0];
@@ -2512,7 +2533,9 @@ public:
 void llm_graph_input_k_shift::set_input(const llama_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 
-    if (k_shift) {
+    // buffer check guards the graph-reserve pass, where tensors exist but backends aren't
+    // allocated yet; set_input_k_shift asserts on dst->buffer, so this must not be dropped.
+    if (k_shift && k_shift->buffer) {
         kv_self->set_input_k_shift(k_shift);
     }
 

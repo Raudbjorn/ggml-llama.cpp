@@ -125,6 +125,7 @@ enum llm_type {
     LLM_TYPE_24B_A2B, // lfm2moe
     LLM_TYPE_26B_A4B, // Gemma4
     LLM_TYPE_30B_A3B,
+    LLM_TYPE_118B_A8B,
     LLM_TYPE_31B_A3_5B,
     LLM_TYPE_35B_A3B, // Qwen3.5
     LLM_TYPE_48B_A3B, // Kimi Linear
@@ -133,7 +134,6 @@ enum llm_type {
     LLM_TYPE_100B_A6B,
     LLM_TYPE_102B_A12B, // Solar-Open
     LLM_TYPE_106B_A12B, // GLM-4.5-Air
-    LLM_TYPE_118B_A8B,  // Laguna-S-2
     LLM_TYPE_120B_A12B, // Nemotron 3 Super
     LLM_TYPE_122B_A10B, // Qwen3.5
     LLM_TYPE_124B_A5_1B, // Ling-3.0-flash
@@ -227,6 +227,12 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_head_s    = nullptr;
     struct ggml_tensor * shared_head_head_in_s = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
+
+    // qwen4exp: the MTP head's own final hyper-connection mixer, which stands in for both
+    // the stream collapse and the output norm (the trunk has no separate output_norm either)
+    struct ggml_tensor * hc_head_norm          = nullptr;
+    struct ggml_tensor * hc_head_down          = nullptr;
+    struct ggml_tensor * hc_head_up            = nullptr;
 };
 
 struct llama_layer_switch_lora {
@@ -642,6 +648,7 @@ struct llama_model {
     struct ggml_tensor * hc_head_fn    = nullptr;
     struct ggml_tensor * hc_head_base  = nullptr;
     struct ggml_tensor * hc_head_scale = nullptr;
+
 
     // classifier
     struct ggml_tensor * cls       = nullptr;

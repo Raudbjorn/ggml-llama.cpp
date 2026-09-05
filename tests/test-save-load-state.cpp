@@ -510,7 +510,7 @@ static bool test_state_roundtrip(struct llama_model * model, const struct common
 
 // Run the full save/load test suite (tests 1-8) for a single model.
 // Returns true if all tests pass, false otherwise.
-static bool run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
+static bool run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params, bool * skipped = nullptr) {
     struct common_params params = base_params;
     params.model.path = model_path;
 
@@ -520,6 +520,15 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
     if (model == nullptr) {
         LOG_ERR("%s: failed to init model '%s'\n", __func__, model_path.c_str());
         return false;
+    }
+
+    // Draft-only graph fixtures need a target model and cannot run this standalone suite.
+    char arch[64] = {};
+    llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch));
+    if (skipped && (strcmp(arch, "dflash") == 0 || strcmp(arch, "eagle3") == 0)) {
+        LOG_INF("%s: skipping draft-only fixture %s\n", __func__, arch);
+        *skipped = true;
+        return true;
     }
 
     GGML_ASSERT(llama_init->context() == nullptr);
@@ -671,19 +680,21 @@ int main(int argc, char ** argv) {
 
         size_t n_pass = 0;
         size_t n_fail = 0;
+        size_t n_skip = 0;
         for (const auto & model_path : models) {
             LOG("\n================================================================\n");
             LOG_INF("%s: model %s\n", __func__, model_path.c_str());
 
-            if (run_save_load_tests_for_model(model_path, params)) {
-                n_pass++;
+            bool skipped = false;
+            if (run_save_load_tests_for_model(model_path, params, &skipped)) {
+                skipped ? ++n_skip : ++n_pass;
             } else {
                 n_fail++;
             }
         }
 
         LOG("\n================================================================\n");
-        LOG_INF("%s: summary: %zu passed, %zu failed (of %zu)\n", __func__, n_pass, n_fail, models.size());
+        LOG_INF("%s: summary: %zu passed, %zu failed, %zu skipped (of %zu)\n", __func__, n_pass, n_fail, n_skip, models.size());
 
         return n_fail == 0 ? 0 : 1;
     }
