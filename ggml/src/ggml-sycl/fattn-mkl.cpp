@@ -259,6 +259,10 @@ enum mkl_fa_kv_desc_mode {
 
 struct mkl_fa_kv_desc {
     const char *         data = nullptr;
+    // Source tensor. The q8_0 converters select the row layout from its flags
+    // (canonical vs quants-first KV rows), so the dequant must pass K/V itself,
+    // never the dst tensor.
+    const ggml_tensor *  tensor = nullptr;
     ggml_type            type = GGML_TYPE_F16;
     int64_t              D    = 0;      // ne[0]
     int64_t              nb1  = 0;      // byte stride, seq dim
@@ -273,8 +277,9 @@ struct mkl_fa_kv_desc {
 
 static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, int n_kv_heads) {
     mkl_fa_kv_desc d;
-    d.data = (const char *)T->data;
-    d.type = T->type;
+    d.data   = (const char *)T->data;
+    d.tensor = T;
+    d.type   = T->type;
     d.D    = T->ne[0];
     d.nb1  = (int64_t)T->nb[1];
     d.nb2  = (int64_t)T->nb[2];
@@ -309,7 +314,7 @@ static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, 
 
 // Dequant one KV-head chunk into a dense [this_chunk x D] fp16 buffer.
 static void mkl_fa_dequant_chunk(
-    dpct::queue_ptr stream, const mkl_fa_kv_desc & d, ggml_tensor * dst_ctx,
+    dpct::queue_ptr stream, const mkl_fa_kv_desc & d,
     sycl::half * out, int ib, int ikvh, int chunk_start, int this_chunk) {
 
     const int64_t D = d.D;
@@ -338,12 +343,12 @@ static void mkl_fa_dequant_chunk(
         case MKL_FA_KV_MODE_QUANT_CONTIG: {
             const char * base = d.data + batch_offset + (int64_t)ikvh * d.nb2
                 + (int64_t)chunk_start * d.nb1;
-            to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(d.type, dst_ctx);
+            to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(d.type, d.tensor);
             to_fp16(base, out, (int64_t)this_chunk * D, stream);
             break;
         }
         default: {  // MKL_FA_KV_MODE_QUANT_NC
-            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(d.type);
+            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(d.type, d.tensor);
             const int64_t base_blocks = (int64_t)ikvh * d.s02
                 + (int64_t)chunk_start * d.s01;
             const char * base = d.data + batch_offset + base_blocks * d.ts;
@@ -573,10 +578,10 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 // 3a. Dequant this KV chunk to dense fp16 (once per chunk)
                 {
                     MKL_TAKE_TIME(t0);
-                    mkl_fa_dequant_chunk(stream, K_desc, KQV,
+                    mkl_fa_dequant_chunk(stream, K_desc,
                         K_chunk_f16_ptr, ib, ikvh, chunk_start, this_chunk);
                     if (!V_is_K_view) {
-                        mkl_fa_dequant_chunk(stream, V_desc, KQV,
+                        mkl_fa_dequant_chunk(stream, V_desc,
                             V_chunk_f16_ptr, ib, ikvh, chunk_start, this_chunk);
                     }
                     if (!ctx.graph_recording) {

@@ -615,8 +615,10 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
                             ggml_type kv_type, const char * name,
                             int64_t d, int64_t n_q, const char * path,
                             Exp exp, bool force,
-                            int64_t nh_q = 1, int64_t nh_kv = 1) {
-    const int64_t n_kv = 256;   // cached tokens (multiple of FATTN_KQ_STRIDE)
+                            int64_t nh_q = 1, int64_t nh_kv = 1,
+                            int64_t n_kv = 256) {
+    // n_kv = cached tokens (multiple of FATTN_KQ_STRIDE). 256 keeps the TILE/VEC
+    // routes; n_kv >= 1024 with n_q >= 32 and GQA reaches the MKL GEMM route.
     // nh_q = number of Q heads; nh_kv = number of K/V heads (GQA: nh_kv <= nh_q, nh_q % nh_kv == 0).
     // The harness historically used nh_q == nh_kv == 1 (single-head, no GQA). Real models use
     // GQA ratios (4:1 llama/mistral, 8:1 Qwen3-Coder-30B-A3B); see probe driver for the
@@ -689,11 +691,15 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
 
     char label[256];
     const char * layout = q8_quants_first ? " quants-first" : "";
+    char kvlen[32] = "";
+    if (n_kv != 256) {
+        snprintf(kvlen, sizeof(kvlen), " nkv=%d", (int) n_kv);
+    }
     if (nh_q == nh_kv) {
-        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d]", name, layout, (int) d, path, (int) n_q);
+        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d%s]", name, layout, (int) d, path, (int) n_q, kvlen);
     } else {
-        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d GQA %d:%d]",
-                 name, layout, (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv);
+        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d GQA %d:%d%s]",
+                 name, layout, (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv, kvlen);
     }
 
     const bool turbo_kv = ggml_type_is_turbo(kv_type);
@@ -864,9 +870,11 @@ static void probe_attn_noflash(ggml_backend_t cpu, ggml_backend_t sycl,
 // (not just turbo); if it passes, only the turbo FA fusion is broken.
 static void probe_fa_f16(ggml_backend_t cpu, ggml_backend_t sycl,
                          int64_t d, int64_t n_q, const char * path,
-                         int64_t nh_q = 1, int64_t nh_kv = 1) {
+                         int64_t nh_q = 1, int64_t nh_kv = 1,
+                         int64_t n_kv = 256) {
     // GQA: see probe_flash_attn for rationale. Default (1, 1) keeps single-head baseline.
-    const int64_t n_kv = 256, pad = 64;
+    // n_kv: see probe_flash_attn; >= 1024 with n_q >= 32 and GQA reaches the MKL route.
+    const int64_t pad = 64;
     const int64_t n_q_pad = ((n_q + pad - 1) / pad) * pad;
 
     auto q_f32 = gen_normal(d * n_q * nh_q, 0xF16Au);
@@ -892,12 +900,16 @@ static void probe_fa_f16(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_backend_tensor_set(ggml_get_tensor(ctx, "m"), mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
     };
 
-    char label[80];
+    char label[128];
+    char kvlen[32] = "";
+    if (n_kv != 256) {
+        snprintf(kvlen, sizeof(kvlen), " nkv=%d", (int) n_kv);
+    }
     if (nh_q == nh_kv) {
-        snprintf(label, sizeof(label), "flash_attn f16 d=%d [%s nq=%d]", (int) d, path, (int) n_q);
+        snprintf(label, sizeof(label), "flash_attn f16 d=%d [%s nq=%d%s]", (int) d, path, (int) n_q, kvlen);
     } else {
-        snprintf(label, sizeof(label), "flash_attn f16 d=%d [%s nq=%d GQA %d:%d]",
-                 (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv);
+        snprintf(label, sizeof(label), "flash_attn f16 d=%d [%s nq=%d GQA %d:%d%s]",
+                 (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv, kvlen);
     }
 
     bool cok = true, sok = true;
@@ -1050,6 +1062,18 @@ int main() {
         const int64_t gqa_kv = 1;
         probe_fa_f16(cpu, sycl, 128, 8, "tile", gqa_q, gqa_kv);
         probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 128, 8, "tile", Exp::GATE, /*force=*/true, gqa_q, gqa_kv);
+    }
+
+    // [4c] FA MKL prefill. fattn.cpp routes to the oneMKL GEMM kernel only for
+    // n_q >= 32 with n_kv >= 1024, GQA and a mask, so [4]/[4b] (n_kv=256) never
+    // reach it. Llama-3.1-8B with q8_0/q8_0 KV went NaN past ctx 512 because
+    // that route decoded quants-first rows as canonical q8_0 (2026-09-05).
+    // Both KV layouts are covered: quants-first follows the runtime default,
+    // GGML_SYCL_Q8_KV_QUANTS_FIRST=0 flips the probe to canonical rows.
+    printf("\n[4c] flash attention MKL prefill (d=128, n_q=64, GQA 4:1, n_kv>=1024) - GATE, f16 + q8_0\n");
+    for (int64_t n_kv : {1024, 2048}) {
+        probe_fa_f16(cpu, sycl, 128, 64, "mkl", 4, 1, n_kv);
+        probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 128, 64, "mkl", Exp::GATE, /*force=*/true, 4, 1, n_kv);
     }
 
     // Turbo FA on SYCL is opt-in on this fork: the supports_op chain in fattn.cpp
