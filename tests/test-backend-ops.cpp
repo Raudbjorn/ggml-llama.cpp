@@ -8108,7 +8108,8 @@ struct test_flash_attn_ext_turbo4_vec : public test_flash_attn_ext {
         const int64_t block_size = ggml_blck_size(GGML_TYPE_TURBO4_0);
         const size_t block_bytes = ggml_type_size(GGML_TYPE_TURBO4_0);
         const size_t row_size = ggml_row_size(GGML_TYPE_TURBO4_0, head_dim);
-        GGML_ASSERT(block_bytes == sizeof(ggml_fp16_t) + block_size/2);
+        const size_t indices_offset = 2*sizeof(ggml_fp16_t); // norm + reserved rnorm
+        GGML_ASSERT(block_bytes == indices_offset + block_size/2);
         GGML_ASSERT(row_size == head_dim/block_size*block_bytes);
 
         const float norm_f32 = 1.0f;
@@ -8124,7 +8125,7 @@ struct test_flash_attn_ext_turbo4_vec : public test_flash_attn_ext {
                     for (int64_t ib = 0; ib < head_dim/block_size; ++ib) {
                         uint8_t * block = row_data + ib*block_bytes;
                         memcpy(block, &norm_f16, sizeof(norm_f16));
-                        memset(block + sizeof(norm_f16), turbo4_indices, block_size/2);
+                        memset(block + indices_offset, turbo4_indices, block_size/2);
                     }
                 }
             }
