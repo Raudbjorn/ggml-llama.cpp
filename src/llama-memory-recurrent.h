@@ -27,6 +27,18 @@ public:
                          bool   gdn_replay_req,
         const layer_filter_cb & filter);
 
+    // Upstream-compatible constructor: no GDN ingredient replay. Kept so ggml-org
+    // call sites compile unchanged on every sync.
+    llama_memory_recurrent(
+            const llama_model & model,
+                    ggml_type   type_r,
+                    ggml_type   type_s,
+                         bool   offload,
+                     uint32_t   mem_size,
+                     uint32_t   n_seq_max,
+                     uint32_t   n_rs_seq,
+        const layer_filter_cb & filter);
+
     ~llama_memory_recurrent() = default;
 
     //
