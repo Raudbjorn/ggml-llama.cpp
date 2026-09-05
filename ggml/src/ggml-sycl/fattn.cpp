@@ -445,9 +445,15 @@ static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_t
             route_index = 2;
             route_name = "XMX";
             break;
-        case BEST_FATTN_KERNEL_NONE:
         case BEST_FATTN_KERNEL_ONEDNN:
+            route_index = 3;
+            route_name = "ONEDNN";
+            break;
         case BEST_FATTN_KERNEL_MKL:
+            route_index = 4;
+            route_name = "MKL";
+            break;
+        case BEST_FATTN_KERNEL_NONE:
             return;
     }
 
@@ -455,7 +461,7 @@ static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_t
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
     const bool is_decode = Q->ne[1] == 1;
-    static std::atomic<bool> logged[3][2] = {};
+    static std::atomic<bool> logged[5][2] = {};
     if (logged[route_index][is_decode ? 0 : 1].exchange(true, std::memory_order_relaxed)) {
         return;
     }
