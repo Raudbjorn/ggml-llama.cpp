@@ -6,15 +6,18 @@ disabled. The original open note is preserved below the resolution.
 
 ## Root cause
 
-With q8_0 K and V, flash attention on, and any context >= 1024, every SYCL
-perplexity run on the Arc A770 produced NaN. Context 512 was finite.
+With q8_0 K and V and flash attention on, the tested MKL-routed perplexity
+workloads on the Arc A770 produced NaN at contexts 1024, 1536, and 2048.
+Context 512 was finite in the same configuration (model and commands below).
 
 The failing shape routes to the fork-local MKL GEMM flash-attention prefill
 kernel (`ggml/src/ggml-sycl/fattn-mkl.cpp`). `ggml_sycl_get_best_fattn_kernel()`
-selects it when the mask is present, `gqa_ratio >= 2`, `Q->ne[1] >= 32` and
-`K->ne[1] >= 1024` (`GGML_SYCL_ENABLE_MKL_FA`, default 1). The KV cache pads
-`n_kv` to 256, so a context-2048 chunk walks n_kv 512, 1024, 1536, 2048 and every
-ubatch after the first takes MKL; a context-512 run never reaches it.
+selects it for eligible non-turbo K/V with a mask, `gqa_ratio >= 2`, supported
+head dimensions, no sinks/ALiBi/softcap, compatible batch dimensions and valid
+type/stride conditions, when `Q->ne[1] >= 32` and `K->ne[1] >= 1024`
+(`GGML_SYCL_ENABLE_MKL_FA`, default 1). With the tested ubatch 512 configuration,
+a context-2048 chunk walks n_kv 512, 1024, 1536, 2048 and every ubatch after the
+first takes MKL; the context-512 run never reaches it.
 
 `mkl_fa_dequant_chunk` stages K/V to dense f16 per chunk. It called
 `ggml_get_to_fp16_sycl(type, dst)` with the destination tensor and the one-argument
@@ -57,8 +60,8 @@ logger used to skip MKL and ONEDNN, so `GGML_SYCL_FA_ROUTE` output was silent.
 - `fattn.cpp`: `ggml_sycl_log_fattn_route_once` now reports MKL and ONEDNN.
 - `tests/test-sycl-turbo-correctness.cpp`: `probe_flash_attn` and `probe_fa_f16`
   take `n_kv`; new GATE section [4c] runs d=128, n_q=64, GQA 4:1, n_kv 1024 and
-  2048 for f16 and q8_0 (quants-first by default, canonical with
-  `GGML_SYCL_Q8_KV_QUANTS_FIRST=0`). Before the fix the q8_0 quants-first cases
+  2048 for f16 and q8_0. Each probe checks MKL selection; q8_0 explicitly tests
+  both canonical and quants-first rows in one run. Before the fix the quants-first cases
   failed with `nmse=-nan`; after it they pass with the same error as canonical
   rows (nmse 5.8e-05 and 6.3e-05, cosine 0.99997).
 
@@ -81,7 +84,8 @@ logger used to skip MKL and ONEDNN, so `GGML_SYCL_FA_ROUTE` output was silent.
 The 2048/2-chunk value equals the pre-fix `GGML_SYCL_Q8_KV_QUANTS_FIRST=0` result
 to four decimals, and the MKL-on and MKL-off numbers differ by 0.0045.
 
-Reproduce or re-verify:
+Host-specific evidence command (requires the SYCL build, model, and Wikitext-2
+corpus at the recorded paths):
 
 ```bash
 export ONEAPI_DEVICE_SELECTOR=level_zero:0 SYCL_CACHE_PERSISTENT=1

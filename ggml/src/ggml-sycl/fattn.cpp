@@ -705,6 +705,11 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_TILE;
 }
 
+bool ggml_backend_sycl_flash_attn_ext_uses_mkl(int device, const ggml_tensor * op) {
+    return op && op->op == GGML_OP_FLASH_ATTN_EXT &&
+        ggml_sycl_get_best_fattn_kernel(device, op) == BEST_FATTN_KERNEL_MKL;
+}
+
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_set_device(ctx.device);
     const best_fattn_kernel route =
