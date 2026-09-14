@@ -1,6 +1,6 @@
 # Turbo3 KV quality gate on Llama-3.1-8B-Instruct Q4_K_M (2026-09-05)
 
-`scripts/turbo-quality-gate.sh` stage 1 compares turbo3/turbo3 against q8_0/q8_0
+[`scripts/turbo-quality-gate.sh`](https://github.com/Raudbjorn/ggml-llama.cpp/blob/435f47bb80b88b60887b44b3d8c06acca45cab3f/scripts/turbo-quality-gate.sh) stage 1 compares turbo3/turbo3 against q8_0/q8_0
 perplexity at context 512 and fails when turbo3 exceeds 105% of q8_0. On this
 model it fails by 0.11 percentage points. This note records the gate run, the
 KV-policy sweep that was measured against it, and the decision: the threshold
@@ -15,11 +15,14 @@ measured number.
 - Build: `~/build-master-435f47bb8` (JIT, `GGML_SYCL_F16=ON`, launchers empty).
 - Model: `/mnt/mrgr/models/llama31-8b-q4km/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf`
   (32 layers, GQA 4:1, head dim 128). Corpus: Wikitext-2 raw test.
-- Protocol (the gate's own): `llama-perplexity -c 512 --chunks 8 -fa on -ngl 99`.
+- Stage 1 protocol: `llama-perplexity -c 512 --chunks 8 -fa on -ngl 99`.
+- Stage 2 protocol: `llama-perplexity -c 4096 --chunks 4 -fa on -ngl 99`.
 - GPU shared with a desktop IDE process during the runs; PPL is unaffected by
   contention, the stage 2 timing ratio is indicative only.
 
-## Gate script result
+## Gate result summary
+
+Human-readable summary of the recorded results, not verbatim script output:
 
 ```
 PASS | 0.1 correctness (LLAMA_TEST_TURBO_FA=0)
@@ -30,7 +33,7 @@ PASS | 2 context-scaling ratio: turbo3 335.46 t/s, q8_0 318.75 t/s, ratio 1.052 
 Before PR 51 the same probe gave turbo3 8.4805 (+6.19%); the Turbo3 centroid
 re-derivation brought it to 8.3939 (+5.11%). Still over the 5% line.
 
-## KV policy sweep (same protocol)
+## KV policy sweep (stage 1 protocol)
 
 Bytes per cached element are analytic from the block layouts (f16 2 B, q8_0
 34 B/32 = 1.0625 B, turbo3 50 B/128 = 0.390625 B), averaged over K and V and
@@ -66,7 +69,7 @@ candidates.
 
 ## Decision
 
-Owner decision 2026-09-05: keep the 5% threshold in `scripts/turbo-quality-gate.sh`
+Owner decision 2026-09-05: keep the 5% threshold in [`scripts/turbo-quality-gate.sh`](https://github.com/Raudbjorn/ggml-llama.cpp/blob/435f47bb80b88b60887b44b3d8c06acca45cab3f/scripts/turbo-quality-gate.sh)
 and keep the turbo3 defaults; record the measured gap instead. README.md now
 states the measured figure for this fork and model in place of the imported
 "<1.5% PPL loss" claim. Mode 1 (or asymmetric K) is the candidate if the owner
