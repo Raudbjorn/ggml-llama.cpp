@@ -15,7 +15,8 @@ measured number.
 - Build: `~/build-master-435f47bb8` (JIT, `GGML_SYCL_F16=ON`, launchers empty).
 - Model: `/mnt/mrgr/models/llama31-8b-q4km/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf`
   (32 layers, GQA 4:1, head dim 128). Corpus: Wikitext-2 raw test.
-- Stage 1 protocol: `llama-perplexity -c 512 --chunks 8 -fa on -ngl 99`.
+- Stage 1 protocol: `llama-perplexity -c 512 --chunks 8 -fa on -ngl 99`, run with
+  `-ctk turbo3 -ctv turbo3` and separately with `-ctk q8_0 -ctv q8_0`.
 - Stage 2 protocol: `llama-perplexity -c 4096 --chunks 4 -fa on -ngl 99`.
 - GPU shared with a desktop IDE process during the runs; PPL is unaffected by
   contention, the stage 2 timing ratio is indicative only.
