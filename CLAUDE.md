@@ -187,8 +187,8 @@ This file, not the kernels, decides which types each layer actually gets:
   and any consumer that converts K/V through `ggml_get_to_fp16_sycl` /
   `ggml_get_to_fp16_nc_sycl` must pass the K/V tensor itself (the converters read the flag from
   it). The MKL FA route passed the dst tensor instead and decoded quants-first rows as canonical
-  q8_0, which produced NaN for every q8_0/q8_0 run past n_kv 512 (fixed 2026-09-05; oracle
-  section [4c] now covers the route).
+  q8_0, which produced NaN in the validated Arc A770 q8_0/q8_0 workloads routed to MKL
+  at n_kv >= 1024 (fixed 2026-09-05; oracle section [4c] now covers the route).
 
 ### SYCL flash-attention routing (`ggml/src/ggml-sycl/fattn.cpp`)
 
@@ -206,9 +206,11 @@ allocates from the context pool). Decision order, roughly:
    budget).
 3. **MKL prefill (default on, `GGML_SYCL_ENABLE_MKL_FA=0` disables)**: non-turbo K/V, mask
    present, no sinks/ALiBi/softcap, `gqa_ratio >= 2`, D a multiple of 64 in [64, 512],
-   `Q->ne[1] >= 32` **and `K->ne[1] >= 1024`**. Stages K/V to dense f16 per chunk through the
-   tensor-aware converters, then oneMKL GEMM plus an f32 online softmax. Because of the n_kv gate,
-   a ctx-512 run never reaches it while ctx >= 1024 prefill always does; test at n_kv >= 1024.
+   `Q->ne[1] >= 32` **and `K->ne[1] >= 1024`**, compatible batch dimensions, and valid
+   type/stride conditions. Stages K/V to dense f16 per chunk through the tensor-aware
+   converters, then oneMKL GEMM plus an f32 online softmax. In the validated Arc A770
+   configuration, ctx-512 stays below the n_kv gate; larger contexts reach MKL only when
+   all selector requirements hold. Test eligible shapes at n_kv >= 1024.
 4. Forced overrides (decode only, `Q->ne[1] == 1`): `GGML_SYCL_FA_Q8_GQA_TILE`,
    `GGML_SYCL_FA_FORCE_VEC_STANDARD`. They do not affect prefill.
 5. Opt-in XMX for f16/q8_0 KV (canonical rows only), then oneDNN SDPA if statically supported,

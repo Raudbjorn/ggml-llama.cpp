@@ -20,6 +20,8 @@ extern "C" {
 GGML_BACKEND_API ggml_backend_t ggml_backend_sycl_init(int device);
 
 GGML_BACKEND_API bool ggml_backend_is_sycl(ggml_backend_t backend);
+// Query the flash-attention selector for an initialized device.
+GGML_BACKEND_API bool ggml_backend_sycl_flash_attn_ext_uses_mkl(int device, const struct ggml_tensor * op);
 GGML_BACKEND_API enum ggml_status ggml_backend_sycl_consume_last_status(ggml_backend_t backend);
 
 typedef enum {
