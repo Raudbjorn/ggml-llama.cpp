@@ -134,3 +134,6 @@
 *.mm filter=lfs diff=lfs merge=lfs -text
 /packaging/arch/PKGBUILD filter=lfs diff=lfs merge=lfs -text
 *.env filter=lfs diff=lfs merge=lfs -text
+*.install filter=lfs diff=lfs merge=lfs -text
+*.conf filter=lfs diff=lfs merge=lfs -text
+*.service filter=lfs diff=lfs merge=lfs -text
