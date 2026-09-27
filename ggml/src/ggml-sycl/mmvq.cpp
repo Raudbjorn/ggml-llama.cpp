@@ -2189,7 +2189,11 @@ static void reorder_mul_mat_vec_q5_k_q8_1_sycl_ncols(
         const int ncols, const int nrows,
         const int stride_col_y_bytes, const int stride_col_dst,
         dpct::queue_ptr stream) {
-    constexpr int rows_per_sg = ncols_dst >= 3 ? 2 : 1;
+    // Upstream (ggml-org/llama.cpp#29375, tuned on Arc Pro B70) pairs rows for ncols_dst >= 3.
+    // On Arc A770 that pairing roughly halves throughput at 3..5 columns (test-backend-ops perf,
+    // Q5_K m=4096 k=14336, 2026-09-27: 275 -> 529 us, 298 -> 676 us, 335 -> 823 us) while
+    // 1, 2, 8 and 512 columns are unchanged, so this fork keeps one row per subgroup.
+    constexpr int rows_per_sg = 1;
     reorder_mul_mat_vec_q5_k_q8_1_sycl_ncols_impl<ncols_dst, rows_per_sg>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream);
 }
 
@@ -3356,11 +3360,13 @@ static void launch_mul_mat_vec_q_reorder_glu(const void * vx, const void * vgate
                                              const int ncols, const int nrows, const int stride_col_y_bytes,
                                              const int stride_col_dst, const ggml_glu_op glu_op,
                                              dpct::queue_ptr stream) {
-    // q4_K pairs rows for 3..4 columns, q5_K for 3..5
-    constexpr int row_pair_max = reorder_vec_dot_q_sycl::gtype == GGML_TYPE_Q5_K ? 5 : 4;
+    // q4_K pairs rows for 3..4 columns. Upstream also pairs q5_K for 3..5, but on Arc A770 the
+    // q5_K pairing halves throughput at those column counts (see
+    // reorder_mul_mat_vec_q5_k_q8_1_sycl_ncols), so this fork keeps q5_K at one row per subgroup.
+    constexpr bool pair_rows = reorder_vec_dot_q_sycl::gtype == GGML_TYPE_Q4_K;
     constexpr int rows_per_sg =
-        reorder_vec_dot_shared_activations<reorder_vec_dot_q_sycl::gtype>::value && ncols_dst >= 3 &&
-                ncols_dst <= row_pair_max
+        pair_rows && reorder_vec_dot_shared_activations<reorder_vec_dot_q_sycl::gtype>::value &&
+                ncols_dst >= 3 && ncols_dst <= 4
             ? 2
             : 1;
     launch_mul_mat_vec_q_reorder_glu_impl<reorder_vec_dot_q_sycl, ncols_dst, rows_per_sg>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream);
