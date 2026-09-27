@@ -1,0 +1,231 @@
+# ngxson/llama.cpp branch evaluation (2026-09-27)
+
+Branch: `ngxson-featureset` off `origin/master` 589bf18cb. Fork merge-base with ggml-org master:
+81bc6b83f (2026-09-26 08:14 UTC). All figures below come from the GitHub compare API
+(`repos/ggml-org/llama.cpp/compare/master...ngxson:<branch>`), `gh pr view`, and
+`git diff --no-index` of fork files against the upstream blob at 81bc6b83f, taken on 2026-09-27.
+
+## Summary
+
+| Branch | Head | Upstream PR | PR state | In fork tree | Verdict |
+|---|---|---|---|---|---|
+| `xsn/llama_batch_ext` | 40704338f | #24669 | merged 2026-09-24 (fc343a84b) | yes | already present |
+| `xsn/server_spipe_improve` | 92fe35e5e | #25541 | merged 2026-07-11 (ea1f7bbb5) | yes | already present |
+| `xsn/server_tools_improve` | ef498290b | #25498 | merged 2026-07-10 (c4ae9a88f) | yes | already present |
+| `xsn/server_tools_shell_stream` | 6a0f329d1 | #25526 | merged 2026-07-11 (c92e806d1) | yes | already present |
+| `xsn/mul_mat_id_skip` | 23d8ac073 | #26631 | open, CI 9 failures | no | ported (CPU, SYCL, Vulkan) |
+| `xsn/llama_batch_ext_2` | 28ce6edab | #29385 | open, mergeable, CI green | no | ported |
+| `xsn/llama_batch_ext_mtp` | a748c2705 | none | WIP | no | deferred |
+| `xsn/remote_server` | 7c30fcd13 | #24577 (+ #28277) | open, CONFLICTING | no | rejected |
+
+For the four merged branches the PR head SHA equals the branch head SHA, so nothing on those
+branches is missing from the merged result. The branch heads are 86 to 1279 commits behind
+upstream master and were not used as a source.
+
+## Already present (verify only)
+
+### xsn/llama_batch_ext (#24669)
+
+`include/llama.h` carries the `llama_batch_ext_*` API (23 references), `src/llama-batch.cpp` is
+byte-identical to upstream at the merge-base, `common/common.h` has `common_prompt_batch_decode`.
+`tests/test-batch-alloc.cpp` is identical to upstream and enabled in `tests/CMakeLists.txt:190`.
+Fork delta at these files: `include/llama.h` +36 lines (fork additions), `src/llama-batch.h` +1/-1.
+
+### xsn/server_spipe_improve (#25541)
+
+`tools/server/server-stream.{h,cpp}` are byte-identical to upstream at the merge-base and carry
+`server_res_spipe` with the `stream_pipe_producer spipe` member introduced by the PR.
+`server-http.cpp` has a fork delta of +44/-12 unrelated to the pipe.
+
+### xsn/server_tools_improve (#25498)
+
+`tools/server/server-tools.cpp` has `class tools_io` (line 147), `tools_io_basic` (298) and the
+isolate-backed variant (521); no `apply_diff` remains. Fork delta +92/-39 in server-tools.cpp,
++9/-2 in the header, on top of the merged PR.
+
+### xsn/server_tools_shell_stream (#25526)
+
+`tools/server/server-tools.h` has `support_stream` (line 16), `struct stream` (23) and the
+`invoke(json, stream *)` signature (29); `tools/server/tests/unit/test_tools_builtin.py` exists
+(fork delta +243/-41, additional tests).
+
+## Ported: xsn/mul_mat_id_skip (#26631)
+
+Semantics: an id of `-1` in `MUL_MAT_ID` skips the slot and zeroes the matching dst row; in
+`ADD_ID` it adds nothing. Upstream PR state on 2026-09-27: open since 2026-08-05, +692/-76 over 53
+files, 44 checks green, 9 failed (gpu-cuda, gpu-rocm, gpu-vulkan-nvidia-cm, gpu-webgpu-apple,
+gpu-webgpu-nvidia, cpu-arm64-graviton4 x2, gpu-vulkan-apple, build-cmake-pkg), 3 cancelled; the
+author tested on Metal only and marks the code as fully AI-generated.
+
+What was taken: `git diff f46bc30cb 23d8ac073` restricted to the files this tree still has:
+`ggml/include/ggml.h`, `ggml/src/ggml.c`, `ggml-cpu/{ggml-cpu.c,ops.cpp,repack.cpp,spacemit/ime.cpp}`,
+`ggml-sycl/{add-id.cpp,ggml-sycl.cpp,mmvq.cpp}`, `ggml-vulkan/{ggml-vulkan.cpp,ggml-vulkan-push-constants.h,
+vulkan-shaders/add_id.comp,count_experts.comp,mul_mat_vec_base.glsl}`, `tests/test-backend-ops.cpp`.
+The CUDA/HIP/MUSA, Metal, OpenCL, WebGPU, Hexagon and zendnn hunks were dropped (backends deleted
+from this fork). Everything applied with `git apply -3`; only `tests/test-backend-ops.cpp` needed a
+hand merge (fork-added W4A8/W4A4 test structs sit right above `init_mul_mat_id_ids`).
+
+Fork-specific review:
+
+- Fused SYCL decode path `ggml_sycl_mul_mat_id_mmvq_fused` hands `ids->data` to the mmvq MoE
+  kernels, so the `mmvq.cpp` hunks (warp returns and writes 0 before touching `vx`) cover it, for
+  both the plain and the reordered Q4_K kernels. `check_graph_compatibility` is untouched.
+- SYCL sorted path: upstream's `stream->wait()` after `k_zero_dst_rows` is kept. The zero kernel's
+  row list is a local host vector handed to an asynchronous `memcpy`, so the wait guards its
+  lifetime (the existing routed-row list lives in `ctx.mmid_row_mapping_host` for the same reason).
+  The path already waits on the ids copy, so it is not graph-capturable either way.
+- MoE cache providers need no change: `moe-cache.cpp` `plan()` (SYCL) and
+  `ggml-vulkan-moe-cache.cpp` (Vulkan) preset every slot index to -1 and `continue` on
+  `expert < 0`, so a skipped slot is a miss owned by the CPU fallback, and the CPU hook in
+  `ggml-cpu.c` zeroes `-1` rows before consulting the slot index. Both providers' `fused_begin`
+  are stubs. `topk-moe` fusion emits ids >= 0.
+- OpenVINO: `translate_mul_mat_id` lowers through Gather, where a negative index counts from the
+  end, so a `-1` id would silently pick the last expert. Not fixable at graph build time; a
+  comment at the converter documents the gap (same as upstream). No model in this tree emits `-1`.
+- Test deviation: the PR's new `MUL_MAT_VEC_FUSION` skip cases include the `with_lane_scale`
+  variant, whose graph routes ids through `GGML_OP_GET_ROWS`. That op has no `-1` semantics and
+  the CPU reference aborts (`ops.cpp: GGML_ASSERT(i01 >= 0 && i01 < ne01)`); this is the likely
+  cause of the PR's own CPU CI failures. The fork leaves `with_lane_scale` out of the skip cases.
+
+Why the fork wants it (analytic, not measured): with `-1` skip, a MoE layer's experts can be split
+into two `MUL_MAT_ID` ops over disjoint expert subsets (a VRAM slab and a host-USM or CPU set)
+using a static I32 id remap (`ggml_get_rows` on an I32 table; SYCL supports I32 rows), which is
+the static-placement variant of the expert paging plan implemented at graph level, capturable by
+the SYCL graph. This is the design argument for carrying the change ahead of upstream.
+
+Verification (Arc A770, JIT SYCL build `~/build-pr61-sycl`, production `llama-gpu@` running on the
+same GPU, correctness only):
+
+| Check | Backend | Result |
+|---|---|---|
+| `test-backend-ops -o 'MUL_MAT.*' -p skip=1` (170 MUL_MAT_ID + 1 MUL_MAT_ID_FUSION + 154 MUL_MAT_VEC_FUSION) | SYCL0 (A770) | 325/325 |
+| `test-backend-ops -o ADD_ID` (36 plain + 36 skip) | SYCL0 | 72/72 |
+| `test-backend-ops -o MUL_MAT_ID -p 'type_a=(f32|f16|bf16|q4_0|q4_K|q8_0|mxfp4),'` | SYCL0 | 668/671, the 3 failures are the pre-existing q8_0 amax=1e5 NaN cases (below) |
+| `test-backend-ops -o 'MUL_MAT.*' -p skip=1` | Vulkan1 (A770, ANV) | 325/325 |
+| `test-backend-ops -o ADD_ID` | Vulkan1 | 72/72 |
+| `test-backend-ops -o MUL_MAT_ID -p 'type_a=(f32|f16|bf16|q4_0|q4_K|q8_0|mxfp4),'` | Vulkan1 | 665/665 (6 shapes reported unsupported and skipped) |
+| `test-sycl-turbo-correctness` default sweep | SYCL | 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP |
+| `test-batch-alloc` | CPU | 50 tests, 327 assertions, 0 failures |
+| `llama-completion` Qwen3-Coder-30B-A3B UD-Q3_K_XL, `--cpu-moe --moe-cache 2048 -lv 4`, `GGML_SYCL_ENABLE_GRAPH=1`, 96 tokens | SYCL + CPU hook + provider | session ready, q3_K and q4_K pools, hits 110715/218347 (50.7%), dispatch-fail 0, collect-fail 0, graphs reused 94, coherent output |
+
+CPU is the reference backend in every test-backend-ops row, so the CPU hunks are exercised by all of them.
+
+Pre-existing issues met on the way, unrelated to the port (each reproduced on a pre-port binary):
+
+- `test-backend-ops -o MUL_MAT_ID` on SYCL aborts at `convert.cpp:792: unsupport data type=tq3_1s`
+  before reaching the new cases (already flagged in PR #62); the runs above use a `-p` filter.
+- `MUL_MAT_ID(type_a=q8_0, n_mats=8, n_used=2, m=512, n=16|32|64, k=256, amax=100000)` returns
+  NaN on SYCL intermittently (n=16: 2/4 pass on the pre-port binary, 3/4 on the ported one; n=32
+  and n=64 fail on both).
+- The Vulkan backend of this fork did not build on this box: shaderc 2026.3's spirv-opt rejects
+  the OCP FP4 shader variants (`Invalid capability operand: 4229`, 26 shaders, master's untouched
+  source fails identically), and the four `ggml_backend_vk_get_*` handle accessors added by the
+  2026-09-05 TheTom sync compiled with C++ linkage and hidden visibility, so `libggml-vulkan.so`
+  could not resolve them for the Vulkan cache provider. Both fixed in separate commits on this
+  branch so the Vulkan hunks could be exercised.
+
+## Ported: xsn/llama_batch_ext_2 (#29385)
+
+Upstream state on 2026-09-27: open, mergeable, review required, 12 checks green, head 28ce6edab
+(2026-09-25), 12 commits on top of b248f4a3c. It adds `common_batch` (a wrapper over
+`llama_batch_ext` with a token mirror and `add` / `add_embd` / `set_embd` / `set_output`),
+`common_batch_get_one`, `common_batch_from_llama_batch`, removes `string_from(ctx, llama_batch)`,
+and migrates `server_batch` (renders a sub-batch into a `common_batch` view), every
+`common_speculative_impl::process()` (new `const common_batch &` overload; the `llama_batch`
+overload stays as a converting shim) and the mtmd helpers.
+
+Applied with `git apply -3` from `git diff b248f4a3c 28ce6edab` over the 11 files. Ten files
+applied cleanly (mtmd helpers, `common/speculative.h`, `speculative-simple`, `common/common.{h,cpp}`,
+`tools/server/server-context.cpp`); `common/speculative.cpp` had ten conflict blocks, all inside
+the DFlash and MTP drafts where the fork carries its own logic on top of upstream:
+
+- DFlash: kept the fork's rule of skipping embedding (image) batches entirely and its NaN /
+  f16-overflow sanitising of the gathered target features, then hand the sanitised rows to
+  `batch_inject.add_embd()` and `llama_process()` as the PR does. The PR's M-RoPE pinned-position
+  skip is unreachable under the fork rule and was not taken. The PR's new `features_buf` member
+  duplicated the fork's; one declaration kept.
+- MTP: kept the fork's stale-KV trim, deferred catch-up rows (`defer`, `flush_deferred`,
+  `drop_deferred_from`, `defer_capacity`), chained drafting (`chain_graph`, `llama_set_mtp_chain`)
+  and adaptive depth (`n_cap`), and moved every raw `llama_batch` construction in them to
+  `common_batch::add()` + `set_embd()` (rows are copied into the batch by
+  `llama_batch_ext::set_token_embd`, so the fork's clear-the-deferred-buffers-before-decode order
+  is unchanged). The chained rows that used to be `memset` to zero now point at a per-draft
+  `zeros` row. `llama_decode` calls in the fork paths became `llama_process(...,
+  LLAMA_PROCESS_TYPE_DECODE, batch.get())`. `batch_capacity` / `ubatch_capacity` stay, they size
+  the deferral window.
+- Fork-only callers elsewhere (`tools/server/server-context.cpp` and `speculative-simple`) already
+  used the API the PR migrates, or keep compiling through the retained `llama_batch` overload.
+
+Verification (same box and sharing rules as above; `-ngl 0` for the 9B because production holds
+the GPU; `/completion` with `n_predict 48`, `temperature 0`, `seed 1`):
+
+| Check | Result |
+|---|---|
+| SYCL build of `llama-server`, `llama-completion`, `llama-mtmd-cli`, `test-batch-alloc` | 0 errors |
+| `test-batch-alloc` | 50 tests, 327 assertions, 0 failures |
+| `llama-server --spec-type draft-mtp`, Ornith-1.5-9B Q4_K_M on CPU, ported build | 48 tokens, drafted 57, accepted 27 |
+| same, installed pre-port build (`/usr/bin/llama-server`, pkg `b12275.bb6908513`) | 48 tokens, drafted 54, accepted 28; output byte-identical to the ported build |
+| same model, ported build, no draft | 48 tokens; differs from the drafted output after the first sentence (expected temperature-0 drift under speculation) |
+| `llama-server --spec-type draft-simple --spec-draft-n-max 8`, Qwen3-Coder-30B-A3B UD-Q3_K_XL `--cpu-moe` + Qwen3-1.7B Q8_0 draft on CPU, ported build | 48 tokens, drafted 131, accepted 28 (21%); shares a 195 / 232 character prefix with the no-draft output of the same build |
+| same, installed pre-port build | 48 tokens, drafted 142, accepted 26 (18%); diverges from the no-draft reference after 22 characters; the process dumped core (exit 139) at forced shutdown after a second interrupt, once the request had completed. The ported build exited cleanly. Not investigated. |
+| same model, ported build, no draft | 48 tokens, 47 graphs reused |
+
+Speculative decoding changing temperature-0 output is expected on this backend (kernels are not
+batch-invariant), so the comparison is on completion, draft statistics and prefix agreement, not
+on exact hashes.
+
+## Deferred: xsn/llama_batch_ext_mtp
+
+Head a748c2705 (2026-09-12), no upstream PR, merge-base with upstream 41fc7584f (2026-09-10),
+327 commits behind. The branch is the older lineage of `xsn/llama_batch_ext` plus an earlier cut of
+`xsn/llama_batch_ext_2`, so everything except one commit is superseded by #24669 (merged) and
+#29385 (ported here). The one unique commit, a748c2705 "support vision input for mtp", does:
+
+- split a per-token *state* embedding from the token embedding in `llama_batch_ext`:
+  `llama_batch_ext_set_embd_state()` gains a return value, the allocator and `llama_ubatch` get
+  `n_embd_state` / `embd_state`, `llm_graph_input_embd_h` takes `(n_embd_inp, n_embd_state)`;
+- lets each model's `graph_mtp` accept embedding inputs (vision tokens) instead of only token ids,
+  touching 12 `src/models/*.cpp` including `qwen35moe.cpp`, plus `llama-graph.{h,cpp}` and
+  `llama-kv-cache-dsv4.cpp`;
+- adds `common_batch::set_embd_state()` and switches the MTP draft to it;
+- disables `test-batch-alloc` in `tests/CMakeLists.txt` with a "fix this before merging" TODO.
+
+Nothing in it is needed for text-only MTP drafting (the fork's `common_speculative_impl_draft_mtp`
+already handles qwen35moe text, and production serves Ornith without a draft). It is WIP quality
+(disabled test, no PR, no CI). Deferred until ngxson opens the PR; re-check then.
+
+## Rejected: xsn/remote_server (#24577) and llama-connect (#28277)
+
+#24577 "ui: (demo) access server remotely via webrtc": head 7c30fcd13, 16 commits, +1229/-34,
+all under `tools/ui/` (WebRTC tunnel that intercepts `fetch()`, signalling over public WebTorrent
+trackers, a pass-code splash and a remote-server registry). The author calls it a PoC that is
+"NOT intended to be production-ready"; it is CONFLICTING with upstream master as of 2026-09-27
+and caps at the frontend (cannot upgrade the PWA remotely). The server-side follow-up #28277
+`llama-server --connect` pulls a prebuilt Rust `llama-connect` binary from a separate repository
+at build time (no macOS x64 build, 8 CI failures), which the Arch packaging under
+`packaging/arch/` cannot carry and which adds a supply-chain surface for a box that already
+reaches `llama-server` remotely over Tailscale (see `/etc/systemd/system/llama-gpu@.service`
+and the nginx-to-Tailscale pattern in the user's notes).
+
+Rejected. Re-evaluate only if upstream merges #28277 with a source build of the connector.
+
+## Not claimed
+
+- No benchmark or timing claim for either port. Every GPU run above shared the A770 with the
+  production `llama-gpu@` instance, so throughput figures in the logs are noise, not data.
+- The `-1` skip is verified by test-backend-ops against the CPU reference and by an end-to-end run
+  that never emits `-1`. No model in this tree produces `-1` ids, so the feature has not been
+  exercised by a real graph; the expert-partitioning use is a design argument, not a measurement.
+- OpenVINO `MUL_MAT_ID` with `-1` ids stays wrong (documented, same as upstream).
+- #29385 is unmerged upstream. The next upstream sync may land a revised version and need a
+  re-merge of `common/speculative.cpp`, whose fork-specific MTP and DFlash logic sits exactly where
+  the PR changes the batch handling.
+- Speculative decoding was smoke-tested only through `draft-mtp` on a CPU-resident 9B and
+  `draft-simple` with a CPU-resident draft; `draft-eagle3`, `draft-dflash`, `draft-dspark` and the
+  chained MTP path (`--spec-chain`) compile but were not run (no draft models on disk; chained MTP
+  needs flash attention and the GPU, which production occupies).
+- The mtmd helper migration was built (`llama-mtmd-cli`) but not run: no vision projector on disk.
+- The server Python test suite (`tools/server/tests`) was not run: it downloads models through
+  `--hf-repo`, and the fork's build recipe sets `LLAMA_CURL=OFF`.
+- The two Vulkan build fixes were verified only by a Vulkan build and test-backend-ops on this
+  box (shaderc 2026.3, ANV on DG2); other shaderc versions were not tried.
