@@ -2190,10 +2190,11 @@ static void reorder_mul_mat_vec_q5_k_q8_1_sycl_ncols(
         const int stride_col_y_bytes, const int stride_col_dst,
         dpct::queue_ptr stream) {
     // Upstream (ggml-org/llama.cpp#29375, tuned on Arc Pro B70) pairs rows for ncols_dst >= 3.
-    // On Arc A770 that pairing roughly halves throughput at 3..5 columns (test-backend-ops perf,
-    // Q5_K m=4096 k=14336, 2026-09-27: 275 -> 529 us, 298 -> 676 us, 335 -> 823 us) while
-    // 1, 2, 8 and 512 columns are unchanged, so this fork keeps one row per subgroup.
-    constexpr int rows_per_sg = 1;
+    // On Arc A770 (test-backend-ops perf, Q5_K m=4096 k=14336, 2026-09-27) pairing roughly halves
+    // throughput at 3..5 columns (275 -> 529 us, 298 -> 676 us, 335 -> 823 us), but at 8 columns
+    // the unpaired kernel built on the restructured vec_dot is the slow one (2109 us vs 1267 us
+    // paired, 1167 us before the PR). Pair only from 6 columns up on this fork.
+    constexpr int rows_per_sg = ncols_dst >= 6 ? 2 : 1;
     reorder_mul_mat_vec_q5_k_q8_1_sycl_ncols_impl<ncols_dst, rows_per_sg>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream);
 }
 
