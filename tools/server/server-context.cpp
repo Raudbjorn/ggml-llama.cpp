@@ -355,13 +355,17 @@ struct server_batch {
         view.clear();
         for (int32_t i = off; i < off + n_tokens; i++) {
             const auto & t = tokens[i];
+            // the view is sized from the context and the tokens were validated on input, so a
+            // rejected row is an internal error
+            int32_t idx;
             if (has_embd) {
                 // text embeddings broadcast the same position across the M-RoPE sections
                 const llama_pos pos[GGML_MROPE_SECTIONS] = { t.pos, t.pos, t.pos, 0 };
-                view.add_embd({ embd.data() + (size_t) i * n_embd, 1, (size_t) n_embd }, pos, t.id_slot, t.output);
+                idx = view.add_embd({ embd.data() + (size_t) i * n_embd, 1, (size_t) n_embd }, pos, t.id_slot, t.output);
             } else {
-                view.add(t.token, t.pos, t.id_slot, t.output);
+                idx = view.add(t.token, t.pos, t.id_slot, t.output);
             }
+            GGML_ASSERT(idx >= 0 && "server batch view rejected a row");
         }
     }
 };
@@ -917,7 +921,9 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
                         for (int32_t j = 0; j < b->n_pos; ++j) {
                             pos[j] = b->pos[j * b->n_tokens + i];
                         }
-                        batch.add_embd({ b->embd + (size_t) i * b->n_embd, 1, (size_t) b->n_embd }, pos, b->seq_id, false);
+                        if (batch.add_embd({ b->embd + (size_t) i * b->n_embd, 1, (size_t) b->n_embd }, pos, b->seq_id, false) < 0) {
+                            return 1;
+                        }
                     }
 
                     return common_speculative_process(data->spec, batch) ? 0 : 1;

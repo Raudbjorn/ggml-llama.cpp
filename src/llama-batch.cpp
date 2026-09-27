@@ -1198,6 +1198,8 @@ int32_t llama_batch_ext_add_token(llama_batch_ext * batch, llama_seq_id seq_id, 
         return idx;
     }
     if (!batch->set_token_id(idx, id)) {
+        // roll the entry back: a row without an id would fail the content-type check at decode
+        batch->tokens.pop_back();
         return -2;
     }
     return idx;
@@ -1209,6 +1211,8 @@ int32_t llama_batch_ext_add_embd(llama_batch_ext * batch, llama_seq_id seq_id, l
         return idx;
     }
     if (!batch->set_token_embd(idx, embd)) {
+        // roll the entry back, see llama_batch_ext_add_token
+        batch->tokens.pop_back();
         return -2;
     }
     return idx;

@@ -238,8 +238,8 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
 
         // eval the token
         ctx.batch.clear();
-        ctx.batch.add(token_id, ctx.n_past++, 0, true);
-        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
+        if (ctx.batch.add(token_id, ctx.n_past++, 0, true) < 0 ||
+            llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
             LOG_ERR("failed to decode token\n");
             return 1;
         }

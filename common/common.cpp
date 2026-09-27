@@ -2264,7 +2264,10 @@ float lr_opt::get_lr(float epoch) const {
 
 bool common_replay_last_token(struct llama_context * ctx, llama_token last_token, int32_t pos) {
     common_batch batch(ctx);
-    batch.add(last_token, pos, 0, true);
+    if (batch.add(last_token, pos, 0, true) < 0) {
+        LOG_ERR("%s: failed to add token %d to the batch\n", __func__, last_token);
+        return false;
+    }
 
     if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         LOG_ERR("%s: failed to replay last token\n", __func__);
@@ -2286,7 +2289,7 @@ void common_batch::clear() {
 int32_t common_batch::add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output) {
     const int32_t idx = llama_batch_ext_add_token(batch.get(), seq_id, id);
     if (idx < 0) {
-        GGML_ABORT("%s: failed to add token %d to the batch (error %d, n_tokens = %d)\n", __func__, id, idx, size());
+        return idx; // batch full, token outside the vocab or invalid seq id: the caller decides
     }
     llama_batch_ext_set_pos(batch.get(), idx, &pos);
     if (output) {
@@ -2318,7 +2321,7 @@ bool common_batch::set_embd(int32_t idx, llama_embd embd) {
 int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output) {
     const int32_t idx = llama_batch_ext_add_embd(batch.get(), seq_id, embd);
     if (idx < 0) {
-        GGML_ABORT("%s: failed to add embedding to the batch (error %d, n_tokens = %d)\n", __func__, idx, size());
+        return idx; // batch full, bad row width or invalid seq id: the caller decides
     }
     llama_batch_ext_set_pos(batch.get(), idx, pos);
     if (output) {
@@ -2348,11 +2351,15 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
     const llama_seq_id n_seq_max = (llama_seq_id) llama_n_seq_max(ctx);
     std::vector<llama_pos> pos_next(n_seq_max, 0);
     if (!batch.pos) {
+        // a row shared by several sequences advanced every one of them
         std::vector<int32_t> n_rows(n_seq_max, 0);
         for (int32_t i = 0; i < batch.n_tokens; ++i) {
-            const llama_seq_id s = batch.seq_id ? batch.seq_id[i][0] : 0;
-            if (s >= 0 && s < n_seq_max) {
-                n_rows[s]++;
+            const int32_t n_sid = batch.seq_id && batch.n_seq_id ? batch.n_seq_id[i] : 1;
+            for (int32_t j = 0; j < n_sid; ++j) {
+                const llama_seq_id s = batch.seq_id ? batch.seq_id[i][j] : 0;
+                if (s >= 0 && s < n_seq_max) {
+                    n_rows[s]++;
+                }
             }
         }
         for (llama_seq_id s = 0; s < n_seq_max; ++s) {
@@ -2386,11 +2393,18 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
         int32_t idx;
         if (has_token) {
             idx = res.add(batch.token[i], pos[0], seq_id, output);
-            if (has_embd) {
-                res.set_embd(idx, embd);
+            if (idx >= 0 && has_embd && !res.set_embd(idx, embd)) {
+                idx = -2;
             }
         } else {
             idx = res.add_embd(embd, pos, seq_id, output);
+        }
+        if (idx < 0) {
+            // the caller sees a shorter batch than it passed in and treats that as a failure
+            LOG_ERR("%s: could not convert row %d of %d (error %d): batch full, token outside the vocab, bad row width or seq id\n",
+                    __func__, i, batch.n_tokens, idx);
+            res.clear();
+            return res;
         }
 
         if (n_sid > 1) {
@@ -2403,7 +2417,11 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
             }
         }
         for (int32_t s = 1; s < n_sid; ++s) {
-            llama_batch_ext_add_seq(res.get(), idx, batch.seq_id[i][s]);
+            if (!llama_batch_ext_add_seq(res.get(), idx, batch.seq_id[i][s])) {
+                LOG_ERR("%s: could not add seq id %d to row %d\n", __func__, batch.seq_id[i][s], i);
+                res.clear();
+                return res;
+            }
         }
     }
 
@@ -2418,7 +2436,11 @@ common_batch common_batch_get_one(llama_context * ctx, const llama_tokens & toke
 
     for (size_t i = 0; i < tokens.size(); ++i) {
         const bool output = i == tokens.size() - 1;
-        batch.add(tokens[i], pos, 0, output);
+        if (batch.add(tokens[i], pos, 0, output) < 0) {
+            LOG_ERR("%s: could not add token %zu of %zu (batch full or token outside the vocab), the batch is truncated\n",
+                    __func__, i, tokens.size());
+            break;
+        }
         pos++;
     }
 
@@ -2460,7 +2482,10 @@ bool common_prompt_batch_decode(
         COM_INF("saved session before last token to %s, n_new = %zu\n", state_path.data(), all_tokens.size());
 
         common_batch batch_last(ctx);
-        batch_last.add(all_tokens.back(), n_past, 0, true);
+        if (batch_last.add(all_tokens.back(), n_past, 0, true) < 0) {
+            COM_ERR("%s", "failed to add the last token to the batch\n");
+            return false;
+        }
 
         if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch_last.get())) {
             COM_ERR("%s", "failed to eval last token\n");

@@ -1110,7 +1110,8 @@ struct common_batch {
 
     void clear();
 
-    // returns the batch index (>= 0), aborts if the entry cannot be added (batch full, invalid token or seq id)
+    // returns the batch index (>= 0), or a negative llama_batch_ext error code when the entry cannot
+    // be added (batch full, token outside the vocab, invalid seq id); the batch is left unchanged then
     int32_t add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output);
 
     bool set_output(int32_t idx, bool value);
@@ -1118,7 +1119,7 @@ struct common_batch {
     // attach a token embedding to the entry at idx, can only be set once per entry
     bool set_embd(int32_t idx, llama_embd embd);
 
-    // add an embedding-only entry (no token id), aborts like add() on failure
+    // add an embedding-only entry (no token id), returns a negative error code like add() on failure
     // pos points to n_pos positions
     int32_t add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output);
 

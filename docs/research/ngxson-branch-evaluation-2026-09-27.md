@@ -187,6 +187,37 @@ the DFlash and MTP drafts where the fork carries its own logic on top of upstrea
   several sequence ids, since the draft mirror keeps only the first. Findings about the mtmd
   callback copying embeddings per sub-batch and the shim duplicating `llama_batch_compat` are
   upstream #29385 design and left as they are.
+- Third round (re-review of the second): the guard above fixed one call site, not the class.
+  `common_batch::add()` and `add_embd()` no longer abort; they return the `llama_batch_ext` error
+  code (batch full, token outside the vocab, bad seq id or row width) and leave the batch
+  unchanged, and every caller propagates it. The draft implementations share one path for a row
+  the draft cannot take: the sequence is switched off (`seq_off` in the base struct, one warning),
+  `process()` keeps mirroring the other sequences and decodes what it built, `draft()` skips the
+  sequence and never submits an empty batch. The sequence rejoins when a later `process()` batch
+  continues its draft memory exactly (first row at `pos_max + 1`), which the server's per-request
+  draft memory reset provides; `begin()` is not the signal, the server calls it after the prefill
+  inside the same request (the first cut of this round used `begin()` and the repro below caught
+  it: `draft()` then decoded at position 16 against a draft memory ending at 9). This covers the vocab gap,
+  a draft `n_batch` smaller than the target's, a bad seq id and a failed `set_embd()` in all four
+  drafts (`draft-simple`, EAGLE3, DFlash, MTP) with the same behaviour. `common_batch_get_one`,
+  `common_replay_last_token`, `common_prompt_batch_decode`, `llama-mtmd-cli` and the server's
+  mtmd callback report the failure instead; the server's own `render()` asserts, since its view is
+  sized from the context and its tokens are validated on input. The legacy shim counts a shared
+  row for every sequence it carries (CodeRabbit thread on `common.cpp`) and fails the conversion,
+  and therefore `process()`, when a row cannot be converted. The mtmd callback copies and the shim
+  duplication remain upstream design; the draft mirror keeps one seq id per row by upstream design
+  (the pre-PR drafts asserted it), now warned once instead of silent.
+  Found on the way: `llama_batch_ext_add_token` / `add_embd` appended the entry before validating
+  the token id or the row width, so a rejected add left a phantom row without content and the next
+  decode failed with "all entries in the batch must have the same content types". Both now roll the
+  entry back (`src/llama-batch.cpp`), which also holds for upstream #24669.
+  Repro of the original finding (Qwen2.5-Coder-7B target, vocab 152064, Qwen2.5-0.5B draft, vocab
+  151936, same tokenizer, gap 128 accepted by the compatibility check; `/completion` with a token
+  array containing id 152000, then a normal request, twice): the PR head before this round would
+  have aborted the server in `common_batch::add()`; the installed pre-PR build returns HTTP 500
+  "failed to process speculative batch" and stays up; this branch returns 200 with the right
+  answer and no drafts for the bad request, logs one warning, and the following request drafts
+  normally again (6 of 8 accepted, the same as a clean run on both builds).
 
 Verification (same box and sharing rules as above; `-ngl 0` for the 9B because production holds
 the GPU; `/completion` with `n_predict 48`, `temperature 0`, `seed 1`):
