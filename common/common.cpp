@@ -2393,6 +2393,15 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
             idx = res.add_embd(embd, pos, seq_id, output);
         }
 
+        if (n_sid > 1) {
+            // the target batch keeps every sequence id; the draft mirror (common_batch::token)
+            // holds one, so the draft implementations see only the first
+            static bool warned = false;
+            if (!warned) {
+                LOG_WRN("%s: token with %d sequence ids, the draft mirror keeps only the first one\n", __func__, n_sid);
+                warned = true;
+            }
+        }
         for (int32_t s = 1; s < n_sid; ++s) {
             llama_batch_ext_add_seq(res.get(), idx, batch.seq_id[i][s]);
         }

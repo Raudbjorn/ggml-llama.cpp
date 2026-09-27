@@ -142,6 +142,15 @@ using common_speculative_draft_params_vec = std::vector<common_speculative_draft
 //
 // each implementation has a unique type and a state that is implementation-specific
 // in a subclass of common_speculative_impl
+// Target-sampled ids can fall outside a smaller draft vocab (common_speculative_are_compatible
+// tolerates a size difference of SPEC_VOCAB_MAX_SIZE_DIFFERENCE). common_batch::add() aborts on
+// such an id, so the draft paths that copy target tokens check first and fail the way a rejected
+// llama_decode() used to.
+static bool spec_token_in_vocab(llama_context * ctx_dft, llama_token id) {
+    const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_dft));
+    return id >= 0 && id < llama_vocab_n_tokens(vocab);
+}
+
 struct common_speculative_impl {
     const common_speculative_type type;
 
@@ -275,9 +284,14 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
             const auto & t = batch_in.tokens[k];
             const bool output = k == n_tokens - 1;
             if (t.id != LLAMA_TOKEN_NULL) {
+                if (!spec_token_in_vocab(ctx_dft, t.id)) {
+                    SPC_ERR("token %d is outside the draft vocab, cannot mirror the target batch\n", t.id);
+                    return false;
+                }
                 const int32_t idx = batch.add(t.id, t.pos[0], t.seq_id, output);
-                if (t.embd.data) {
-                    batch.set_embd(idx, t.embd);
+                if (t.embd.data && !batch.set_embd(idx, t.embd)) {
+                    SPC_ERR("failed to attach the target embedding to draft token %d (row width mismatch?)\n", t.id);
+                    return false;
                 }
             } else {
                 // a draft with a different width (e.g. a smaller model) gets zeros instead, keeping its positions contiguous
@@ -315,6 +329,11 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
             auto & dp = dparams[seq_id];
 
             if (!dp.drafting) {
+                continue;
+            }
+
+            if (!spec_token_in_vocab(ctx_dft, dp.id_last)) {
+                SPC_WRN("seq %d: token %d is outside the draft vocab, no draft this round\n", seq_id, dp.id_last);
                 continue;
             }
 
@@ -648,7 +667,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             batch_enc.clear();
             llama_pos pos = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), 0) + 1;
             for (int32_t j = 0; j < n_chunk; ++j) {
-                batch_enc.add_embd({ features_buf.data() + (size_t) (i + j) * n_embd_enc, 1, (size_t) n_embd_enc }, &pos, 0, true);
+                // add_embd() reads n_pos entries (4 on an M-RoPE draft), so pass a full position row
+                const llama_pos pos_arr[GGML_MROPE_SECTIONS] = { pos, pos, pos, 0 };
+                batch_enc.add_embd({ features_buf.data() + (size_t) (i + j) * n_embd_enc, 1, (size_t) n_embd_enc }, pos_arr, 0, true);
                 pos++;
             }
 

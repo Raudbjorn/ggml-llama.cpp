@@ -5454,7 +5454,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     SYCL_CHECK(CHECK_TRY_ERROR(
         stream->memcpy(ids_host.data(), ids_dev, ggml_nbytes(ids))));
 
-    // also ensures ctx.mmid_row_mapping_host is drained before we use it again
+    // also ensures ctx.mmid_row_mapping_host and ctx.mmid_skipped_row_host are drained before we use them again
     SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
 
     ggml_tensor src0_row = *src0;
@@ -5519,8 +5519,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         std::vector<int64_t> expert_row_offsets;
         // the sources (slot/token pairs) of contiguous rows to guide k_copy_src1_to_contiguous
         std::vector<mmid_row_mapping> & routed_row_src = ctx.mmid_row_mapping_host;
-        // the slot/token pairs of the skipped slots, whose dst rows are zeroed
-        std::vector<mmid_row_mapping> skipped_row_dst;
+        // the slot/token pairs of the skipped slots, whose dst rows are zeroed. Lives in ctx like
+        // routed_row_src: the async memcpy below reads it, and the wait at the top of this function
+        // drains that before the next node reuses it, so no extra wait is needed here
+        std::vector<mmid_row_mapping> & skipped_row_dst = ctx.mmid_skipped_row_host;
 
         mmid_counting_sort_rows(ids, ids_host.data(), n_ids, n_as, n_routed_rows,
                                 expert_row_counts, expert_row_offsets, routed_row_src, skipped_row_dst);
@@ -5550,7 +5552,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                         k_zero_dst_rows(dst_original, dev_skipped_get, ne0, nb1, nb2, item_ct1);
                     });
             });
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
+            // dev_skipped returns to the pool at scope exit; a later allocation reuses it only
+            // through the same in-order stream, after this kernel
         }
 
         if (n_valid_rows > 0) {

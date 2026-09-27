@@ -70,10 +70,13 @@ Fork-specific review:
 - Fused SYCL decode path `ggml_sycl_mul_mat_id_mmvq_fused` hands `ids->data` to the mmvq MoE
   kernels, so the `mmvq.cpp` hunks (warp returns and writes 0 before touching `vx`) cover it, for
   both the plain and the reordered Q4_K kernels. `check_graph_compatibility` is untouched.
-- SYCL sorted path: upstream's `stream->wait()` after `k_zero_dst_rows` is kept. The zero kernel's
-  row list is a local host vector handed to an asynchronous `memcpy`, so the wait guards its
-  lifetime (the existing routed-row list lives in `ctx.mmid_row_mapping_host` for the same reason).
-  The path already waits on the ids copy, so it is not graph-capturable either way.
+- SYCL sorted path: upstream adds a `stream->wait()` after `k_zero_dst_rows` because the zero
+  kernel's row list is a local host vector handed to an asynchronous `memcpy`. The fork drops that
+  wait and keeps the list in `ctx.mmid_skipped_row_host`, the way the routed-row list already lives
+  in `ctx.mmid_row_mapping_host`: the wait at the top of the next call drains both before reuse,
+  and the device copy is a pool allocation reused only in stream order. Without this every MoE
+  layer with a skipped slot would have paid a host sync in the batched path, which matters once
+  expert partitioning makes `-1` ids routine.
 - MoE cache providers need no change: `moe-cache.cpp` `plan()` (SYCL) and
   `ggml-vulkan-moe-cache.cpp` (Vulkan) preset every slot index to -1 and `continue` on
   `expert < 0`, so a skipped slot is a miss owned by the CPU fallback, and the CPU hook in
@@ -118,12 +121,21 @@ Pre-existing issues met on the way, unrelated to the port (each reproduced on a 
 - `MUL_MAT_ID(type_a=q8_0, n_mats=8, n_used=2, m=512, n=16|32|64, k=256, amax=100000)` returns
   NaN on SYCL intermittently (n=16: 2/4 pass on the pre-port binary, 3/4 on the ported one; n=32
   and n=64 fail on both).
+- With `GGML_SYCL_ENABLE_GRAPH=1`, `test-backend-ops -o MUL_MAT_ID` (same `-p` subset) aborts
+  after the `q4_K, n_mats=4, n_used=1, b=0, n=129` case with `Graph nodes cannot depend on events
+  from outside the graph`, caught by the function-level handler in `ggml_sycl_mul_mat_id`. The
+  next case (`b=1, n=1`) passes in isolation, so the failure depends on the sequence of graphs in
+  one process (the SYCL graph record/replay state), and the pre-port binary from master aborts at
+  the same case with the same message. The MUL_MAT_ID regression rows above were run with graphs
+  off; the skip-case and ADD_ID rows pass with graphs on as well.
 - The Vulkan backend of this fork did not build on this box: shaderc 2026.3's spirv-opt rejects
   the OCP FP4 shader variants (`Invalid capability operand: 4229`, 26 shaders, master's untouched
   source fails identically), and the four `ggml_backend_vk_get_*` handle accessors added by the
   2026-09-05 TheTom sync compiled with C++ linkage and hidden visibility, so `libggml-vulkan.so`
-  could not resolve them for the Vulkan cache provider. Both fixed in separate commits on this
-  branch so the Vulkan hunks could be exercised.
+  could not resolve them for the Vulkan cache provider (`ggml-vulkan.h` declares them only once
+  `VK_VERSION_1_0` is defined, and `ggml-vulkan-types.h` included it before the Vulkan header).
+  Both fixed on this branch so the Vulkan hunks could be exercised; the accessor fix ended up as an
+  include-order swap in `ggml-vulkan-types.h`, replacing an earlier redeclaration block.
 
 ## Ported: xsn/llama_batch_ext_2 (#29385)
 
@@ -163,6 +175,18 @@ the DFlash and MTP drafts where the fork carries its own logic on top of upstrea
   the M-RoPE position loops in the mtmd helper and the server's mtmd callback assert
   `n_pos <= GGML_MROPE_SECTIONS` instead of silently truncating. No in-tree caller passes null
   positions to the shim; `speculative-simple` and the server set them explicitly.
+- Second review round (unverified external pass, checked here against the code): `common_batch::add()`
+  aborts when `llama_batch_ext::set_token_id` rejects an id at or above the draft vocab, and the
+  compatibility check tolerates a vocab size difference of 128, so a target token in that gap took
+  the server down where the old `llama_decode` path returned an error. `draft-simple` now checks
+  target ids against the draft vocab before adding them (`process()` fails like the old decode
+  error, `draft()` skips that sequence for the round) and fails `process()` when the target
+  embedding cannot be attached, instead of silently decoding the token row alone. The EAGLE3
+  encoder passed a scalar position where `add_embd()` reads `n_pos` entries (4 on an M-RoPE
+  draft); it now passes a full position row. The legacy shim warns once when a token carries
+  several sequence ids, since the draft mirror keeps only the first. Findings about the mtmd
+  callback copying embeddings per sub-batch and the shim duplicating `llama_batch_compat` are
+  upstream #29385 design and left as they are.
 
 Verification (same box and sharing rules as above; `-ngl 0` for the 9B because production holds
 the GPU; `/completion` with `n_predict 48`, `temperature 0`, `seed 1`):
@@ -237,3 +261,6 @@ Rejected. Re-evaluate only if upstream merges #28277 with a source build of the 
   `--hf-repo`, and the fork's build recipe sets `LLAMA_CURL=OFF`.
 - The two Vulkan build fixes were verified only by a Vulkan build and test-backend-ops on this
   box (shaderc 2026.3, ANV on DG2); other shaderc versions were not tried.
+- `test-backend-ops -o MUL_MAT_ID` with SYCL graphs enabled aborts in graph capture on this fork
+  before and after the port (pre-existing, sequence-dependent); the MUL_MAT_ID regression tables
+  are graphs-off runs.

@@ -15312,18 +15312,6 @@ bool ggml_backend_is_vk(ggml_backend_t backend) {
     return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_vk_guid());
 }
 
-// ggml-vulkan.h declares these handle accessors only when <vulkan/vulkan.h> was included before
-// it, which is not the case in this translation unit (it arrives through ggml-vulkan-types.h).
-// Without the declarations the definitions below get C++ linkage and hidden visibility, and
-// ggml-vulkan-moe-cache.cpp, which does see the extern "C" declarations, fails to link against
-// them. Redeclare them here so the definitions pick up C linkage and the export attribute.
-extern "C" {
-GGML_BACKEND_API VkDevice         ggml_backend_vk_get_device_handle(ggml_backend_t backend);
-GGML_BACKEND_API VkQueue          ggml_backend_vk_get_queue_handle(ggml_backend_t backend);
-GGML_BACKEND_API VkPhysicalDevice ggml_backend_vk_get_physical_device(ggml_backend_t backend);
-GGML_BACKEND_API uint32_t         ggml_backend_vk_get_queue_family(ggml_backend_t backend);
-}
-
 VkDevice ggml_backend_vk_get_device_handle(ggml_backend_t backend) {
     if (!ggml_backend_is_vk(backend)) {
         return VK_NULL_HANDLE;
