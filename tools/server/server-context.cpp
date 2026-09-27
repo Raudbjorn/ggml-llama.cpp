@@ -911,6 +911,7 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
                     const auto * data = static_cast<cb_data_t *>(user_data);
 
                     common_batch batch(data->ctx);
+                    GGML_ASSERT(b->n_pos > 0 && b->n_pos <= GGML_MROPE_SECTIONS);
                     for (int32_t i = 0; i < b->n_tokens; ++i) {
                         llama_pos pos[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
                         for (int32_t j = 0; j < b->n_pos; ++j) {

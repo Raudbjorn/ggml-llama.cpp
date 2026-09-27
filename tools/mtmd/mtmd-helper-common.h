@@ -85,7 +85,7 @@ struct decode_embd_batch {
 
     decode_embd_batch(const float * embd, int32_t n_tokens, int n_pos_per_embd, int n_mmproj_embd)
             : n_pos_per_embd(n_pos_per_embd), n_mmproj_embd(n_mmproj_embd), n_tokens(n_tokens), embd(embd) {
-        GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_mmproj_embd > 0);
+        GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_pos_per_embd <= GGML_MROPE_SECTIONS && n_mmproj_embd > 0);
         pos   .resize((size_t) n_tokens * (size_t) n_pos_per_embd);
         logits.resize(n_tokens, 0);
     }

@@ -79,9 +79,10 @@ Fork-specific review:
   `expert < 0`, so a skipped slot is a miss owned by the CPU fallback, and the CPU hook in
   `ggml-cpu.c` zeroes `-1` rows before consulting the slot index. Both providers' `fused_begin`
   are stubs. `topk-moe` fusion emits ids >= 0.
-- OpenVINO: `translate_mul_mat_id` lowers through Gather, where a negative index counts from the
-  end, so a `-1` id would silently pick the last expert. Not fixable at graph build time; a
-  comment at the converter documents the gap (same as upstream). No model in this tree emits `-1`.
+- OpenVINO: `translate_mul_mat_id` and `translate_add_id` lower through Gather, where a negative
+  index counts from the end, so a `-1` id would silently pick the last expert (or add the last
+  bias row). Not fixable at graph build time; comments at both converters document the gap (same
+  as upstream). No model in this tree emits `-1`.
 - Test deviation: the PR's new `MUL_MAT_VEC_FUSION` skip cases include the `with_lane_scale`
   variant, whose graph routes ids through `GGML_OP_GET_ROWS`. That op has no `-1` semantics and
   the CPU reference aborts (`ops.cpp: GGML_ASSERT(i01 >= 0 && i01 < ne01)`); this is the likely
@@ -100,10 +101,10 @@ same GPU, correctness only):
 |---|---|---|
 | `test-backend-ops -o 'MUL_MAT.*' -p skip=1` (170 MUL_MAT_ID + 1 MUL_MAT_ID_FUSION + 154 MUL_MAT_VEC_FUSION) | SYCL0 (A770) | 325/325 |
 | `test-backend-ops -o ADD_ID` (36 plain + 36 skip) | SYCL0 | 72/72 |
-| `test-backend-ops -o MUL_MAT_ID -p 'type_a=(f32|f16|bf16|q4_0|q4_K|q8_0|mxfp4),'` | SYCL0 | 668/671, the 3 failures are the pre-existing q8_0 amax=1e5 NaN cases (below) |
+| `test-backend-ops -o MUL_MAT_ID -p 'type_a=(f32\|f16\|bf16\|q4_0\|q4_K\|q8_0\|mxfp4),'` | SYCL0 | 668/671, the 3 failures are the pre-existing q8_0 amax=1e5 NaN cases (below) |
 | `test-backend-ops -o 'MUL_MAT.*' -p skip=1` | Vulkan1 (A770, ANV) | 325/325 |
 | `test-backend-ops -o ADD_ID` | Vulkan1 | 72/72 |
-| `test-backend-ops -o MUL_MAT_ID -p 'type_a=(f32|f16|bf16|q4_0|q4_K|q8_0|mxfp4),'` | Vulkan1 | 665/665 (6 shapes reported unsupported and skipped) |
+| `test-backend-ops -o MUL_MAT_ID -p 'type_a=(f32\|f16\|bf16\|q4_0\|q4_K\|q8_0\|mxfp4),'` | Vulkan1 | 665/665 (6 shapes reported unsupported and skipped) |
 | `test-sycl-turbo-correctness` default sweep | SYCL | 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP |
 | `test-batch-alloc` | CPU | 50 tests, 327 assertions, 0 failures |
 | `llama-completion` Qwen3-Coder-30B-A3B UD-Q3_K_XL, `--cpu-moe --moe-cache 2048 -lv 4`, `GGML_SYCL_ENABLE_GRAPH=1`, 96 tokens | SYCL + CPU hook + provider | session ready, q3_K and q4_K pools, hits 110715/218347 (50.7%), dispatch-fail 0, collect-fail 0, graphs reused 94, coherent output |
@@ -155,6 +156,13 @@ the DFlash and MTP drafts where the fork carries its own logic on top of upstrea
   the deferral window.
 - Fork-only callers elsewhere (`tools/server/server-context.cpp` and `speculative-simple`) already
   used the API the PR migrates, or keep compiling through the retained `llama_batch` overload.
+- Review follow-ups on top of the PR: the legacy `llama_batch` shim
+  (`common_batch_from_llama_batch`) now rebuilds the positions a null-position batch was decoded
+  with (pos_max counted back over the rows the batch holds) instead of handing out the next
+  positions, and skips the memory lookup for an out-of-range sequence id so `add()` reports it;
+  the M-RoPE position loops in the mtmd helper and the server's mtmd callback assert
+  `n_pos <= GGML_MROPE_SECTIONS` instead of silently truncating. No in-tree caller passes null
+  positions to the shim; `speculative-simple` and the server set them explicitly.
 
 Verification (same box and sharing rules as above; `-ngl 0` for the 9B because production holds
 the GPU; `/completion` with `n_predict 48`, `temperature 0`, `seed 1`):
@@ -216,7 +224,7 @@ Rejected. Re-evaluate only if upstream merges #28277 with a source build of the 
 - The `-1` skip is verified by test-backend-ops against the CPU reference and by an end-to-end run
   that never emits `-1`. No model in this tree produces `-1` ids, so the feature has not been
   exercised by a real graph; the expert-partitioning use is a design argument, not a measurement.
-- OpenVINO `MUL_MAT_ID` with `-1` ids stays wrong (documented, same as upstream).
+- OpenVINO `MUL_MAT_ID` and `ADD_ID` with `-1` ids stay wrong (documented, same as upstream).
 - #29385 is unmerged upstream. The next upstream sync may land a revised version and need a
   re-merge of `common/speculative.cpp`, whose fork-specific MTP and DFlash logic sits exactly where
   the PR changes the batch handling.

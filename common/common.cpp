@@ -2340,11 +2340,24 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
 
     const size_t n_embd = llama_model_n_embd_inp(llama_get_model(ctx));
 
-    // positions continue from the memory when none are given
+    // no positions given: the legacy contract is that this batch was just decoded on ctx, so the
+    // memory already holds its rows and pos_max points at the batch's last row of each sequence.
+    // Rebuild the positions that decode used by counting back over the rows the batch holds.
+    // (Taking pos_max + 1 would hand out the positions of the *next* batch instead.)
     auto * mem = llama_get_memory(ctx);
-    std::vector<llama_pos> pos_next(llama_n_seq_max(ctx));
-    for (llama_seq_id s = 0; s < (llama_seq_id) pos_next.size(); ++s) {
-        pos_next[s] = llama_memory_seq_pos_max(mem, s) + 1;
+    const llama_seq_id n_seq_max = (llama_seq_id) llama_n_seq_max(ctx);
+    std::vector<llama_pos> pos_next(n_seq_max, 0);
+    if (!batch.pos) {
+        std::vector<int32_t> n_rows(n_seq_max, 0);
+        for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            const llama_seq_id s = batch.seq_id ? batch.seq_id[i][0] : 0;
+            if (s >= 0 && s < n_seq_max) {
+                n_rows[s]++;
+            }
+        }
+        for (llama_seq_id s = 0; s < n_seq_max; ++s) {
+            pos_next[s] = llama_memory_seq_pos_max(mem, s) + 1 - n_rows[s];
+        }
     }
 
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
@@ -2353,7 +2366,10 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
 
         llama_pos pos[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
         if (!batch.pos) {
-            pos[0] = pos_next[seq_id]++;
+            // an out-of-range seq_id keeps pos 0 here and fails in add() with its documented error
+            if (seq_id >= 0 && seq_id < n_seq_max) {
+                pos[0] = pos_next[seq_id]++;
+            }
         } else if (has_token) {
             pos[0] = batch.pos[i];
         } else {
