@@ -72,6 +72,7 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
+extern int g_ggml_sycl_mmvq_wide;
 extern int g_ggml_sycl_prioritize_dmmv;
 
 // Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
