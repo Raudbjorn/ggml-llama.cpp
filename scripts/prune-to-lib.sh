@@ -100,6 +100,9 @@ done
 # docs: keep only docs/research (dated evidence corpus) and the SDK guide
 if [ -d docs ]; then
     for d in docs/*; do
+        # nullglob is not set, so an empty docs/ leaves the literal "docs/*"
+        # here and git rm would abort the script under set -e.
+        [ -e "$d" ] || continue
         [ "$d" = "docs/research" ] && continue
         [ "$d" = "docs/SDK.md" ] && continue
         git rm -r -q -- "$d"
@@ -114,6 +117,7 @@ if [ "$DO_CHECK" = 1 ]; then
             -DLLAMA_BUILD_TESTS=ON \
             -DLLAMA_BUILD_TOOLS=ON \
             -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_SERVER=OFF \
             > "$CHECK_DIR.log" 2>&1; then
         echo "ERROR: CMake configure failed on the pruned tree; branch NOT updated" >&2
         echo "log: $CHECK_DIR.log (worktree preserved: $WT)" >&2

@@ -16,6 +16,44 @@ struct llama_hparams;
 struct llama_model;
 struct llama_context;
 
+// Auto-asymmetric turbo-K upgrade decision (see llama-kv-cache.cpp for the
+// full rationale: high-GQA-ratio models amplify turbo K's quantization
+// error, so symmetric turbo K+V gets K upgraded to q8_0). Exposed so callers
+// that must validate or size against the type a layer will actually get -
+// llama-context.cpp's flash-attn/block-size validation in
+// llama_init_from_model(), for one - can resolve the same effective K type
+// the llama_kv_cache constructor will use, instead of the raw requested
+// type; the two must never diverge or the caller ends up validating (or
+// sizing) for a type the cache doesn't use.
+// Return type_k unchanged for non-turbo K, MLA, or DeepSeek4. Otherwise return
+// Q8_0 for symmetric K/V on Qwen-family models or a layer-0 GQA ratio >= 6, unless
+// TURBO_AUTO_ASYMMETRIC starts with '0'. Layer-adaptive overrides are applied separately.
+ggml_type llama_kv_cache_resolve_stream_type_k(
+        const llama_model & model, const llama_hparams & hparams,
+        ggml_type type_k, ggml_type type_v);
+
+// Layer-adaptive per-layer KV precision override (TURBO_LAYER_ADAPTIVE env
+// var - see llama-kv-cache.cpp for the mode legend). Exposed, like the
+// resolver above, so a caller can predict whether a model will actually get
+// non-uniform per-layer KV types before the llama_kv_cache constructor runs.
+// Accept exact env values "1", "2", "5", "6", or "7"; other set values return 0
+// (uniform). With the env unset, return 7 for turbo2 V with at least 8 layers,
+// otherwise 0. Explicit modes are returned even for fewer than 8 layers.
+int llama_kv_cache_turbo_layer_adaptive_mode(ggml_type type_v, uint32_t n_layer);
+
+// Return K's type for zero-based layer il, using type_k after auto-asymmetric resolution.
+// With turbo K and at least 8 layers, mode 1 uses Q8_0 for the first/last 4 layers
+// and mode 2 for the last 8. Otherwise return type_k. type_v is unused.
+ggml_type llama_kv_cache_turbo_layer_adaptive_type_k(
+        int mode, ggml_type type_k, ggml_type type_v, uint32_t il, uint32_t n_layer);
+// Return V's type for zero-based layer il; type_k is the resolved K type before
+// per-layer overrides. Fewer than 8 layers keep type_v. Modes 1/2 use Q8_0 at the same
+// boundaries as K when type_k is turbo. For turbo V, modes 5/6 use turbo4 at the
+// first/last 2 or last 8 layers, respectively, and turbo2 elsewhere; mode 7 uses
+// Q8_0 at the first/last 2 and turbo2 elsewhere. Otherwise return type_v.
+ggml_type llama_kv_cache_turbo_layer_adaptive_type_v(
+        int mode, ggml_type type_k, ggml_type type_v, uint32_t il, uint32_t n_layer);
+
 //
 // llama_kv_cache
 //
@@ -25,6 +63,19 @@ struct llama_context;
 // unset). Pure and process-state-free: a second cache in the same process
 // must select from its own inputs, never inherit the first construction's.
 int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_t n_layer);
+
+// Shared policy matrix for the non-uniform layer-adaptive modes.
+bool llama_kv_cache_adaptive_mode_is_supported(int mode);
+bool llama_kv_cache_adaptive_mode_changes_k(int mode);
+bool llama_kv_cache_adaptive_mode_changes_v(int mode);
+
+// Decides whether to auto-upgrade turbo K to q8_0 to prevent quality
+// degradation, given the two independent triggers (GQA ratio, Qwen-family
+// architecture), the opt-out, and the symmetric-KV precondition. See the
+// call site in the constructor for the measurements backing each trigger,
+// and llm_arch_is_qwen() (llama-arch.h) for the family test.
+bool llama_kv_cache_auto_asymmetric_turbo_k(
+    bool disabled, uint32_t gqa_ratio, bool is_qwen_family, ggml_type type_k, ggml_type type_v);
 
 // Converts complete 4-block q8_0 groups between canonical block_q8_0 bytes
 // and the fork-local quants-first KV layout used only in SYCL device memory.
@@ -125,7 +176,9 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share);
+        const  layer_share_cb & share,
+        // a model can hold more than one cache, so the tensor names have to stay unique
+                 const char *   name_tag = "");
 
     ~llama_kv_cache() = default;
 
@@ -170,14 +223,31 @@ public:
 
     uint32_t get_size()     const;
     uint32_t get_n_stream() const;
+    std::vector<uint32_t> get_layer_ids() const;
+    ggml_tensor * get_k_storage(int32_t il) const;
+    ggml_tensor * get_v_storage(int32_t il) const;
+    bool get_v_transposed() const;
 
     bool get_has_shift() const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;
 
-    std::vector<uint32_t> get_layer_ids() const;
-    ggml_tensor * get_k_storage(int32_t il) const;
+    const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
+
+    // state_read, plus the cells the restored tokens were placed in
+    // a cache that mirrors another one (the qwen4exp indexer) must not search for its own cells: two searches agree only by luck
+    //   sinfos_out: if set, filled with the layout used; a stream with no cells leaves an empty entry
+    //   sinfos_in : if set, the layout to use instead of searching. one entry per stream, cell count must match the blob
+    void state_read_sinfo(
+            llama_io_read_i & io,
+               llama_seq_id   seq_id,
+      llama_state_seq_flags   flags,
+          slot_info_vec_t *   sinfos_out,
+    const slot_info_vec_t *   sinfos_in);
+
+    // undo a state_read() of seq_id (-1 for the whole cache) that another memory module failed to complete
+    void state_clear(llama_seq_id seq_id);
 
     //
     // graph_build API
@@ -254,6 +324,17 @@ public:
 
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
+
+    // true if llama_kv_cell_ext holds information that has to survive a state save/restore
+    bool has_cell_ext() const;
+
+    // for every token of the ubatch, the ids of the n tokens that precede it in its sequence
+    // example for M-RoPE image case: tokens A B X X X C, where X is a 3-token image at pos 2 spanning positions 2..4:
+    //   tok: A B X X X C
+    //   pos: 0 1 2 2 2 5
+    //   prev, n=2: A -> [NULL, NULL], B -> [NULL, A], 3rd X -> [X, X], C -> [X, X]
+    // note: used by n-gram input embeddings
+    void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
 private:
     // data: zero ctxs_bufs; reset_innerq: drop in-flight InnerQ calibration.
@@ -374,8 +455,11 @@ private:
     void state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const;
 
-    bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1);
+    // sinfo_in, when set, replaces the find_slot call: the cells are given by the caller
+    bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1, const slot_info * sinfo_in = nullptr);
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
+
+    void state_clear(llama_seq_id seq_id, uint32_t strm, const slot_info & sinfo);
 };
 
 class llama_kv_cache_context : public llama_memory_context_i {
@@ -471,6 +555,9 @@ public:
 
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
+
+    // see llama_kv_cache::get_prev_tokens()
+    void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
 private:
     llama_memory_status status;

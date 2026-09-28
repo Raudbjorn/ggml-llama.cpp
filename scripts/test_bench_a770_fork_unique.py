@@ -21,12 +21,28 @@ HARNESS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HARNESS)
 
 
-def bench_result(pp: float | None, tg: float | None) -> dict[str, object]:
+def bench_result(
+    pp: float | None, tg: float | None, build_commit: str | None = None
+) -> dict[str, object]:
     rows: list[dict[str, object]] = []
     if pp is not None:
-        rows.append({"n_prompt": 512, "n_gen": 0, "avg_ts": pp})
+        rows.append(
+            {
+                "n_prompt": 512,
+                "n_gen": 0,
+                "avg_ts": pp,
+                "build_commit": build_commit,
+            }
+        )
     if tg is not None:
-        rows.append({"n_prompt": 0, "n_gen": 128, "avg_ts": tg})
+        rows.append(
+            {
+                "n_prompt": 0,
+                "n_gen": 128,
+                "avg_ts": tg,
+                "build_commit": build_commit,
+            }
+        )
     return {
         "ok": True,
         "returncode": 0,
@@ -159,6 +175,28 @@ class ProductCampaignTests(unittest.TestCase):
         self.assertNotIn("-no-warmup", argv)
         self.assertIn("-p", argv)
         self.assertEqual(argv[argv.index("-p") + 1], "512")
+
+    def test_product_argv_requests_verbose_backend_env_report(self) -> None:
+        # Without -v the SYCL backend never prints "Running with Environment
+        # Variables", so _candidate_env_log_assertions can never bind a sample
+        # to its requested env (backend_logs_key stays False for every knob).
+        argv = HARNESS._product_bench_argv(
+            Path("/tmp/bin"), "model.gguf", ("q8_0", "q8_0"), 4096
+        )
+        self.assertIn("-v", argv)
+
+    def test_product_argv_ngl_defaults_to_99_and_is_overridable(self) -> None:
+        # Qwen3-Coder-30B (~18.6 GB) cannot fully offload on a 16 GB A770 and fails
+        # with UR_RESULT_ERROR_OUT_OF_HOST_MEMORY at the old hardcoded -ngl 99.
+        default_argv = HARNESS._product_bench_argv(
+            Path("/tmp/bin"), "model.gguf", ("q8_0", "q8_0"), 0
+        )
+        self.assertEqual(default_argv[default_argv.index("-ngl") + 1], "99")
+
+        partial_argv = HARNESS._product_bench_argv(
+            Path("/tmp/bin"), "model.gguf", ("q8_0", "q8_0"), 0, ngl=40
+        )
+        self.assertEqual(partial_argv[partial_argv.index("-ngl") + 1], "40")
 
     def test_tenancy_probe_accepts_only_empty_exit_one(self) -> None:
         cases = (
@@ -463,6 +501,252 @@ class ProductCampaignTests(unittest.TestCase):
                 self.assertEqual(sample["baseline_env"], {"TEST_ARM": "baseline"})
                 self.assertEqual(sample["candidate_env"], {"TEST_ARM": "candidate"})
 
+    def test_real_cell_shape_carries_build_commit_for_identity_gate(self) -> None:
+        provenance = {
+            "repository_commit": {
+                "returncode": 0,
+                "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            }
+        }
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+            HARNESS, "check_sole_tenancy"
+        ), mock.patch.object(
+            HARNESS, "run", return_value=bench_result(100.0, 20.0, "aaaaaaaaa")
+        ):
+            cell = HARNESS.run_product_cell(
+                bin_dir=Path(td),
+                model_path="model.gguf",
+                kv=("q8_0", "q8_0"),
+                depth=0,
+                baseline_env={},
+                candidate_env={"TEST_ARM": "candidate"},
+                repetitions=3,
+                timeout_s=5,
+                samples_dir=Path(td) / "samples",
+                cell_idx=1,
+            )
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                [cell], provenance, require_repository_match=True
+            ),
+            [],
+        )
+
+    def test_baseline_only_identity_gate_ignores_candidate_arm(self) -> None:
+        provenance = {
+            "repository_commit": {
+                "returncode": 0,
+                "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            }
+        }
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+            HARNESS, "check_sole_tenancy"
+        ), mock.patch.object(
+            HARNESS, "run", return_value=bench_result(100.0, 20.0, "aaaaaaaaa")
+        ):
+            cell = HARNESS.run_product_cell(
+                bin_dir=Path(td),
+                model_path="model.gguf",
+                kv=("q8_0", "q8_0"),
+                depth=0,
+                baseline_env={},
+                candidate_env=None,
+                repetitions=3,
+                timeout_s=5,
+                samples_dir=Path(td) / "samples",
+                cell_idx=1,
+            )
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                [cell], provenance, require_repository_match=True
+            ),
+            [],
+        )
+
+    def test_env_assertion_renderer_marks_unlogged_key_unvalidated(self) -> None:
+        assertions = {
+            "GGML_SYCL_FFN_FUSION": {
+                "requested_value": "1",
+                "backend_logs_key": False,
+                "candidate_samples": 36,
+                "candidate_samples_with_requested_value": 0,
+                "valid": True,
+            }
+        }
+
+        self.assertEqual(
+            HARNESS._format_candidate_env_log_assertions(assertions),
+            "GGML_SYCL_FFN_FUSION=1 "
+            "(not validated from backend logs; key not emitted)",
+        )
+
+    def test_build_commit_mismatch_is_rejected(self) -> None:
+        cells = [
+            {
+                "samples": {
+                    "baseline": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "b5ef0a84b"},
+                                "tg128": {"build_commit": "b5ef0a84b"},
+                            }
+                        }
+                    ],
+                    "candidate": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "b5ef0a84b"},
+                                "tg128": {"build_commit": "b5ef0a84b"},
+                            }
+                        }
+                    ],
+                }
+            }
+        ]
+        provenance = {
+            "repository_commit": {
+                "returncode": 0,
+                "stdout": "02f848c83a8aee4bfe0ce956b64cc4b9058e2bf2\n",
+                "stderr": "",
+            }
+        }
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                cells, provenance, require_repository_match=True
+            ),
+            [
+                "sample build_commit b5ef0a84b does not match repository "
+                "commit 02f848c83a8aee4bfe0ce956b64cc4b9058e2bf2"
+            ],
+        )
+
+    def test_rowless_sample_does_not_crash_build_commit_diagnostics(self) -> None:
+        # A sample whose selected pp512/tg128 rows are both None (process crashed or
+        # produced no matching row, e.g. OOM before any bench line printed) must not
+        # raise AttributeError in the build-commit consistency check; it should simply
+        # contribute no commit evidence, which the existing "no build_commit" path
+        # already reports as a diagnostic.
+        cells = [
+            {
+                "samples": {
+                    "baseline": [
+                        {"selected_rows": {"pp512": None, "tg128": None}},
+                    ],
+                }
+            }
+        ]
+        provenance = {"repository_commit": {"returncode": 0, "stdout": "", "stderr": ""}}
+
+        diagnostics = HARNESS._build_commit_diagnostics(
+            cells, provenance, require_repository_match=False
+        )
+        self.assertIn("baseline samples do not report build_commit", diagnostics)
+
+    def test_separate_binary_commits_match_their_own_arm_identity(self) -> None:
+        cells = [
+            {
+                "samples": {
+                    "baseline": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "aaaaaaaaa"}
+                            }
+                        }
+                    ],
+                    "candidate": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "bbbbbbbbb"}
+                            }
+                        }
+                    ],
+                }
+            }
+        ]
+        provenance = {
+            "repository_commit": {
+                "returncode": 0,
+                "stdout": "cccccccccccccccccccccccccccccccccccccccc\n",
+                "stderr": "",
+            }
+        }
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                cells, provenance, require_repository_match=False
+            ),
+            [],
+        )
+
+    def test_separate_binary_arm_rejects_mixed_sample_commits(self) -> None:
+        cells = [
+            {
+                "samples": {
+                    "baseline": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "aaaaaaaaa"}
+                            }
+                        },
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "ccccccccc"}
+                            }
+                        },
+                    ],
+                    "candidate": [
+                        {
+                            "selected_rows": {
+                                "pp512": {"build_commit": "bbbbbbbbb"}
+                            }
+                        }
+                    ],
+                }
+            }
+        ]
+
+        self.assertEqual(
+            HARNESS._build_commit_diagnostics(
+                cells, {}, require_repository_match=False
+            ),
+            [
+                "baseline samples report multiple build_commit values: "
+                "aaaaaaaaa, ccccccccc"
+            ],
+        )
+
+    def test_provenance_env_allowlists_relevant_prefixes_and_explicit_arm_env(self) -> None:
+        # Committed provenance.json must never carry ambient workstation/session
+        # state (home paths, hostnames, session/socket/PID identifiers, cloud
+        # project names, ...); only variables the harness itself cares about,
+        # plus whatever the caller explicitly requested for this arm.
+        env = {
+            "GGML_SYCL_FA_XMX": "1",
+            "TURBO_AUTO_ASYMMETRIC": "0",
+            "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+            "UR_L0_BATCH_SIZE": "64",
+            "HOME": "/home/svnbjrn",
+            "CLAUDE_CODE_SESSION_ID": "c05e83fd-5f8b-4569-b473-f448b4b572d0",
+            "GOOGLE_CLOUD_PROJECT": "svnbjrn-ai",
+            "SOME_EXPLICIT_ARM_KNOB": "42",
+        }
+        result = HARNESS._provenance_env(env, {"SOME_EXPLICIT_ARM_KNOB": "42"})
+        self.assertEqual(
+            result,
+            {
+                "GGML_SYCL_FA_XMX": "1",
+                "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+                "SOME_EXPLICIT_ARM_KNOB": "42",
+                "TURBO_AUTO_ASYMMETRIC": "0",
+                "UR_L0_BATCH_SIZE": "64",
+            },
+        )
+        for leaked in ("HOME", "CLAUDE_CODE_SESSION_ID", "GOOGLE_CLOUD_PROJECT"):
+            self.assertNotIn(leaked, result)
+
     def test_q8_effective_requested_kv_bandwidth_formula(self) -> None:
         layers, heads, depth, head_dim = 32, 32, 16384, 128
         expected = 2 * layers * heads * depth * head_dim * (34 / 32)
@@ -514,7 +798,7 @@ class ProductCampaignTests(unittest.TestCase):
                 del timeout_s, cwd
                 seen_bench_paths.append(argv[0])
                 seen_envs.append(dict(env_extra))
-                result = bench_result(100.0, 20.0)
+                result = bench_result(100.0, 20.0, "aaaaaaaaa")
                 result["stderr"] = f"TEST_ARM: {env_extra['TEST_ARM']}\n"
                 return result
 
@@ -570,9 +854,18 @@ class ProductCampaignTests(unittest.TestCase):
                 return 1 if line else 0
 
             with mock.patch.object(HARNESS, "check_sole_tenancy"), \
-                 mock.patch.object(HARNESS, "run", return_value=bench_result(100.0, 20.0)), \
+                 mock.patch.object(HARNESS, "run", return_value=bench_result(100.0, 20.0, "aaaaaaaaa")), \
                  mock.patch.object(HARNESS, "capture_dmesg", side_effect=capture), \
-                 mock.patch.object(HARNESS, "collect_product_provenance", return_value={}):
+                 mock.patch.object(
+                     HARNESS,
+                     "collect_product_provenance",
+                     return_value={
+                         "repository_commit": {
+                             "returncode": 0,
+                             "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                         }
+                     },
+                 ):
                 rc = HARNESS.run_product_campaign_main(ns)
 
             self.assertEqual(rc, 1)

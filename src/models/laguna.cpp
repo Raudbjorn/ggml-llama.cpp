@@ -9,7 +9,7 @@
 void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
@@ -24,7 +24,7 @@ void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
         // Weightless fixtures (test-llama-archs) omit this key; derive a nonzero
         // size so the shared expert is still built. Real GGUFs always carry the
         // exact value (routed and shared FF lengths may differ).
-        hparams.n_ff_shexp = hparams.n_ff_exp * hparams.n_expert_shared;
+        hparams.n_ff_shexp = hparams.n_ff_exp() * hparams.n_expert_shared;
     }
 
     // Sliding-window attention is OPTIONAL. XS.2 is hybrid (full / SWA / SWA /
@@ -58,6 +58,7 @@ void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
 
     switch (hparams.n_layer()) {
         case 40: type = LLM_TYPE_30B_A3B;   break;  // Laguna-XS.2
+        case 48: type = LLM_TYPE_118B_A8B;  break;  // Laguna-S.2
         case 70: type = LLM_TYPE_230B_A10B; break;  // Laguna-M.1
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -75,7 +76,7 @@ void llama_model_laguna::load_arch_tensors(llama_model_loader & ml) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
 
-    const int64_t n_ff_exp   = hparams.n_ff_exp;
+    const int64_t n_ff_exp   = hparams.n_ff_exp();
     const int64_t n_ff_shexp = hparams.n_ff_shexp;
 
     for (int i = 0; i < n_layer; ++i) {
@@ -171,6 +172,9 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
 
     for (int il = 0; il < n_layer; ++il) {
+        // residual-stream capture for speculative drafters (EAGLE3 / DFlash)
+        res->t_layer_inp[il] = inpL;
+
         const bool    is_swa_il   = hparams.is_swa(il);
         const int64_t n_head_il   = hparams.n_head(il);
         const int64_t n_head_kv_il = hparams.n_head_kv(il);
@@ -260,7 +264,10 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur, "attn_o_proj", il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids) {
+        // When unmasked nextn extraction is on (DFlash needs the pre-norm
+        // hidden state for every token), defer the output-row gather to
+        // after the final-norm capture below (qwen35 pattern).
+        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -320,7 +327,18 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
     }
 
     cur = inpL;
+
+    // pre-final-norm residual stream: the DFlash drafter's last capture point
+    // ("input of layer n_layer" in the training convention)
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+
+    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 

@@ -6,6 +6,7 @@
 #include "convert.hpp"
 #include "vecdotq.hpp"
 #include "fattn-buffers.hpp"
+#include "fattn.hpp"
 
 #include "ggml.h"
 
@@ -69,7 +70,27 @@ void ggml_sycl_fattn_profile_record(
     uint64_t stage1_us,
     uint64_t combine_us,
     uint64_t gqa_ratio,
-    uint64_t repeated_packed_kv_bytes);
+    uint64_t repeated_packed_kv_bytes,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm);
+
+// Sync-free launch-geometry record. Covers every route and KV type, unlike the
+// timing profile which synchronizes the queue and stays limited to q8 decode.
+void ggml_sycl_fattn_profile_record_geometry(
+    bool tile_route,
+    bool decode,
+    const char * type_k,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm,
+    uint64_t stream_k);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -326,7 +347,11 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0_quants_first(
         const int ib = k_KQ / QI8_0;
         const int iqs = k_KQ % QI8_0;
         int v;
-        ggml_sycl_memcpy_1<sizeof(v), 2>(&v, quants + ib * QK8_0 + 4 * iqs);
+        // Quants-first groups have a 136-byte stride, and within a group the payload
+        // offset ib*QK8_0 + 4*iqs is always a multiple of 4, so the dword load is
+        // 4-byte aligned. Unlike the canonical 34-byte block_q8_0 rows, this does not
+        // need the 2-byte split copy.
+        ggml_sycl_memcpy_1<sizeof(v), 4>(&v, quants + ib * QK8_0 + 4 * iqs);
         const sycl::float2 * Q_ds = (const sycl::float2 *) Q_ds_v;
         const float Q_d = Q_ds[k_KQ_0 / nthreads].x();
         sum += vec_dot_q8_0_q8_1_impl<float, 1>(
@@ -645,7 +670,9 @@ static __dpct_inline__ void dequantize_V_q8_0(const void * __restrict__ vx, void
     const int     iqs = i0 % QK8_0;
 
     static_assert(ne % 2 == 0, "bad ne");
-    int8_t qs[ne];
+    // Same destination-alignment requirement as the quants-first path below: the
+    // 2-byte copy stores through short *, which int8_t[] does not guarantee.
+    alignas(4) int8_t qs[ne];
     ggml_sycl_memcpy_1<ne, 2>(qs, x[ib].qs + iqs);
 
 #ifdef GGML_SYCL_F16
@@ -679,8 +706,14 @@ static __dpct_inline__ void dequantize_V_q8_0_quants_first(
     const int64_t ib = i0 / QK8_0;
     const int iqs = i0 % QK8_0;
     static_assert(ne % 2 == 0, "bad ne");
-    int8_t qs[ne];
-    ggml_sycl_memcpy_1<ne, 2>(qs, quants + ib * QK8_0 + iqs);
+    // i0 advances in multiples of V_rows_per_thread (4 for quantized V), so iqs is a
+    // multiple of 4 and the quants-first payload is dword-aligned here. The explicit 4
+    // documents that and fails to compile if ne ever stops being a multiple of it.
+    static_assert(ne % 4 == 0, "quants-first V load assumes dword-aligned runs");
+    // ggml_sycl_memcpy_1 stores through the aligned type, so the destination needs
+    // the same alignment as the source; int8_t[] is only byte-aligned by default.
+    alignas(4) int8_t qs[ne];
+    ggml_sycl_memcpy_1<ne, 4>(qs, quants + ib * QK8_0 + iqs);
 
 #ifdef GGML_SYCL_F16
     if constexpr (std::is_same<T, sycl::half>::value) {
@@ -1090,9 +1123,12 @@ void launch_fattn(
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
     // Profiling synchronizes the queue and is intentionally limited to q8 decode.
+    // Also off while the stream is being recorded into a SYCL graph: oneAPI
+    // forbids wait()/wait_and_throw() on a queue in that state.
     using profile_clock = std::chrono::steady_clock;
     const bool profile =
         ggml_sycl_fattn_profile_enabled() &&
+        !ctx.graph_recording &&
         Q->ne[1] == 1 &&
         K->type == GGML_TYPE_Q8_0 &&
         V->type == GGML_TYPE_Q8_0;
@@ -1115,6 +1151,7 @@ void launch_fattn(
 
     ggml_sycl_fattn_alloc        K_f16(fbuf.K);
     ggml_sycl_fattn_alloc        V_f16(fbuf.V);
+    const ggml_sycl_fattn_extra  extra = ggml_sycl_fattn_get_extra(dst);
     ggml_sycl_pool_alloc<int>    KV_max(pool);
     ggml_sycl_pool_alloc<float>  dst_tmp(pool);
     ggml_sycl_pool_alloc<sycl::float2> dst_tmp_meta(pool);
@@ -1133,10 +1170,11 @@ void launch_fattn(
         const size_t bs = ggml_blck_size(K->type);
         const size_t ts = ggml_type_size(K->type);
 
-        K_f16.alloc(ggml_nelements(K));
+        sycl::half * K_f16_ptr = extra.K_buffer_ptr ? (sycl::half *) extra.K_buffer_ptr
+                                                    : K_f16.alloc(ggml_nelements(K));
         if (ggml_is_contiguously_allocated(K)) {
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, K);
-            to_fp16(K_data, K_f16.ptr, ggml_nelements(K), main_stream);
+            to_fp16(K_data, K_f16_ptr, ggml_nelements(K), main_stream);
 
             nb11 = nb11 * bs * sizeof(sycl::half) / ts;
             nb12 = nb12 * bs * sizeof(sycl::half) / ts;
@@ -1147,13 +1185,13 @@ void launch_fattn(
             const int64_t s01 = nb11 / ts;
             const int64_t s02 = nb12 / ts;
             const int64_t s03 = nb13 / ts;
-            to_fp16(K_data, K_f16.ptr, K->ne[0], K->ne[1], K->ne[2], K->ne[3], s01, s02, s03, main_stream);
+            to_fp16(K_data, K_f16_ptr, K->ne[0], K->ne[1], K->ne[2], K->ne[3], s01, s02, s03, main_stream);
 
             nb11 = K->ne[0] * sizeof(sycl::half);
             nb12 = K->ne[1] * nb11;
             nb13 = K->ne[2] * nb12;
         }
-        K_data = (char *) K_f16.ptr;
+        K_data = (char *) K_f16_ptr;
     }
 
     if (need_f16_V && V->type != GGML_TYPE_F16) {
@@ -1166,11 +1204,12 @@ void launch_fattn(
             const size_t bs = ggml_blck_size(V->type);
             const size_t ts = ggml_type_size(V->type);
 
-            V_f16.alloc(ggml_nelements(V));
+            sycl::half * V_f16_ptr = extra.V_buffer_ptr ? (sycl::half *) extra.V_buffer_ptr
+                                                        : V_f16.alloc(ggml_nelements(V));
             if (ggml_is_contiguously_allocated(V)) {
                 to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, V);
-                to_fp16(V_data, V_f16.ptr, ggml_nelements(V), main_stream);
-                V_data = (char *) V_f16.ptr;
+                to_fp16(V_data, V_f16_ptr, ggml_nelements(V), main_stream);
+                V_data = (char *) V_f16_ptr;
 
                 nb21 = nb21 * bs * sizeof(sycl::half) / ts;
                 nb22 = nb22 * bs * sizeof(sycl::half) / ts;
@@ -1181,13 +1220,13 @@ void launch_fattn(
                 const int64_t s01 = nb21 / ts;
                 const int64_t s02 = nb22 / ts;
                 const int64_t s03 = nb23 / ts;
-                to_fp16(V_data, V_f16.ptr, V->ne[0], V->ne[1], V->ne[2], V->ne[3], s01, s02, s03, main_stream);
+                to_fp16(V_data, V_f16_ptr, V->ne[0], V->ne[1], V->ne[2], V->ne[3], s01, s02, s03, main_stream);
 
                 nb21 = V->ne[0] * sizeof(sycl::half);
                 nb22 = V->ne[1] * nb21;
                 nb23 = V->ne[2] * nb22;
             }
-            V_data = (char *) V_f16.ptr;
+            V_data = (char *) V_f16_ptr;
         }
     }
     if (profile) {
@@ -1257,17 +1296,30 @@ void launch_fattn(
     } else {
         const int ntiles_KQ = (K->ne[1] + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by tensor size.
 
+        // Split-K is a way to manufacture parallelism when the tile count alone
+        // cannot fill the device; it is not free. Every extra split multiplies the
+        // dst_tmp scratch and widens the combine reduction over every output
+        // element. So start at one split and let the efficiency search below grow
+        // it only while the machine is still underfilled, bounded by occupancy.
+        //
+        // Starting at max_blocks_per_sm instead makes it a floor rather than a
+        // cap. That is harmless while the value is 2, but once it reflects real
+        // occupancy it forces splits onto work that never needed them: prefill has
+        // ntiles_total = 4096 against a 512 blocks_per_wave and is already
+        // saturated, yet it was measured launching 4x the blocks and regressing
+        // 15.08% (f16 pp512) and 3.48% (q8_0 pp512) at depth 0.
+        parallel_blocks = 1;
+
         // parallel_blocks must not be larger than what the tensor size allows:
-        parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
-        // todo fix the hard code change
-        // parallel_blocks = ntiles_KQ;
+        const int max_parallel_blocks = std::min(max_blocks_per_sm, ntiles_KQ);
+        parallel_blocks = std::min(parallel_blocks, max_parallel_blocks);
 
         // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
         // Test whether parallel_blocks can be set to a higher value for better efficiency.
         const int blocks_per_wave = nsm * max_blocks_per_sm;
         int nwaves_best = 0;
         int efficiency_percent_best = 0;
-        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
+        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= max_parallel_blocks; ++parallel_blocks_test) {
             const int nblocks_total = ntiles_total * parallel_blocks_test;
             const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
             const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
@@ -1292,6 +1344,25 @@ void launch_fattn(
             dst_tmp.alloc(parallel_blocks*ggml_nelements(KQV));
             dst_tmp_meta.alloc(parallel_blocks*ggml_nrows(KQV));
         }
+    }
+
+    // Launch geometry is a pure function of device properties and tensor shapes, so
+    // unlike the timing profile above it needs no queue synchronization and is not
+    // restricted to q8 decode. Recording it for every route is what makes the VEC and
+    // TILE grids directly comparable.
+    if (ggml_sycl_fattn_profile_enabled()) {
+        ggml_sycl_fattn_profile_record_geometry(
+            tile_route,
+            Q->ne[1] == 1,
+            ggml_type_name(K->type),
+            (uint64_t) parallel_blocks,
+            (uint64_t) ntiles_total,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
+                block_dim.x * block_dim.y * block_dim.z,
+            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) nsm,
+            (uint64_t) stream_k);
     }
 
     float scale         = 1.0f;
@@ -1394,6 +1465,16 @@ void launch_fattn(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 profile_after_combine - profile_after_stage1).count(),
             gqa_ratio,
-            packed_kv_bytes * (gqa_ratio - 1));
+            packed_kv_bytes * (gqa_ratio - 1),
+            // Launch geometry: blocks_total and work_items_total are the realized
+            // grid for both the stream-k and split-k paths, so they can be compared
+            // directly against device residency.
+            (uint64_t) parallel_blocks,
+            (uint64_t) ntiles_total,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
+                block_dim.x * block_dim.y * block_dim.z,
+            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) nsm);
     }
 }

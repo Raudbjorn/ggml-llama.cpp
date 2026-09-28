@@ -2,6 +2,26 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
+### llama.cpp version
+set(LLAMA_VERSION_MAJOR 0)
+set(LLAMA_VERSION_MINOR 5)
+set(LLAMA_VERSION_PATCH 0)
+set(LLAMA_VERSION_BASE "${LLAMA_VERSION_MAJOR}.${LLAMA_VERSION_MINOR}.${LLAMA_VERSION_PATCH}")
+
+# whether this is a development/nightly build
+# set this to OFF when making a release from a release tag (vX.Y.Z)
+# ref: https://github.com/ggml-org/ggml/discussions/1579
+option(LLAMA_BUILD_IS_DEV "llama: dev build" ON)
+
+if (LLAMA_BUILD_IS_DEV)
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}-dev")
+else()
+    # TODO: check that the current commit is tagged correctly according to the version specified above
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}")
+endif()
+
+message(STATUS "llama.cpp version: ${LLAMA_VERSION}")
+
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
 
@@ -24,9 +44,6 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(LLAMA_STANDALONE ON)
 
     include(git-vars)
-
-    # configure project version
-    # TODO
 else()
     set(LLAMA_STANDALONE OFF)
 endif()
@@ -84,6 +101,14 @@ else()
     set(LLAMA_TOOLS_INSTALL_DEFAULT ${LLAMA_STANDALONE})
 endif()
 
+# subprocess spawning isn't a supported/sandbox-friendly operation on mobile OSes or in WASM
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR ANDROID
+        OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
+    set(LLAMA_SUBPROCESS_DEFAULT OFF)
+else()
+    set(LLAMA_SUBPROCESS_DEFAULT ON)
+endif()
+
 #
 # option list
 #
@@ -110,7 +135,7 @@ option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                            
 option(LLAMA_BUILD_SERVER    "llama: build server example"                                                       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_APP       "llama: build the unified binary"                                                   ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       ON)
-option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)" ON)
+option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available" ON)
 
 option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
@@ -118,6 +143,7 @@ option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 # 3rd party libs
 option(LLAMA_DOWNLOAD   "llama-common: enable model download support (cpp-httplib/OpenSSL); OFF builds a stub" ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
+option(LLAMA_SUBPROCESS "llama-common: use subprocess, required by server tools and server router mode" ${LLAMA_SUBPROCESS_DEFAULT})
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
 
@@ -131,7 +157,6 @@ endif()
 if (NOT DEFINED LLAMA_BUILD_COMMIT)
     set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
 endif()
-set(LLAMA_INSTALL_VERSION 0.0.${LLAMA_BUILD_NUMBER})
 
 # override ggml options
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
@@ -163,6 +188,16 @@ llama_option_depr(WARNING     LLAMA_CURL)
 
 include("cmake/license.cmake")
 license_add_file("llama.cpp" "LICENSE")
+
+#
+# compile options
+#
+
+# clang stores the modification time of the precompiled header sources inside the
+# header and rejects it when they differ, so the timestamp is left out of it
+add_compile_options(
+    "$<$<COMPILE_LANG_AND_ID:C,Clang,IntelLLVM>:SHELL:-Xclang -fno-pch-timestamp>"
+    "$<$<COMPILE_LANG_AND_ID:CXX,Clang,IntelLLVM>:SHELL:-Xclang -fno-pch-timestamp>")
 
 #
 # 3rd-party
@@ -261,11 +296,9 @@ add_subdirectory(src)
 # utils, programs, examples and tests
 #
 
+add_subdirectory(vendor)
+
 if (LLAMA_BUILD_COMMON)
-    # the server needs cpp-httplib even when the downloader is stubbed out
-    if (LLAMA_DOWNLOAD OR (LLAMA_BUILD_SERVER AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/server))
-        add_subdirectory(vendor/cpp-httplib)
-    endif()
     add_subdirectory(common)
 endif()
 
@@ -274,13 +307,16 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     add_subdirectory(tests)
 endif()
 
-# EXISTS guards: the generated lib branch (scripts/prune-to-lib.sh) removes these
-# directories; a standalone checkout of that branch must still configure cleanly.
+# IS_DIRECTORY guards: the generated lib branch (scripts/prune-to-lib.sh) removes
+# these directories; a standalone checkout of that branch must still configure
+# cleanly. IS_DIRECTORY rather than EXISTS so a stray file cannot satisfy the
+# guard, and the paths are quoted so a source tree containing spaces or
+# semicolons cannot word-split the condition.
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
-    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/examples")
         add_subdirectory(examples)
     endif()
-    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/pocs)
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/pocs")
         add_subdirectory(pocs)
     endif()
 endif()
@@ -289,7 +325,7 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if (LLAMA_BUILD_APP AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app)
+if (LLAMA_BUILD_APP AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/app")
     add_subdirectory(app)
 endif()
 
@@ -324,11 +360,17 @@ set_target_properties(llama
 
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
-if (LLAMA_BUILD_COMMON)
+# Shared builds only, and enforced rather than merely documented: with a static
+# llama-common the artifact is an ARCHIVE, so `install(TARGETS ... LIBRARY)`
+# would install no library while still installing the headers and vendored
+# nlohmann, leaving a header-only SDK surface with nothing to link against.
+# Installing ARCHIVE instead would not fix it either, since llama-common-base
+# is only folded into the shared object; a static llama-common.a would ship
+# without its objects.
+if (LLAMA_BUILD_COMMON AND BUILD_SHARED_LIBS)
     install(TARGETS llama-common LIBRARY)
     # SDK surface for the helper library: headers land under include/llama-common,
-    # plus the nlohmann headers its public headers reference. Note: shared builds
-    # only; llama-common-base is folded into the shared object and not installed.
+    # plus the nlohmann headers its public headers reference.
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/common/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llama-common
             FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
@@ -345,12 +387,12 @@ configure_package_config_file(
               LLAMA_BIN_INSTALL_DIR )
 
 write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
-    VERSION ${LLAMA_INSTALL_VERSION}
+        ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
+        VERSION ${LLAMA_VERSION}
     COMPATIBILITY SameMajorVersion)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
 
 configure_file(cmake/llama.pc.in

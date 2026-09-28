@@ -5,11 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Maintained by Raudbjorn](https://img.shields.io/badge/maintainer-Raudbjorn-blueviolet.svg)](https://github.com/Raudbjorn)
 
-A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) integrating the **TurboQuant+** codec stack -- Walsh-Hadamard rotated polar quantization, attention-gated sparse dequantization, and layer-aware V compression policies. The codec design, calibration, and validation papers live at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus); this repository is the llama.cpp runtime integration.
+A fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) integrating the **TurboQuant+** codec stack -- Walsh-Hadamard rotated polar quantization and layer-aware V compression policies. The codec design, calibration, and validation papers live at [TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus); this repository is the llama.cpp runtime integration.
 
 ### Lineage -- why the `+`
 
-This project extends that foundation -- adding the asymmetric K/V policy (V is free, K is everything), layer-aware Boundary V protection, attention-gated sparse V dequantization, the `TQ3_1S` / `TQ4_1S` weight quantization formats, the `turbo2` / `turbo3` / `turbo4` tier variants, the SYCL/Vulkan kernel coverage, and a body of model-family-specific quality and operational fixes. The trailing `+` denotes ongoing extension work; the original TurboQuant codec itself was the Google ICLR 2026 contribution.
+This project extends that foundation -- adding the asymmetric K/V policy (V is free, K is everything), layer-aware Boundary V protection, the `TQ3_1S` / `TQ4_1S` weight quantization formats, the `turbo2` / `turbo3` / `turbo4` tier variants, the SYCL/Vulkan kernel coverage, and a body of model-family-specific quality and operational fixes. The trailing `+` denotes ongoing extension work; the original TurboQuant codec itself was the Google ICLR 2026 contribution.
 
 This fork is additive within its scope: every shipped backend (CPU, BLAS, SYCL, Vulkan, OpenVINO) continues to work as in upstream, and all TurboQuant+ types (weights, KV cache) are opt-in via the standard `--cache-type-k` / `--cache-type-v` and `llama-quantize` interfaces. Backends not in the shipped set (CUDA, HIP/ROCm, Metal, OpenCL, CANN, MUSA, WebGPU, RPC, Hexagon) are not built here; pull upstream for those.
 
@@ -35,9 +35,9 @@ This is a single-maintainer fork. No production deployments are tracked here -- 
 | Type | Domain | Approx. bits | Notes | Paper |
 |---|---|---|---|---|
 | `TQ3_1S` | weights | ~3.5 | smaller VRAM than `q8_0` | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
-| `TQ4_1S` | weights | ~4.5 | smaller VRAM than `q8_0`; requires GPU backend (Vulkan or SYCL) to be built in | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
+| `TQ4_1S` | weights | ~4.5 | smaller VRAM than `q8_0`; CPU `vec_dot` plus SYCL and Vulkan kernels | [weight-compression-tq4](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/weight-compression-tq4.md) |
 | `turbo2` | KV cache | ~2.0 | aggressive; pair with Boundary V | [block-size-experiment](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/block-size-experiment.md) |
-| `turbo3` | KV cache | ~3.5 | ~4.6x compression at <1.5% PPL loss | [attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md) |
+| `turbo3` | KV cache | ~3.5 | 5.12x analytic compression vs f16; +5.11% PPL vs q8_0 on Llama-3.1-8B-Instruct Q4_K_M at ctx 512 on this fork (see [turbo3 gate note](docs/research/turbo3-quality-gate-llama31-8b-2026-09.md)) | [attn-rotation-and-ppl-artifact](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/attn-rotation-and-ppl-artifact.md) |
 | `turbo4` | KV cache | ~4.5 | rehabilitated to beat `q4_0` on fidelity | [turbo4-resurrection](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/turbo4-resurrection.md) |
 
 All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantization on 128-element blocks. Why this works where MSE-driven codecs fail: [why-mse-fails-for-kv-quantization](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/why-mse-fails-for-kv-quantization.md).
@@ -46,14 +46,14 @@ All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantiz
 
 - **Auto-asymmetric K/V compression** -- recognizes that V tolerates aggressive compression while K does not; default policy picks complementary codecs rather than symmetric. [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md)
 - **Boundary V (experimental, layer-aware)** -- auto-enabled for `turbo2-V`. Protects layers where aggressive V quantization degrades quality, leaves the rest at full aggression. [layer-aware-v-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/layer-aware-v-compression.md), [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md)
-- **Sparse V dequantization** -- skip V dequantization for positions whose softmax attention weight falls below threshold. Enabled across SYCL/Vulkan targets. [sparse-v-dequant](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md)
+- **Sparse V dequantization** is described in the paper corpus ([sparse-v-dequant](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md)) but is **not implemented in this tree**: the SYCL and Vulkan flash-attention kernels dequantize every attended V position. The `fattn-sparse` files serve DeepSeek/MiniMax sparse-attention graphs, not turbo V.
 
 ### Backend coverage
 
 | Backend | Quant kernels | Flash Attention | Notes |
 |---|---|---|---|
-| **SYCL** (Intel Arc / oneAPI) | turbo `mmvq` + WHT custom op | `q8_0` / `f16` KV at mainline parity; turbo3/turbo4 KV FA pass the correctness gate (gated behind `LLAMA_TEST_TURBO_FA=1` for opt-in validation); turbo2 KV FA remains XFAIL (2-bit precision below the cosine floor) | A770 (DG2) is the canonical target; builds with `GGML_SYCL_F16=ON` or `OFF` |
-| **Vulkan** | `TQ4_1S` weights, `SET_ROWS` for `turbo2`/`turbo4` | coopmat flash attention with `turbo3` KV | Compute-shader path; nix-buildable |
+| **SYCL** (Intel Arc / oneAPI) | turbo `mmvq` + WHT custom op; fused single-token MoE `mul_mat_id`; `q8_0` KV "quants-first" layout (default on) | `q8_0` / `f16` KV at mainline parity with VEC, TILE and oneMKL prefill routes; turbo K or V takes the VEC route by default (head dim must be a multiple of 128), with an opt-in XMX (DPAS) route (`GGML_SYCL_FA_XMX=1`, same turbo type on K and V, head dim 128 or 256). In the CPU-vs-SYCL correctness harness (section [5], run with `LLAMA_TEST_TURBO_FA=1`) turbo3/turbo4 pass and turbo2 is XFAIL (2-bit precision below the cosine floor) | A770 (DG2) is the canonical target; builds with `GGML_SYCL_F16=ON` or `OFF` |
+| **Vulkan** | `TQ4_1S` weights, `SET_ROWS` / `GET_ROWS` / `CPY` for `turbo2`/`turbo3`/`turbo4` | scalar and coopmat1 flash attention accept `turbo2`/`turbo3`/`turbo4` K and V (dequant fused into the shader); not on the coopmat2 path | Compute-shader path; nix-buildable |
 
 
 OpenVINO is shipped in-tree but is not exercised by the TurboQuant+ probes in this fork -- build with `-DGGML_OPENVINO=ON` only if you need the upstream OpenVINO backend.
@@ -62,27 +62,50 @@ OpenVINO is shipped in-tree but is not exercised by the TurboQuant+ probes in th
 
 - **Gemma 4** -- large head-dim (`dk=512`) FA kernels, MoE token routing, op-concurrency handling
 - **Large MoE** -- kernel instantiations for up to 256-expert routing
-- **Hybrid architectures (GDN, Mamba)** -- speculative decoding cherry-picked from upstream feature branches
+- **Hybrid architectures (GDN, Mamba)** -- speculative decoding cherry-picked from upstream feature branches; SYCL kernels for `GATED_DELTA_NET`, `SSM_CONV`, `SSM_SCAN`
+- **Hybrid MoE (qwen35moe / Ornith-1.5-35B-A3B)** -- runs, but see [Performance notes](#performance-notes-sycl-on-arc-a770) for where the time goes on SYCL
 - All existing llama.cpp model families remain fully supported
+
+### SYCL performance work carried by this fork
+
+Default-on items were promoted after paired measurement on the A770 (dated evidence in
+`docs/research/`). Opt-in items are listed so they can be found; they carry no throughput claim
+beyond what their own documentation states.
+
+Default on:
+
+- `q8_0` KV "quants-first" layout for 128-wide heads (`GGML_SYCL_Q8_KV_QUANTS_FIRST=0` opts out); measured +8 to +21% decode at depth 4096-16384 ([P5.11](docs/research/sycl-a770-p5-performance-campaign-2026-07-19.md#p511---scale-separated-q8_0-kv-rows) paired campaign; depths 0 and 2048 were not covered)
+- oneMKL GEMM prefill route for flash attention (`GGML_SYCL_ENABLE_MKL_FA=0` disables)
+- Fused single-token MoE `mul_mat_id` matvec for Q4_K / Q5_K / Q6_K and the IQ types
+- Per-kernel device-code split (`GGML_SYCL_DEVICE_CODE_SPLIT`) and pre-grown FA scratch buffers
+
+Opt in:
+
+- SYCL-Graph record-once / replay for stable-shape decode (`GGML_SYCL_ENABLE_GRAPH=1`); measured byte-identical to eager, gain depends on how many CPU/GPU splits break the graph
+- MoE expert cache in spare VRAM (`--moe-cache`); experimental, can regress decode when combined with `--fit`, read [docs/backend/MOE-CACHE.md](docs/backend/MOE-CACHE.md) before enabling
 
 ### Operational fixes carried by this fork
 
 - CPU `vec_dot` heap-allocation fix for turbo / TQ types at `n > 4096`
 - Cross-vendor `-Werror` build fixes
 - Defensive `xxd.cmake` handling for missing input files
+- Arch Linux packaging for the SYCL build ([packaging/arch/PKGBUILD](packaging/arch/PKGBUILD)) with a systemd unit
 
 ---
 
 ## Quick start
 
-Build with the backends you need. TurboQuant+ types become available once a supported GPU backend is compiled in.
+Build with the backends you need. TurboQuant+ types work on the CPU backend; SYCL and Vulkan add GPU kernels for them.
 
 ```bash
 # CPU only
 cmake -B build && cmake --build build -j
 
 # SYCL (Intel Arc / oneAPI) -- canonical target
-cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx && cmake --build build -j
+# source /opt/intel/oneapi/setvars.sh first (oneMKL headers); see docs/backend/SYCL.md
+cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DGGML_SYCL_F16=ON -DGGML_NATIVE=OFF \
+  -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+  -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER= && cmake --build build -j
 
 # Vulkan
 cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
@@ -105,7 +128,7 @@ Recommendations, ordered from most conservative to most aggressive:
 |---|---|---|---|---|
 | **1. Safest start** | `f16` | `turbo4` | First contact with any new model | K untouched, V at the lightest turbo tier. If output isn't faithful at this step, the model is unusually quant-sensitive -- stop and investigate before escalating. |
 | **2. Conservative** | `q8_0` | `turbo4` | Verified safe at step 1, want a memory win without much risk | Light on both sides. Typically near-indistinguishable from `f16`/`f16` outputs. |
-| **3. Recommended default** | `q8_0` | `turbo3` | Most dense models, most production workloads | The "asymmetric turbo" sweet spot from the [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) paper. Near-lossless K, ~4.6x compressed V. Total KV ~3-4x smaller than `f16`/`f16`. |
+| **3. Recommended default** | `q8_0` | `turbo3` | Most dense models when KV memory is the constraint | The "asymmetric turbo" sweet spot from the [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) paper. Near-lossless K, ~4.6x compressed V. Total KV ~3-4x smaller than `f16`/`f16`. On SYCL this mixed pair runs flash attention on the VEC route (the opt-in XMX route needs the same turbo type on K and V), which costs prefill throughput at long context (see [Performance notes](#performance-notes-sycl-on-arc-a770)). |
 | **4. Aggressive V** | `q8_0` | `turbo2` | Memory-bound long context, after validating quality at step 3 | Boundary V auto-engages and protects sensitive layers. Expect <2% PPL loss on dense models outside the protected layers. |
 | **5. MoE-aware aggressive** | `q8_0` | `turbo2` | Large MoE models (DeepSeek, Qwen3.6, Mixtral-style) | Same flags; Boundary V's per-expert-boundary protection is what makes this work on MoE. See [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md). |
 | **6. Discouraged: symmetric K compression** | any `turbo*` | any `turbo*` | Only with model-specific quality validation in hand | Compressing K is where models break. The asymmetric paper documents the failure modes. Not a starting point. |
@@ -141,12 +164,54 @@ llama-quantize model.f16.gguf model.tq3_1s.gguf TQ3_1S
 
 The following activate based on the selected types -- no flags required:
 
-- **Auto-asymmetric K/V** -- when both sides are turbo / TQ types, the policy picks complementary configurations rather than symmetric.
-- **Boundary V (layer-aware)** -- auto-enables for any `turbo2-V` selection.
-- **Sparse V dequantization** -- on SYCL/Vulkan targets, sparse V activates for all turbo V types.
-- **Flash Attention** -- auto-enabled for turbo KV with the relevant backend kernel (XFAIL on SYCL by default; opt in with `LLAMA_TEST_TURBO_FA=1`).
+- **Auto-asymmetric K/V** -- when K and V request the same turbo type on a model with GQA ratio >= 6 or from the Qwen family, K is upgraded (typically to `q8_0`) and V keeps the turbo type. Measured motivation: Qwen2.5 7:1 GQA with symmetric turbo K went from PPL 7.4 to 2887; Mistral 4:1 was fine. Kernels downstream must accept `K=q8_0, V=turbo*`.
+- **Boundary V (layer-aware)** -- `TURBO_LAYER_ADAPTIVE` mode 7 auto-enables for `turbo2-V` on models with at least 8 layers (`TURBO_LAYER_ADAPTIVE=0` opts out); shallower models stay uniform, and it's inert for non-turbo types.
+- **Flash Attention** -- works with turbo KV at runtime on SYCL (VEC route by default, opt-in XMX via `GGML_SYCL_FA_XMX=1`) and Vulkan (scalar / coopmat1). `LLAMA_TEST_TURBO_FA=1` is an opt-in for the CPU-vs-SYCL correctness harness, not a runtime switch.
 
 If this fork or any of its quantization types is used in your work, please cite the corresponding paper from the [TurboQuant+ paper corpus](https://github.com/TheTom/turboquant_plus/tree/main/docs/papers).
+
+## Performance notes (SYCL on Arc A770)
+
+High-level reading of the measurements in `docs/research/`. Numbers are from this fork on an A770; treat anything not
+labelled as a paired campaign as order-of-magnitude.
+
+- **Turbo KV is a capacity feature, not a speed feature.** It buys more context or a bigger model in the same VRAM. Do
+  not expect `f16` / `q8_0` decode parity, and on SYCL turbo K or V takes the VEC kernel by default (no TILE,
+  no oneMKL prefill route); `GGML_SYCL_FA_XMX=1` can route the same turbo type on K and V at head size 128 or 256 to
+  the opt-in XMX kernel. On Ornith-1.5-35B-A3B at 8k context, `q8_0` K + `turbo4` V cost 33% of prefill throughput
+  for a 0.07% PPL change, so `q8_0`/`q8_0` was kept there. Reach for turbo when memory, not throughput, is the limit.
+- **Decode on this GPU is launch-bound, not purely bandwidth-bound.** A hybrid MoE step (Ornith: 40 layers, ~1500
+  kernels) reads about 1.9 GiB of weights per token (routed experts plus the non-expert weights every layer reads
+  regardless of routing -- attention, SSM, shared-expert, and output; the embedding table is a per-token row lookup,
+  not a full read, so it's excluded), which the A770 and DDR5 could serve in ~22 ms; the observed token takes ~48 ms.
+  The remaining gap is per-kernel submission cost (~21 us per small kernel in the runtime's default immediate-command-list
+  mode, ~7 us batched) plus host-device synchronisation at every CPU/GPU split. Two levers target the submission cost:
+  SYCL-Graph replay (`GGML_SYCL_ENABLE_GRAPH=1`) and batched submission (`UR_L0_USE_IMMEDIATE_COMMANDLISTS=0
+  UR_L0_BATCH_SIZE=64`). Graph replay was already on in the ~48 ms measurement; graphs on versus off differed by about
+  2% there, and whether Ornith's MoE segments replay at all has not been observed. Batched submission gave +32% tg128 on
+  dense Mistral-7B in the 2026-08-13 paired probe and has not been measured on Ornith. Whether the two gains add is
+  unmeasured until a paired run crosses both settings. Neither is on by default in the fork or the runtime.
+- **MoE prefill is bounded by the per-expert loop.** SYCL `mul_mat_id` is fused only for single-token decode; any batch
+  larger than one runs one small GEMM per *touched* expert (the loop skips experts nothing routed to). A large
+  prefill ubatch is likely to touch every expert at least once, so at ub=512-2048 that's close to the 256 x 3
+  launches per layer upper bound; a small speculative-decoding verify batch of `n` tokens touches at most `8*n`
+  (8 experts/token), far fewer. Per-matrix cost is nearly flat from 512 to 2048 tokens, so a larger `--ubatch-size`
+  amortises the large-batch case almost linearly, but the *launch count* still scales with the small batch's own
+  `8*n`, which is why draft-based speculation only wins at very high acceptance (n-gram on code) on this backend. A
+  grouped kernel over the expert-sorted rows is the open code item.
+- **CPU/GPU expert placement.** `--fit` on SYCL sees free VRAM equal to total VRAM on this driver, so it assumes sole
+  tenancy and only `--fit-target` protects you. CPU-resident experts land in pinned host memory (not repacked); each
+  CPU-resident expert layer adds two synchronous split boundaries per token. For a 16 GiB card and a Q4_K_M 35B-A3B
+  model that is roughly 17 of 40 expert layers on the CPU.
+- **Dead ends already measured** (do not re-run without a driver or compiler change): SLM centroid-LUT dequant in FA,
+  global large-GRF mode, GPU oneDNN prefill, alternate MMVQ geometry, tensor-core WHT, `joint_matrix` XMX at sub-group
+  16 (IGC internal error; SG 8 is 4-7x slower than VEC, so XMX ships off).
+
+Where the evidence lives: [ornith-a770-perf-research-2026-09-27](docs/research/ornith-a770-perf-research-2026-09-27.md),
+[round2-decode-probes-2026-08-13](docs/research/round2-decode-probes-2026-08-13.md),
+[sycl-a770-p5-performance-campaign-2026-07-19](docs/research/sycl-a770-p5-performance-campaign-2026-07-19.md),
+[standard-sycl-baseline-2026-07-11](docs/research/standard-sycl-baseline-2026-07-11.md),
+[turbo-fa-research-artifact](turbo-fa-research-artifact.md).
 
 ## License
 
@@ -171,38 +236,46 @@ MIT, same as upstream llama.cpp.
 - Vim/Neovim plugin for FIM completions: https://github.com/ggml-org/llama.vim
 - Hugging Face Inference Endpoints now support GGUF out of the box! https://github.com/ggml-org/llama.cpp/discussions/9669
 - Hugging Face GGUF editor: [discussion](https://github.com/ggml-org/llama.cpp/discussions/9268) | [tool](https://huggingface.co/spaces/CISCai/gguf-editor)
-- WebGPU support is now available in the browser, see a blog/demo introducing it [here](https://reeselevine.github.io/llamas-on-the-web/).
 
 ----
 
+
 ## Quick start
 
-Getting started with llama.cpp is straightforward. Here are several ways to install it on your machine:
+A few options to get `llama.cpp` installed on your machine:
 
-- Install `llama.cpp` using [brew, nix or winget](docs/install.md)
-- Run with Docker - see our [Docker documentation](docs/docker.md)
-- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
-- Build from source by cloning this repository - check out [our build guide](docs/build.md)
+- Build from source by cloning this repository - check out [our build guide](docs/build.md) and, for SYCL, [docs/backend/SYCL.md](docs/backend/SYCL.md)
+- Arch Linux: [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD) builds the SYCL variant and installs a systemd unit
+- Run with Docker - see the [Docker documentation](docs/docker.md) (the Dockerfiles are upstream's; this fork publishes no images)
+- Upstream's pre-built binaries and https://llama.app do not contain the TurboQuant+ types or the SYCL work in this fork
 
-Once installed, you'll need a model to work with. Head to the [Obtaining and quantizing models](#obtaining-and-quantizing-models) section to learn more.
-
-Example command:
+Once installed:
 
 ```sh
-# Use a local model file
-llama-cli -m my_model.gguf
-
-# Or download and run a model directly from Hugging Face
-llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
+# Download and run a model directly from Hugging Face
+llama cli -hf ggml-org/Qwen3.5-0.8B-GGUF
 
 # Launch OpenAI-compatible API server
-llama-server -hf ggml-org/gemma-3-1b-it-GGUF
+llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
 ```
+
+<table align="center">
+    <tr>
+        <td align="center" width=50%>
+            <img width="1310" height="888" alt="VLM session with `llama cli`" src="https://github.com/user-attachments/assets/88726b48-1713-48aa-a525-95a02e78afc4" />
+            <i>VLM session with <b>llama cli</b></i>
+        </td>
+        <td align="center">
+            <img width="1392" height="958" alt="Built-in web UI against `llama serve` running Qwen 3.6" src="https://github.com/user-attachments/assets/b402f972-2e32-4def-8771-8d849f08cf2e" />
+            <i>Built-in web UI against <b>llama serve</b></i>
+        </td>
+    </tr>
+<table>
 
 ## Description
 
-The main goal of `llama.cpp` is to enable LLM inference with minimal setup and state-of-the-art performance on a wide
-range of hardware - locally and in the cloud.
+The main goal of `llama.cpp` is to enable LLM (and VLM) inference with minimal setup and state-of-the-art performance on
+a wide range of hardware - locally and in the cloud.
 
 - Plain C/C++ implementation without any dependencies
 - x86_64 (AVX / AVX2 / AVX512 / AMX), ARM NEON, and RISC-V (RVV) SIMD paths on CPU
@@ -211,211 +284,7 @@ range of hardware - locally and in the cloud.
 - BLAS support (OpenBLAS, oneMKL, AOCL) for CPU matrix multiplication
 - CPU+GPU hybrid inference to partially accelerate models larger than total VRAM
 
-The `llama.cpp` project is the main playground for developing new features for the [ggml](https://github.com/ggml-org/ggml) library.
-
-<details>
-<summary>Models</summary>
-
-Typically finetunes of the base models below are supported as well.
-
-Instructions for adding support for new models: [HOWTO-add-model.md](docs/development/HOWTO-add-model.md)
-
-#### Text-only
-
-- [X] LLaMA 🦙
-- [x] LLaMA 2 🦙🦙
-- [x] LLaMA 3 🦙🦙🦙
-- [X] [Mistral 7B](https://huggingface.co/mistralai/Mistral-7B-v0.1)
-- [x] [Mixtral MoE](https://huggingface.co/models?search=mistral-ai/Mixtral)
-- [x] [DBRX](https://huggingface.co/databricks/dbrx-instruct)
-- [x] [Jamba](https://huggingface.co/ai21labs)
-- [X] [Falcon](https://huggingface.co/models?search=tiiuae/falcon)
-- [X] [Chinese LLaMA / Alpaca](https://github.com/ymcui/Chinese-LLaMA-Alpaca) and [Chinese LLaMA-2 / Alpaca-2](https://github.com/ymcui/Chinese-LLaMA-Alpaca-2)
-- [X] [Vigogne (French)](https://github.com/bofenghuang/vigogne)
-- [X] [BERT](https://github.com/ggml-org/llama.cpp/pull/5423)
-- [X] [Koala](https://bair.berkeley.edu/blog/2023/04/03/koala/)
-- [X] [Baichuan 1 & 2](https://huggingface.co/models?search=baichuan-inc/Baichuan) + [derivations](https://huggingface.co/hiyouga/baichuan-7b-sft)
-- [X] [Aquila 1 & 2](https://huggingface.co/models?search=BAAI/Aquila)
-- [X] [Starcoder models](https://github.com/ggml-org/llama.cpp/pull/3187)
-- [X] [Refact](https://huggingface.co/smallcloudai/Refact-1_6B-fim)
-- [X] [MPT](https://github.com/ggml-org/llama.cpp/pull/3417)
-- [X] [Bloom](https://github.com/ggml-org/llama.cpp/pull/3553)
-- [x] [Yi models](https://huggingface.co/models?search=01-ai/Yi)
-- [X] [StableLM models](https://huggingface.co/stabilityai)
-- [x] [Deepseek models](https://huggingface.co/models?search=deepseek-ai/deepseek)
-- [x] [Qwen models](https://huggingface.co/models?search=Qwen/Qwen)
-- [x] [PLaMo-13B](https://github.com/ggml-org/llama.cpp/pull/3557)
-- [x] [Phi models](https://huggingface.co/models?search=microsoft/phi)
-- [x] [PhiMoE](https://github.com/ggml-org/llama.cpp/pull/11003)
-- [x] [GPT-2](https://huggingface.co/gpt2)
-- [x] [Orion 14B](https://github.com/ggml-org/llama.cpp/pull/5118)
-- [x] [InternLM2](https://huggingface.co/models?search=internlm2)
-- [x] [CodeShell](https://github.com/WisdomShell/codeshell)
-- [x] [Gemma](https://ai.google.dev/gemma)
-- [x] [Mamba](https://github.com/state-spaces/mamba)
-- [x] [Grok-1](https://huggingface.co/keyfan/grok-1-hf)
-- [x] [Xverse](https://huggingface.co/models?search=xverse)
-- [x] [Command-R models](https://huggingface.co/models?search=CohereForAI/c4ai-command-r)
-- [x] [SEA-LION](https://huggingface.co/models?search=sea-lion)
-- [x] [GritLM-7B](https://huggingface.co/GritLM/GritLM-7B) + [GritLM-8x7B](https://huggingface.co/GritLM/GritLM-8x7B)
-- [x] [OLMo](https://allenai.org/olmo)
-- [x] [OLMo 2](https://allenai.org/olmo)
-- [x] [OLMoE](https://huggingface.co/allenai/OLMoE-1B-7B-0924)
-- [x] [Granite models](https://huggingface.co/collections/ibm-granite/granite-code-models-6624c5cec322e4c148c8b330)
-- [x] [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) + [Pythia](https://github.com/EleutherAI/pythia)
-- [x] [Snowflake-Arctic MoE](https://huggingface.co/collections/Snowflake/arctic-66290090abe542894a5ac520)
-- [x] [Smaug](https://huggingface.co/models?search=Smaug)
-- [x] [Poro 34B](https://huggingface.co/LumiOpen/Poro-34B)
-- [x] [Bitnet b1.58 models](https://huggingface.co/1bitLLM)
-- [x] [Flan T5](https://huggingface.co/models?search=flan-t5)
-- [x] [Open Elm models](https://huggingface.co/collections/apple/openelm-instruct-models-6619ad295d7ae9f868b759ca)
-- [x] [ChatGLM3-6b](https://huggingface.co/THUDM/chatglm3-6b) + [ChatGLM4-9b](https://huggingface.co/THUDM/glm-4-9b) + [GLMEdge-1.5b](https://huggingface.co/THUDM/glm-edge-1.5b-chat) + [GLMEdge-4b](https://huggingface.co/THUDM/glm-edge-4b-chat)
-- [x] [GLM-4-0414](https://huggingface.co/collections/THUDM/glm-4-0414-67f3cbcb34dd9d252707cb2e)
-- [x] [SmolLM](https://huggingface.co/collections/HuggingFaceTB/smollm-6695016cad7167254ce15966)
-- [x] [EXAONE-3.0-7.8B-Instruct](https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct)
-- [x] [FalconMamba Models](https://huggingface.co/collections/tiiuae/falconmamba-7b-66b9a580324dd1598b0f6d4a)
-- [x] [Jais](https://huggingface.co/inceptionai/jais-13b-chat)
-- [x] [Bielik-11B-v2.3](https://huggingface.co/collections/speakleash/bielik-11b-v23-66ee813238d9b526a072408a)
-- [x] [RWKV-7](https://huggingface.co/collections/shoumenchougou/rwkv7-gxx-gguf)
-- [x] [RWKV-6](https://github.com/BlinkDL/RWKV-LM)
-- [x] [QRWKV-6](https://huggingface.co/recursal/QRWKV6-32B-Instruct-Preview-v0.1)
-- [x] [GigaChat-20B-A3B](https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct)
-- [X] [Trillion-7B-preview](https://huggingface.co/trillionlabs/Trillion-7B-preview)
-- [x] [Ling models](https://huggingface.co/collections/inclusionAI/ling-67c51c85b34a7ea0aba94c32)
-- [x] [LFM2 models](https://huggingface.co/collections/LiquidAI/lfm2-686d721927015b2ad73eaa38)
-- [x] [Hunyuan models](https://huggingface.co/collections/tencent/hunyuan-dense-model-6890632cda26b19119c9c5e7)
-- [x] [BailingMoeV2 (Ring/Ling 2.0) models](https://huggingface.co/collections/inclusionAI/ling-v2-68bf1dd2fc34c306c1fa6f86)
-- [x] [Mellum models](https://huggingface.co/JetBrains/models?search=mellum)
-
-#### Multimodal
-
-- [x] [LLaVA 1.5 models](https://huggingface.co/collections/liuhaotian/llava-15-653aac15d994e992e2677a7e), [LLaVA 1.6 models](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2)
-- [x] [BakLLaVA](https://huggingface.co/models?search=SkunkworksAI/Bakllava)
-- [x] [Obsidian](https://huggingface.co/NousResearch/Obsidian-3B-V0.5)
-- [x] [ShareGPT4V](https://huggingface.co/models?search=Lin-Chen/ShareGPT4V)
-- [x] [MobileVLM 1.7B/3B models](https://huggingface.co/models?search=mobileVLM)
-- [x] [Yi-VL](https://huggingface.co/models?search=Yi-VL)
-- [x] [Mini CPM](https://huggingface.co/models?search=MiniCPM)
-- [x] [Moondream](https://huggingface.co/vikhyatk/moondream2)
-- [x] [Bunny](https://github.com/BAAI-DCAI/Bunny)
-- [x] [GLM-EDGE](https://huggingface.co/models?search=glm-edge)
-- [x] [Qwen2-VL](https://huggingface.co/collections/Qwen/qwen2-vl-66cee7455501d7126940800d)
-- [x] [LFM2-VL](https://huggingface.co/collections/LiquidAI/lfm2-vl-68963bbc84a610f7638d5ffa)
-
-</details>
-
-<details>
-<summary>Bindings</summary>
-
-- Python: [ddh0/easy-llama](https://github.com/ddh0/easy-llama)
-- Python: [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
-- Go: [go-skynet/go-llama.cpp](https://github.com/go-skynet/go-llama.cpp)
-- Node.js: [withcatai/node-llama-cpp](https://github.com/withcatai/node-llama-cpp)
-- JS/TS (llama.cpp server client): [lgrammel/modelfusion](https://modelfusion.dev/integration/model-provider/llamacpp)
-- JS/TS (Programmable Prompt Engine CLI): [offline-ai/cli](https://github.com/offline-ai/cli)
-- JavaScript/Wasm (works in browser): [tangledgroup/llama-cpp-wasm](https://github.com/tangledgroup/llama-cpp-wasm)
-- Typescript/Wasm (nicer API, available on npm): [ngxson/wllama](https://github.com/ngxson/wllama)
-- Ruby: [yoshoku/llama_cpp.rb](https://github.com/yoshoku/llama_cpp.rb)
-- Ruby: [docusealco/rllama](https://github.com/docusealco/rllama)
-- Rust (more features): [edgenai/llama_cpp-rs](https://github.com/edgenai/llama_cpp-rs)
-- Rust (nicer API): [mdrokz/rust-llama.cpp](https://github.com/mdrokz/rust-llama.cpp)
-- Rust (more direct bindings): [utilityai/llama-cpp-rs](https://github.com/utilityai/llama-cpp-rs)
-- Rust (automated build from crates.io): [ShelbyJenkins/llm_client](https://github.com/ShelbyJenkins/llm_client)
-- C#/.NET: [SciSharp/LLamaSharp](https://github.com/SciSharp/LLamaSharp)
-- C#/VB.NET (more features - community license): [LM-Kit.NET](https://docs.lm-kit.com/lm-kit-net/index.html)
-- Scala 3: [donderom/llm4s](https://github.com/donderom/llm4s)
-- Clojure: [phronmophobic/llama.clj](https://github.com/phronmophobic/llama.clj)
-- React Native: [mybigday/llama.rn](https://github.com/mybigday/llama.rn)
-- Java: [kherud/java-llama.cpp](https://github.com/kherud/java-llama.cpp)
-- Java: [QuasarByte/llama-cpp-jna](https://github.com/QuasarByte/llama-cpp-jna)
-- Zig: [deins/llama.cpp.zig](https://github.com/Deins/llama.cpp.zig)
-- Flutter/Dart: [netdur/llama_cpp_dart](https://github.com/netdur/llama_cpp_dart)
-- Flutter: [xuegao-tzx/Fllama](https://github.com/xuegao-tzx/Fllama)
-- PHP (API bindings and features built on top of llama.cpp): [distantmagic/resonance](https://github.com/distantmagic/resonance) [(more info)](https://github.com/ggml-org/llama.cpp/pull/6326)
-- Guile Scheme: [guile_llama_cpp](https://savannah.nongnu.org/projects/guile-llama-cpp)
-- Swift [srgtuszy/llama-cpp-swift](https://github.com/srgtuszy/llama-cpp-swift)
-- Swift [ShenghaiWang/SwiftLlama](https://github.com/ShenghaiWang/SwiftLlama)
-- Delphi [Embarcadero/llama-cpp-delphi](https://github.com/Embarcadero/llama-cpp-delphi)
-- Go (no CGo needed): [hybridgroup/yzma](https://github.com/hybridgroup/yzma)
-- Android: [llama.android](/examples/llama.android)
-
-</details>
-
-<details>
-<summary>UIs</summary>
-
-*(to have a project listed here, it should clearly state that it depends on `llama.cpp`)*
-
-- [AI Sublime Text plugin](https://github.com/yaroslavyaroslav/OpenAI-sublime-text) (MIT)
-- [BonzAI App](https://apps.apple.com/us/app/bonzai-your-local-ai-agent/id6752847988) (proprietary)
-- [cztomsik/ava](https://github.com/cztomsik/ava) (MIT)
-- [Dot](https://github.com/alexpinel/Dot) (GPL)
-- [eva](https://github.com/ylsdamxssjxxdd/eva) (MIT)
-- [iohub/collama](https://github.com/iohub/coLLaMA) (Apache-2.0)
-- [janhq/jan](https://github.com/janhq/jan) (AGPL)
-- [johnbean393/Sidekick](https://github.com/johnbean393/Sidekick) (MIT)
-- [KanTV](https://github.com/zhouwg/kantv?tab=readme-ov-file) (Apache-2.0)
-- [KodiBot](https://github.com/firatkiral/kodibot) (GPL)
-- [llama.vim](https://github.com/ggml-org/llama.vim) (MIT)
-- [LARS](https://github.com/abgulati/LARS) (AGPL)
-- [Llama Assistant](https://github.com/vietanhdev/llama-assistant) (GPL)
-- [LlamaLib](https://github.com/undreamai/LlamaLib) (Apache-2.0)
-- [LLMFarm](https://github.com/guinmoon/LLMFarm?tab=readme-ov-file) (MIT)
-- [LLMUnity](https://github.com/undreamai/LLMUnity) (MIT)
-- [LMStudio](https://lmstudio.ai/) (proprietary)
-- [LocalAI](https://github.com/mudler/LocalAI) (MIT)
-- [LostRuins/koboldcpp](https://github.com/LostRuins/koboldcpp) (AGPL)
-- [MindMac](https://mindmac.app) (proprietary)
-- [MindWorkAI/AI-Studio](https://github.com/MindWorkAI/AI-Studio) (FSL-1.1-MIT)
-- [Mobile-Artificial-Intelligence/maid](https://github.com/Mobile-Artificial-Intelligence/maid) (MIT)
-- [Mozilla-Ocho/llamafile](https://github.com/Mozilla-Ocho/llamafile) (Apache-2.0)
-- [nat/openplayground](https://github.com/nat/openplayground) (MIT)
-- [nomic-ai/gpt4all](https://github.com/nomic-ai/gpt4all) (MIT)
-- [ollama/ollama](https://github.com/ollama/ollama) (MIT)
-- [oobabooga/text-generation-webui](https://github.com/oobabooga/text-generation-webui) (AGPL)
-- [PocketPal AI](https://github.com/a-ghorbani/pocketpal-ai) (MIT)
-- [psugihara/FreeChat](https://github.com/psugihara/FreeChat) (MIT)
-- [ptsochantaris/emeltal](https://github.com/ptsochantaris/emeltal) (MIT)
-- [pythops/tenere](https://github.com/pythops/tenere) (AGPL)
-- [ramalama](https://github.com/containers/ramalama) (MIT)
-- [semperai/amica](https://github.com/semperai/amica) (MIT)
-- [withcatai/catai](https://github.com/withcatai/catai) (MIT)
-- [Autopen](https://github.com/blackhole89/autopen) (GPL)
-
-</details>
-
-<details>
-<summary>Tools</summary>
-
-- [akx/ggify](https://github.com/akx/ggify) - download PyTorch models from Hugging Face Hub and convert them to GGML
-- [akx/ollama-dl](https://github.com/akx/ollama-dl) - download models from the Ollama library to be used directly with llama.cpp
-- [crashr/gppm](https://github.com/crashr/gppm) - launch llama.cpp instances utilizing NVIDIA Tesla P40 or P100 GPUs with reduced idle power consumption
-- [gpustack/gguf-parser](https://github.com/gpustack/gguf-parser-go/tree/main/cmd/gguf-parser) - review/check the GGUF file and estimate the memory usage
-- [Styled Lines](https://marketplace.unity.com/packages/tools/generative-ai/styled-lines-llama-cpp-model-292902) (proprietary licensed, async wrapper of inference part for game development in Unity3d with pre-built Mobile and Web platform wrappers and a model example)
-- [unslothai/unsloth](https://github.com/unslothai/unsloth) - 🦥 exports/saves fine-tuned and trained models to GGUF (Apache-2.0)
-
-</details>
-
-<details>
-<summary>Infrastructure</summary>
-
-- [Paddler](https://github.com/intentee/paddler) - Open-source LLMOps platform for hosting and scaling AI in your own infrastructure
-- [GPUStack](https://github.com/gpustack/gpustack) - Manage GPU clusters for running LLMs
-- [llama_cpp_canister](https://github.com/onicai/llama_cpp_canister) - llama.cpp as a smart contract on the Internet Computer, using WebAssembly
-- [llama-swap](https://github.com/mostlygeek/llama-swap) - transparent proxy that adds automatic model switching with llama-server
-- [Kalavai](https://github.com/kalavai-net/kalavai-client) - Crowdsource end to end LLM deployment at any scale
-- [llmaz](https://github.com/InftyAI/llmaz) - ☸️ Easy, advanced inference platform for large language models on Kubernetes.
-- [LLMKube](https://github.com/defilantech/llmkube) - Kubernetes operator for llama.cpp with multi-GPU and Apple Silicon Metal
-  support"
-</details>
-
-<details>
-<summary>Games</summary>
-
-- [Lucy's Labyrinth](https://github.com/MorganRO8/Lucys_Labyrinth) - A simple maze game where agents controlled by an AI model will try to trick you.
-
-</details>
-
+The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-org/ggml) library.
 
 ## Supported backends in this fork
 
@@ -429,237 +298,16 @@ Only the backends below are built and tested. CUDA, HIP/ROCm, Metal, OpenCL, CAN
 | [Vulkan](docs/build.md#vulkan) | GPU (cross-vendor) | Compute-shader path; works on Intel/AMD/NVIDIA |
 | [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs | Shipped in-tree; not exercised by TurboQuant+ probes |
 
-## Obtaining and quantizing models
+## Documentation
 
-The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](https://huggingface.co/models?library=gguf&sort=trending) compatible with `llama.cpp`:
-
-- [Trending](https://huggingface.co/models?library=gguf&sort=trending)
-- [LLaMA](https://huggingface.co/models?sort=trending&search=llama+gguf)
-
-You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from [Hugging Face](https://huggingface.co/) or other model hosting sites, by using this CLI argument: `-hf <user>/<model>[:quant]`. For example:
-
-```sh
-llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
-```
-
-By default, the CLI would download from Hugging Face, you can switch to other options with the environment variable `MODEL_ENDPOINT`. The `MODEL_ENDPOINT` must point to a Hugging Face compatible API endpoint.
-
-After downloading a model, use the CLI tools to run it locally - see below.
-
-`llama.cpp` requires the model to be stored in the [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) file format. Models in other data formats can be converted to GGUF using the `convert_*.py` Python scripts in this repo.
-
-The Hugging Face platform provides a variety of online tools for converting, quantizing and hosting models with `llama.cpp`:
-
-- Use the [GGUF-my-repo space](https://huggingface.co/spaces/ggml-org/gguf-my-repo) to convert to GGUF format and quantize model weights to smaller sizes
-- Use the [GGUF-my-LoRA space](https://huggingface.co/spaces/ggml-org/gguf-my-lora) to convert LoRA adapters to GGUF format (more info: https://github.com/ggml-org/llama.cpp/discussions/10123)
-- Use the [GGUF-editor space](https://huggingface.co/spaces/CISCai/gguf-editor) to edit GGUF meta data in the browser (more info: https://github.com/ggml-org/llama.cpp/discussions/9268)
-- Use the [Inference Endpoints](https://ui.endpoints.huggingface.co/) to directly host `llama.cpp` in the cloud (more info: https://github.com/ggml-org/llama.cpp/discussions/9669)
-
-To learn more about model quantization, [read this documentation](tools/quantize/README.md)
-
-## [`llama-cli`](tools/cli)
-
-#### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.
-
-- <details open>
-    <summary>Run in conversation mode</summary>
-
-    Models with a built-in chat template will automatically activate conversation mode. If this doesn't occur, you can manually enable it by adding `-cnv` and specifying a suitable chat template with `--chat-template NAME`
-
-    ```bash
-    llama-cli -m model.gguf
-
-    # > hi, who are you?
-    # Hi there! I'm your helpful assistant! I'm an AI-powered chatbot designed to assist and provide information to users like you. I'm here to help answer your questions, provide guidance, and offer support on a wide range of topics. I'm a friendly and knowledgeable AI, and I'm always happy to help with anything you need. What's on your mind, and how can I assist you today?
-    #
-    # > what is 1+1?
-    # Easy peasy! The answer to 1+1 is... 2!
-    ```
-
-    </details>
-
-- <details>
-    <summary>Run in conversation mode with custom chat template</summary>
-
-    ```bash
-    # use the "chatml" template (use -h to see the list of supported templates)
-    llama-cli -m model.gguf -cnv --chat-template chatml
-
-    # use a custom template
-    llama-cli -m model.gguf -cnv --in-prefix 'User: ' --reverse-prompt 'User:'
-    ```
-
-    </details>
-
-- <details>
-    <summary>Constrain the output with a custom grammar</summary>
-
-    ```bash
-    llama-cli -m model.gguf -n 256 --grammar-file grammars/json.gbnf -p 'Request: schedule a call at 8pm; Command:'
-
-    # {"appointmentTime": "8pm", "appointmentDetails": "schedule a a call"}
-    ```
-
-    The [grammars/](grammars/) folder contains a handful of sample grammars. To write your own, check out the [GBNF Guide](grammars/README.md).
-
-    For authoring more complex JSON grammars, check out https://grammar.intrinsiclabs.ai/
-
-    </details>
-
-
-## [`llama-server`](tools/server)
-
-#### A lightweight, [OpenAI API](https://github.com/openai/openai-openapi) compatible, HTTP server for serving LLMs.
-
-- <details open>
-    <summary>Start a local HTTP server with default configuration on port 8080</summary>
-
-    ```bash
-    llama-server -m model.gguf --port 8080
-
-    # Basic web UI can be accessed via browser: http://localhost:8080
-    # Chat completion endpoint: http://localhost:8080/v1/chat/completions
-    ```
-
-    </details>
-
-- <details>
-    <summary>Support multiple-users and parallel decoding</summary>
-
-    ```bash
-    # up to 4 concurrent requests, each with 4096 max context
-    llama-server -m model.gguf -c 16384 -np 4
-    ```
-
-    </details>
-
-- <details>
-    <summary>Enable speculative decoding</summary>
-
-    ```bash
-    # the draft.gguf model should be a small variant of the target model.gguf
-    llama-server -m model.gguf -md draft.gguf
-    ```
-
-    </details>
-
-- <details>
-    <summary>Serve an embedding model</summary>
-
-    ```bash
-    # use the /embedding endpoint
-    llama-server -m model.gguf --embedding --pooling cls -ub 8192
-    ```
-
-    </details>
-
-- <details>
-    <summary>Serve a reranking model</summary>
-
-    ```bash
-    # use the /reranking endpoint
-    llama-server -m model.gguf --reranking
-    ```
-
-    </details>
-
-- <details>
-    <summary>Constrain all outputs with a grammar</summary>
-
-    ```bash
-    # custom grammar
-    llama-server -m model.gguf --grammar-file grammar.gbnf
-
-    # JSON
-    llama-server -m model.gguf --grammar-file grammars/json.gbnf
-    ```
-
-    </details>
-
-
-## [`llama-perplexity`](tools/perplexity)
-
-#### A tool for measuring the [perplexity](tools/perplexity/README.md) [^1] (and other quality metrics) of a model over a given text.
-
-- <details open>
-    <summary>Measure the perplexity over a text file</summary>
-
-    ```bash
-    llama-perplexity -m model.gguf -f file.txt
-
-    # [1]15.2701,[2]5.4007,[3]5.3073,[4]6.2965,[5]5.8940,[6]5.6096,[7]5.7942,[8]4.9297, ...
-    # Final estimate: PPL = 5.4007 +/- 0.67339
-    ```
-
-    </details>
-
-- <details>
-    <summary>Measure KL divergence</summary>
-
-    ```bash
-    # TODO
-    ```
-
-    </details>
-
-[^1]: [https://huggingface.co/docs/transformers/perplexity](https://huggingface.co/docs/transformers/perplexity)
-
-## [`llama-bench`](tools/llama-bench)
-
-#### Benchmark the performance of the inference for various parameters.
-
-- <details open>
-    <summary>Run default benchmark</summary>
-
-    ```bash
-    llama-bench -m model.gguf
-
-    # Output:
-    # | model               |       size |     params | backend    | threads |          test |                  t/s |
-    # | ------------------- | ---------: | ---------: | ---------- | ------: | ------------: | -------------------: |
-    # | qwen2 1.5B Q4_0     | 885.97 MiB |     1.54 B | Metal,BLAS |      16 |         pp512 |      5765.41 ± 20.55 |
-    # | qwen2 1.5B Q4_0     | 885.97 MiB |     1.54 B | Metal,BLAS |      16 |         tg128 |        197.71 ± 0.81 |
-    #
-    # build: 3e0ba0e60 (4229)
-    ```
-
-    </details>
-
-## [`llama-simple`](examples/simple)
-
-#### A minimal example for implementing apps with `llama.cpp`. Useful for developers.
-
-- <details>
-    <summary>Basic text completion</summary>
-
-    ```bash
-    llama-simple -m model.gguf
-
-    # Hello my name is Kaitlyn and I am a 16 year old girl. I am a junior in high school and I am currently taking a class called "The Art of
-    ```
-
-    </details>
-
-
-## Contributing
-
-- Contributors can open PRs
-- Collaborators will be invited based on contributions
-- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
-- Any help with managing issues, PRs and projects is very appreciated!
-- See [good first issues](https://github.com/ggml-org/llama.cpp/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for tasks suitable for first contributions
-- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
-- Make sure to read this: [Inference at the edge](https://github.com/ggml-org/llama.cpp/discussions/205)
-- A bit of backstory for those who are interested: [Changelog podcast](https://changelog.com/podcast/532)
-
-## Other documentation
+#### Tools
 
 - [cli](tools/cli/README.md)
 - [completion](tools/completion/README.md)
 - [server](tools/server/README.md)
 - [GBNF grammars](grammars/README.md)
 
-#### Development documentation
+#### Development
 
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
@@ -667,66 +315,21 @@ To learn more about model quantization, [read this documentation](tools/quantize
 - [Multi-GPU usage](docs/multi-gpu.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
+- [XCFramework](docs/xcframework.md)
+- [Completions](docs/completions.md)
+- [Models](docs/models.md)
+- [Release process](docs/release.md)
 
-#### Seminal papers and background on the models
+## Contributing
 
-If your issue is with model generation quality, then please at least scan the following links and papers to understand the limitations of LLaMA models. This is especially important when choosing an appropriate model size and appreciating both the significant and subtle differences between LLaMA models and ChatGPT:
-- LLaMA:
-    - [Introducing LLaMA: A foundational, 65-billion-parameter large language model](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
-    - [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)
-- GPT-3
-    - [Language Models are Few-Shot Learners](https://arxiv.org/abs/2005.14165)
-- GPT-3.5 / InstructGPT / ChatGPT:
-    - [Aligning language models to follow instructions](https://openai.com/research/instruction-following)
-    - [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)
+- Open PRs against `master` of `Raudbjorn/ggml-llama.cpp`; do not send fork-specific changes to `ggml-org/llama.cpp`
+- Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) first: ASCII-only code and comments, reuse existing infrastructure, `Assisted-by:` commit trailer
+- Performance claims need paired measurements on the A770 (see `scripts/README.md`), and every PR body ends with a "Not claimed" section stating what was not tested
 
-## XCFramework
-The XCFramework is a precompiled version of the library for iOS, visionOS, tvOS,
-and macOS. It can be used in Swift projects without the need to compile the
-library from source. For example:
-```swift
-// swift-tools-version: 5.10
-// The swift-tools-version declares the minimum version of Swift required to build this package.
-
-import PackageDescription
-
-let package = Package(
-    name: "MyLlamaPackage",
-    targets: [
-        .executableTarget(
-            name: "MyLlamaPackage",
-            dependencies: [
-                "LlamaFramework"
-            ]),
-        .binaryTarget(
-            name: "LlamaFramework",
-            url: "https://github.com/ggml-org/llama.cpp/releases/download/b5046/llama-b5046-xcframework.zip",
-            checksum: "c19be78b5f00d8d29a25da41042cb7afa094cbf6280a225abe614b03b20029ab"
-        )
-    ]
-)
-```
-The above example is using an intermediate build `b5046` of the library. This can be modified
-to use a different version by changing the URL and checksum.
-
-## Completions
-Command-line completion is available for some environments.
-
-#### Bash Completion
-```bash
-$ build/bin/llama-cli --completion-bash > ~/.llama-completion.bash
-$ source ~/.llama-completion.bash
-```
-Optionally this can be added to your `.bashrc` or `.bash_profile` to load it
-automatically. For example:
-```console
-$ echo "source ~/.llama-completion.bash" >> ~/.bashrc
-```
-
-## Dependencies
+## Acknowledgements
 
 - [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
-- [stb-image](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
+- [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
 - [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
-- [miniaudio.h](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
-- [subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+- [mackron/miniaudio](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
+- [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain

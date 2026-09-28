@@ -16,8 +16,12 @@
 #include <cstddef>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 
+#include "base.hpp"
 #include "dpct/helper.hpp"
 #include "ggml.h"
 #include "ggml-impl.h"
@@ -26,6 +30,7 @@
 #include "type.hpp"
 #include "sycl_hw.hpp"
 #include "fattn-buffers.hpp"
+#include "memtrace.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
 
@@ -67,28 +72,36 @@ void ggml_sycl_host_free(void* ptr);
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
+extern int g_ggml_sycl_enable_esimd;
+extern int g_ggml_sycl_mmvq_wide;
 extern int g_ggml_sycl_prioritize_dmmv;
+
+// Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
+// flag per path, so a format can be enabled or measured on its own and adding a format is one bit.
+enum ggml_sycl_xmx_gather_type {
+    GGML_SYCL_XMX_GATHER_IQ4_NL   = 1 << 0,
+    GGML_SYCL_XMX_GATHER_IQ3_S    = 1 << 1,
+    GGML_SYCL_XMX_GATHER_IQ4_XS   = 1 << 2,
+    GGML_SYCL_XMX_GATHER_IQ3_XXS  = 1 << 3,
+    GGML_SYCL_XMX_GATHER_IQ2_XXS  = 1 << 4,
+    GGML_SYCL_XMX_GATHER_IQ2_XS   = 1 << 5,
+    GGML_SYCL_XMX_GATHER_IQ2_S    = 1 << 6,
+    GGML_SYCL_XMX_GATHER_IQ1_S    = 1 << 7,
+    GGML_SYCL_XMX_GATHER_IQ1_M    = 1 << 8,
+};
+static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
+extern int g_ggml_sycl_xmx_gather_types;
 extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_dev2dev_memcpy;
 extern int g_ggml_sycl_fa_onednn;
+extern int g_ggml_sycl_fa_onednn_max_kv;
+extern int g_ggml_sycl_enable_mkl_fa;
+extern int g_ggml_sycl_memtrace;
+extern int g_ggml_sycl_memtrace_step;
 extern int g_ggml_sycl_fa_force_vec_standard;
 extern int g_ggml_sycl_fa_q8_gqa_tile;
+extern int g_ggml_sycl_graph_eviction_timeout;
 
-
-#if defined(__clang__) && __has_builtin(__builtin_expect)
-// Hint the optimizer to pipeline the more likely following instruction in branches
-#    define LIKELY(expr)   __builtin_expect(expr, true)
-#    define UNLIKELY(expr) __builtin_expect(expr, false)
-#else
-#    define LIKELY(expr)   (expr)
-#    define UNLIKELY(expr) (expr)
-#endif
-
-#define GGML_SYCL_DEBUG(...)              \
-    do {                                  \
-        if (UNLIKELY(g_ggml_sycl_debug))  \
-            fprintf(stderr, __VA_ARGS__); \
-    } while (0)
 
 #define CHECK_TRY_ERROR(expr)                                            \
   [&]() {                                                                \
@@ -114,7 +127,7 @@ extern int g_ggml_sycl_fa_q8_gqa_tile;
 
 // define for XMX in Intel GPU
 // TODO: currently, it's not used for XMX really.
-#if !defined(GGML_SYCL_FORCE_MMQ)
+#if !defined(GGML_SYCL_FORCE_MMQ) && !defined(GGML_SYCL_SCALAR_MMQ)
     #define SYCL_USE_XMX
 #endif
 
@@ -140,6 +153,7 @@ enum ggml_sycl_backend_gpu_mode {
 enum ggml_sycl_dev2dev_memcpy_mode {
   DEV2DEV_MEMCPY_SYCL = 0,
   DEV2DEV_MEMCPY_L0 = 1,
+  DEV2DEV_MEMCPY_FORWARD = 2
 };
 
 static_assert(sizeof(sycl::half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -241,12 +255,17 @@ struct sycl_device_info {
     int max_wg_per_cu; // max work groups per compute unit - refer to
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
+    bool    l0_device_type_valid;
     bool    l0_discrete_gpu;    // Level Zero backend and not an integrated GPU
     size_t  vmm_granularity;    // granularity of virtual memory
     size_t  total_vram;
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
     bool    usm_system_support; // support for USM system allocations
+#ifdef GGML_SYCL_GRAPH
+    bool    graph_support;        // command graphs can be recorded and replayed
+    bool    graph_update_support; // a finalized command graph can be updated
+#endif
 };
 
 
@@ -340,7 +359,8 @@ static inline bool ggml_sycl_tensor_is_kv_q8_quants_first(const ggml_tensor * te
     return ggml_tensor_is_kv_q8_quants_first(tensor);
 }
 
-void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q,
+                               ggml_sycl_mem_type type = GGML_SYCL_MEM_DIRECT);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
@@ -350,7 +370,53 @@ struct mmid_row_mapping {
     int32_t i2;
 };
 
+struct ggml_sycl_gg_tile {
+    int32_t expert;
+    int32_t n0;
+    int32_t n1;
+};
+
 namespace sycl_ex = sycl::ext::oneapi::experimental;
+
+#ifdef GGML_SYCL_GRAPH
+struct ggml_sycl_graph {
+    // Only the fields that affect what got recorded: comparing the raw ggml_tensor (its
+    // struct padding and the tail of its fixed-size name buffer are never fully initialized)
+    // produced spurious mismatches unrelated to any real change.
+    // src data/ne/nb are kept next to the node copy: the scheduler can hand back the same src
+    // pointer with different contents or shape, see https://github.com/ggml-org/llama.cpp/pull/21736
+    struct node_properties {
+        void *      node_data;
+        ggml_type   node_type;
+        ggml_op     node_op;
+        int64_t     node_ne[GGML_MAX_DIMS];
+        size_t      node_nb[GGML_MAX_DIMS];
+        int32_t     node_op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
+        void *      node_src_data_ptrs[GGML_MAX_SRC];
+        int64_t     node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+        size_t      node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    };
+
+    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    std::vector<node_properties> node_props;
+    bool     warmup_complete = false;
+    uint64_t uid             = 0;
+    int64_t  last_used_time  = 0;
+
+    // Generation of ggml_sycl_fattn_kv_buffers this graph was last (re)recorded against. A
+    // mismatch against the context's current generation means this graph's baked-in K/V
+    // scratch pointers may be dangling and it must be re-recorded before its next replay.
+    uint64_t fattn_generation = 0;
+
+    // result of check_graph_compatibility() and graph_needs_reorder(), and the uid they were made for
+    bool     compatible     = false;
+    bool     needs_reorder  = true;
+    uint64_t compatible_uid = 0;
+};
+
+static_assert(std::is_trivial<ggml_sycl_graph::node_properties>::value, "node_properties must be trivial");
+#endif
+
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
@@ -358,10 +424,22 @@ struct ggml_backend_sycl_context {
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
+    // Set only for a backend created through ggml_backend_init_private_stream: an in-order
+    // queue on the device's shared context (USM pointers stay valid) that replaces the
+    // device-wide default queue for this context, so its copies overlap other contexts' work.
+    std::unique_ptr<sycl::queue> private_queue;
+
     explicit ggml_backend_sycl_context(int device) :
         device(device),
         name(GGML_SYCL_NAME + std::to_string(device)) {
         opt_feature = ggml_sycl_info().devices[device].opt_feature;
+    }
+
+    void use_private_queue(sycl::queue q) {
+        private_queue = std::make_unique<sycl::queue>(std::move(q));
+        for (int s = 0; s < GGML_SYCL_MAX_STREAMS; ++s) {
+            qptrs[device][s] = private_queue.get();
+        }
     }
 
     queue_ptr stream(int device, int stream) {
@@ -419,35 +497,18 @@ struct ggml_backend_sycl_context {
     dnnl::stream stream_dnnl() {
         return stream_dnnl(device, 0);
     }
-    dnnl::memory get_scratchpad_mem(const dnnl::memory::desc & scratchpad_md,
-                                    const dnnl::engine & eng, const queue_ptr q) {
-        ggml_sycl_pool_alloc<uint8_t> * pool;
-        auto it = scratchpad_map.find(q);
-        if (it == scratchpad_map.end()) {
-            scratchpad_map[q] = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
-            pool = scratchpad_map[q].get();
-        } else {
-            pool = it->second.get();
-        }
-
-        size_t scratchpad_size = scratchpad_md.get_size();
-        if (scratchpad_size > pool->actual_size) {
-            pool->realloc(scratchpad_size);
-        }
-        void * mem_ptr = pool->get();
-        return dnnl::memory(scratchpad_md, eng, mem_ptr);
-    }
 #endif
 
     // pool
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
-    std::unordered_map<sycl::queue *, std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> scratchpad_map;
 
     std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
 
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     std::vector<mmid_row_mapping> mmid_row_mapping_host;
+    std::vector<mmid_row_mapping> mmid_skipped_row_host;
+    std::vector<ggml_sycl_gg_tile> mmid_tile_schedule_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
@@ -478,8 +539,46 @@ struct ggml_backend_sycl_context {
     }
 
 #ifdef GGML_SYCL_GRAPH
-    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    // Map from first node pointer to graph - allows multiple graphs per context when the
+    // computation is split across CPU/GPU (e.g. with --n-cpu-moe)
+    std::unordered_map<const void *, std::unique_ptr<ggml_sycl_graph>> sycl_graphs;
+
+    int64_t last_graph_eviction_sweep = 0;
+
+    ggml_sycl_graph * sycl_graph(const void * first_node_ptr) {
+        const int64_t time_now = ggml_time_us();
+        const int64_t eviction_timeout_us = g_ggml_sycl_graph_eviction_timeout * 1'000'000LL;
+
+        // sweep every half the eviction timeout, evicting graphs unused for >= the eviction timeout.
+        // Never evict the key being looked up on this same call: an interactive caller idling
+        // longer than the timeout between requests should re-warm, not have its own lookup wiped
+        // out by the sweep that runs immediately ahead of it.
+        if (time_now - last_graph_eviction_sweep >= eviction_timeout_us / 2) {
+            last_graph_eviction_sweep = time_now;
+            for (auto it = sycl_graphs.begin(); it != sycl_graphs.end(); ) {
+                if (it->first != first_node_ptr && time_now - it->second->last_used_time >= eviction_timeout_us) {
+                    it = sycl_graphs.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        auto it = sycl_graphs.find(first_node_ptr);
+        if (it == sycl_graphs.end()) {
+            it = sycl_graphs.emplace(first_node_ptr, std::make_unique<ggml_sycl_graph>()).first;
+        }
+        it->second->last_used_time = time_now;
+        return it->second.get();
+    }
 #endif
+
+    // True while the main stream is being recorded into a SYCL command graph.
+    // oneAPI forbids queue::wait()/wait_and_throw() on a queue in that state,
+    // so op code that would otherwise synchronize (e.g. the FA decode timing
+    // profile) must check this and skip. Not gated by GGML_SYCL_GRAPH so it is
+    // always a valid false default when graphs are compiled out.
+    bool graph_recording = false;
 
     ggml_sycl_pool & host_pool(int device) {
         if (host_pools[device] == nullptr) {
@@ -1034,9 +1133,20 @@ static T block_reduce(T val, T * shared_vals, int block_size_template) {
 }
 
 static __dpct_inline__ float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
-    const uint32_t bits = x * (x != 0x7F && x != 0xFF);
-    const __nv_fp8_e4m3 xf = *reinterpret_cast<const __nv_fp8_e4m3 *>(&bits);
-    return static_cast<float>(xf) / 2;
+    // UE4M3 is unsigned: 4 exp bits (bias 7), 3 mantissa bits, no sign, no NaN.
+    // exp == 0xF is a valid exponent (256-448 range), not NaN.
+    if (x == 0 || x == 0x7F) {
+        return 0.0f;
+    }
+    const int exp = (x >> 3) & 0xF;
+    const int man = x & 0x7;
+    float raw;
+    if (exp == 0) {
+        raw = man * (1.0f / 8.0f) * sycl::pow(2.0f, -6.0f);
+    } else {
+        raw = (1.0f + man / 8.0f) * sycl::pow(2.0f, (float) exp - 7.0f);
+    }
+    return raw * 0.5f;
 }
 
 #endif // GGML_SYCL_COMMON_HPP
