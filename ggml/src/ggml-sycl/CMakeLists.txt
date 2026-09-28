@@ -55,8 +55,15 @@ if (GGML_SYCL_SEPARATE_BUILD)
         endif()
     endforeach()
 
+    # multi-config generators put the module under a per-configuration directory and need
+    # --config on the nested build; single-config generators leave both empty
+    get_property(sycl_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if (sycl_multi_config)
+        set(sycl_cfg_arg --config $<CONFIG>)
+        set(sycl_cfg_dir $<CONFIG>/)
+    endif()
     set(sycl_lib ${CMAKE_SHARED_MODULE_PREFIX}ggml-sycl${CMAKE_SHARED_MODULE_SUFFIX})
-    set(sycl_out ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${sycl_lib})
+    set(sycl_out ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${sycl_cfg_dir}${sycl_lib})
 
     # ggml is not built standalone here, so use a wrapper project
     set(sycl_src ${CMAKE_CURRENT_BINARY_DIR}/nested-src)
@@ -71,10 +78,10 @@ if (GGML_SYCL_SEPARATE_BUILD)
         BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/nested
         LIST_SEPARATOR |
         CMAKE_ARGS ${sycl_args}
-        BUILD_COMMAND ${CMAKE_COMMAND} --build . --target ggml-sycl
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . ${sycl_cfg_arg} --target ggml-sycl
         BUILD_ALWAYS ON
         BUILD_BYPRODUCTS ${sycl_out}
-        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_if_different <BINARY_DIR>/bin/${sycl_lib} ${sycl_out})
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_if_different <BINARY_DIR>/bin/${sycl_cfg_dir}${sycl_lib} ${sycl_out})
     add_dependencies(ggml ggml-sycl)
 
     if (GGML_BACKEND_DIR)
