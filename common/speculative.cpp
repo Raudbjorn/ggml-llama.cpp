@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
@@ -946,6 +947,12 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 // pre-norm hidden state of this position becomes g_embd for the next step
                 const float * prenorm = llama_get_embeddings_nextn_ith(ctx_dft, i_batch);
                 ++i_batch;
+                if (prenorm == nullptr) {
+                    SPC_ERR("failed to get embeddings for seq_id=%d\n", (int) seq_id);
+                    drafting[seq_id] = false;
+                    --n_drafting;
+                    continue;
+                }
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1143,8 +1150,16 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         block_size = 16;
         {
             char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dflash.block_size", buf, sizeof(buf)) >= 0) {
-                block_size = std::atoi(buf);
+            const int32_t len = llama_model_meta_val_str(model_dft, "dflash.block_size", buf, sizeof(buf));
+            if (len >= 0) {
+                int32_t parsed = 0;
+                const auto result = std::from_chars(buf, buf + std::strlen(buf), parsed);
+                if ((size_t) len >= sizeof(buf) || result.ec != std::errc() ||
+                        result.ptr != buf + len || parsed < 1) {
+                    LOG_WRN("%s: invalid dflash.block_size '%s'; using %d\n", __func__, buf, block_size);
+                } else {
+                    block_size = parsed;
+                }
             }
             if (llama_model_meta_val_str(model_dft, "dflash.sample_from_anchor", buf, sizeof(buf)) >= 0) {
                 sample_from_anchor = std::strcmp(buf, "true") == 0;
@@ -2092,6 +2107,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             for (int32_t i = 0; i < n_rows; ++i) {
                 const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+                if (h == nullptr) {
+                    SPC_ERR("failed to get target embeddings for seq_id=%d\n", (int) seq_id);
+                    return false;
+                }
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
             }
 
@@ -2358,6 +2377,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 common_sampler_sample(smpl, ctx_dft, i_last[seq_id], true);
                 const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
+                if (h_row == nullptr) {
+                    SPC_ERR("failed to get embeddings for seq_id=%d\n", (int) seq_id);
+                    drafting[seq_id] = false;
+                    --n_drafting;
+                    continue;
+                }
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
