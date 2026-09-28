@@ -327,14 +327,20 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
     }
 
     // Decide whether rows of seq_id starting at position pos continue its draft memory, the same way
-    // the draft's batch allocator will judge them: an M-RoPE draft accepts a forward jump (image rows
-    // advance positions by the grid size), any other draft needs pos == pos_max + 1. Rows behind the
-    // draft memory mean stale draft rows, a bug upstream of here: trim them and say so. Rows ahead
-    // of it on a non-M-RoPE draft mean the draft lags (a row it could not take), so skip the sequence.
-    // An M-RoPE draft cannot tell a lag from an image jump and keeps mirroring across the gap.
-    bool continues_draft(llama_context * ctx_dft, llama_seq_id seq_id, llama_pos pos) {
+    // the draft's batch allocator (llama_batch_allocr::init) will judge them: an M-RoPE draft accepts
+    // a forward jump (image rows advance positions by the grid size), and for embedding rows also
+    // pos == pos_max (an image split across sub-batches repeats its temporal position); any other
+    // draft needs pos == pos_max + 1. Rows behind that are stale draft rows, a bug upstream of here:
+    // trim them and say so. Rows ahead of it on a non-M-RoPE draft mean the draft lags (a row it
+    // could not take), so skip the sequence. An M-RoPE draft cannot tell a lag from an image jump
+    // and keeps mirroring across the gap.
+    bool continues_draft(llama_context * ctx_dft, llama_seq_id seq_id, llama_pos pos, bool embd_row) {
         auto * mem = llama_get_memory(ctx_dft);
         const llama_pos pos_max = llama_memory_seq_pos_max(mem, seq_id);
+        const bool mrope = batch.n_pos > 1;
+        if (mrope && embd_row && pos == pos_max) {
+            return true;
+        }
         if (pos <= pos_max) {
             SPC_WRN("seq %d: stale draft memory (ends at %d, target rows start at %d), trimming\n", seq_id, pos_max, pos);
             if (!llama_memory_seq_rm(mem, seq_id, pos, -1)) {
@@ -378,7 +384,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
                 continue;
             }
             if (mirror[s] == 0) {
-                mirror[s] = continues_draft(ctx_dft, s, t.pos[0]) ? 1 : -1;
+                mirror[s] = continues_draft(ctx_dft, s, t.pos[0], /*embd_row =*/ t.id == LLAMA_TOKEN_NULL) ? 1 : -1;
             }
             if (mirror[s] < 0) {
                 continue;
@@ -435,7 +441,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
             }
 
             // the seed must continue the draft memory, otherwise this sequence is not mirrored
-            if (!continues_draft(ctx_dft, seq_id, dp.pos0)) {
+            if (!continues_draft(ctx_dft, seq_id, dp.pos0, /*embd_row =*/ false)) {
                 continue;
             }
 
