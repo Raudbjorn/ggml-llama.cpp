@@ -1376,6 +1376,21 @@ static void test_string_methods(testing & t) {
         "bXnXna"
     );
 
+    t.test("string.format() rejects missing arguments", [](testing & t) {
+        jinja::context ctx("");
+        auto fmt = jinja::mk_val<jinja::value_string>("{} {}");
+        jinja::func_args args(ctx);
+        args.push_back(fmt);
+        args.push_back(jinja::mk_val<jinja::value_string>("one"));
+        bool rejected = false;
+        try {
+            fmt->get_builtins().at("format")(args);
+        } catch (const jinja::raised_exception &) {
+            rejected = true;
+        }
+        t.assert_true("Missing format arguments must raise, not read past the argument list", rejected);
+    });
+
     test_template(t, "string.format() auto numbering",
         "{{ '<{}|{}>'.format(s, 42) }}",
         {{"s", "hello"}},
