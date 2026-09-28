@@ -2382,8 +2382,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // input_cpy on that stream, so it needs no host-side wait. Without events the wait
                 // below is a full synchronize: the host blocks until the device drains, then issues a
                 // blocking copy while the device idles. Only for backends that declare stream order
-                // ("ggml_backend_async_is_stream_ordered"); GGML_SCHED_COPY_SYNC=1 restores the wait.
+                // ("ggml_backend_async_is_stream_ordered") and only without pipeline-parallel events,
+                // whose path stays as it was; GGML_SCHED_COPY_SYNC=1 restores the wait.
                 const bool stream_ordered = sched->stream_ordered[split_backend_id] &&
+                    sched->events[split_backend_id][sched->cur_copy] == NULL &&
                     !ggml_backend_sched_copy_sync_forced() && input->buffer != NULL &&
                     ggml_backend_buffer_is_host(input->buffer) && split_backend->iface.set_tensor_async != NULL;
 

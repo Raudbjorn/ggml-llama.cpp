@@ -36,7 +36,10 @@ Decode t/s did not change beyond noise.
    the generic branch, which master does not have. Its `stream_ordered` branch already contains
    the async upload that 0010 introduces, so for single-GPU (no events) nothing else is needed.
    0010's remaining change affects only the pipeline-parallel event path, which this fork does
-   not run.
+   not run. That path is excluded explicitly: `stream_ordered` also requires that no event
+   exists for the split backend (`sched->events[b][cur_copy] == NULL`), so with
+   `n_copies > 1` the code is exactly as before. (The first push of this PR missed that. Review
+   caught the new branch replacing the event path's blocking fallback.)
 2. **Only backends that declare stream order, currently SYCL only** (the user's choice).
    - A new proc-address hook, `ggml_backend_async_is_stream_ordered`, with its typedef in
      `ggml-backend.h`. The scheduler caches its answer per backend in `ggml_backend_sched_new`.
@@ -56,6 +59,11 @@ Decode t/s did not change beyond noise.
      is never a scheduler split backend;
    - the in-order property itself was confirmed on the A770 in
      `sycl-prefetch-second-queue-2026-09-28.md`.
+   - **This holds for one device only.** With several SYCL devices, tensor-split `MUL_MAT`
+     submits to other devices' queues (`ctx.stream(i, is)`) and joins them back onto the main
+     queue with barriers only at the end of the op. Stream order would then depend on every such
+     path always joining before it returns, which has not been audited, so the hook returns
+     `ggml_sycl_info().device_count == 1`. Review caught this on the first push.
 4. **A host-source lifetime guard, which is new relative to the patches.** The device reads the
    host source when the async memcpy executes, not at submit time. 0010's comment argues the
    source cannot be overwritten early, because any later host split first synchronizes the
@@ -103,4 +111,6 @@ Decode t/s did not change beyond noise.
 
 - Vulkan and OpenVINO behaviour is unchanged by construction: they do not export the hook. That
   is verified from source only.
-- The pipeline-parallel event path (`n_copies > 1`) is unchanged.
+- The pipeline-parallel event path (`n_copies > 1`) is unchanged by construction: the
+  `stream_ordered` condition requires no events. Multi-device SYCL keeps the old syncs, because
+  the hook returns false there. Neither configuration was run.
