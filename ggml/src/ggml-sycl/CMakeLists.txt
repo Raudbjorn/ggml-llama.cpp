@@ -64,6 +64,12 @@ if (GGML_SYCL_SEPARATE_BUILD)
     endif()
     set(sycl_lib ${CMAKE_SHARED_MODULE_PREFIX}ggml-sycl${CMAKE_SHARED_MODULE_SUFFIX})
     set(sycl_out ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${sycl_cfg_dir}${sycl_lib})
+    # generator expressions in BYPRODUCTS need CMake 3.20; nothing consumes the module as a build
+    # input, so older CMake with a multi-config generator only loses it from the clean target
+    set(sycl_byproducts ${sycl_out})
+    if (sycl_multi_config AND CMAKE_VERSION VERSION_LESS 3.20)
+        set(sycl_byproducts "")
+    endif()
 
     # ggml is not built standalone here, so use a wrapper project
     set(sycl_src ${CMAKE_CURRENT_BINARY_DIR}/nested-src)
@@ -80,7 +86,7 @@ if (GGML_SYCL_SEPARATE_BUILD)
         CMAKE_ARGS ${sycl_args}
         BUILD_COMMAND ${CMAKE_COMMAND} --build . ${sycl_cfg_arg} --target ggml-sycl
         BUILD_ALWAYS ON
-        BUILD_BYPRODUCTS ${sycl_out}
+        BUILD_BYPRODUCTS ${sycl_byproducts}
         INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_if_different <BINARY_DIR>/bin/${sycl_cfg_dir}${sycl_lib} ${sycl_out})
     add_dependencies(ggml ggml-sycl)
 
