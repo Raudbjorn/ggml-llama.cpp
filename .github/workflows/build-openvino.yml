@@ -35,7 +35,7 @@ env:
 
 jobs:
   ubuntu-24-openvino:
-    runs-on: [self-hosted, Linux, Intel, OpenVINO]
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || fromJSON('["self-hosted", "Linux", "Intel", "OpenVINO"]') }}
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
@@ -84,6 +84,7 @@ jobs:
           ctest --test-dir build/ReleaseOV -L main -E "test-llama-archs" --verbose --timeout 2000
 
       - name: Test (GPU)
+        if: github.event_name != 'pull_request'
         id: cmake_test_gpu
         # TODO: fix and re-enable the `test-llama-archs` test below
         run: |

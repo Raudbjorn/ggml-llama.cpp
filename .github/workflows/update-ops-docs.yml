@@ -16,7 +16,7 @@ on:
 
 jobs:
     update-ops-docs:
-        runs-on: [self-hosted, fast, ARM64]
+        runs-on: ubuntu-24.04
 
         steps:
         - name: Checkout repository
