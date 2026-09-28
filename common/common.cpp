@@ -1642,10 +1642,17 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
     int ret;
     {
         common_batch batch = common_batch_get_one(ctx, tmp);
-        ret = batch.size() == (int32_t) tmp.size() ? llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) : -1;
+        if (batch.size() == 0) {
+            COM_ERR("%s", "could not build the probe batch\n");
+            ret = -1;
+        } else {
+            ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            if (ret != 0) {
+                COM_ERR("llama_process() failed: %d\n", ret);
+            }
+        }
     }
     if (ret != 0) {
-        COM_ERR("llama_process() failed: %d\n", ret);
         res = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
         goto done;
     }

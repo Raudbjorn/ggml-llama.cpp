@@ -77,6 +77,14 @@ Fork-specific review:
   and the device copy is a pool allocation reused only in stream order. Without this every MoE
   layer with a skipped slot would have paid a host sync in the batched path, which matters once
   expert partitioning makes `-1` ids routine.
+- Master's #67 (grouped dequant XMX GEMM for IQ weights, merged into this branch) consumes the same
+  sorted rows: skipped slots own no slice, so its row-count argument is `n_valid_rows`, and the
+  skip cases include IQ4_NL so the grouped path meets skipped slots in the tests on devices where
+  it dispatches. On this A770 it never does (`fused_gemm_f16_supported()` rejects the reported
+  matrix combinations, as #67 documents; a `SYCL_UR_TRACE` run creates no grouped kernel), so the
+  change is verified by reading here and the IQ4_NL cases run through the library fallback. The scheduler's
+  host-weight expert copy in `ggml-backend.cpp` ignores `-1` ids and copies nothing for an
+  all-skipped node; it was the last host-side reader of MoE ids that asserted `id >= 0`.
 - MoE cache providers need no change: `moe-cache.cpp` `plan()` (SYCL) and
   `ggml-vulkan-moe-cache.cpp` (Vulkan) preset every slot index to -1 and `continue` on
   `expert < 0`, so a skipped slot is a miss owned by the CPU fallback, and the CPU hook in
@@ -221,6 +229,16 @@ the DFlash and MTP drafts where the fork carries its own logic on top of upstrea
   corrected on the thread), the result is clamped at zero, `n_seq_id` without `seq_id` is treated
   as one sequence, `llama_batch_ext_add_seq` is checked, and an unconvertible row yields an empty
   batch that the legacy `common_speculative_process` overload reports as failure.
+  Fifth pass: EAGLE3 and MTP now require the draft vocab to cover the target's at init (EAGLE3
+  decodes target token ids in `process()`; the EAGLE3 and DFlash converters inherit the target
+  tokenizer but pad to the draft config's `vocab_size`, so only a misconverted or differently
+  padded draft trips it); DFlash needs no such rule. Draft-simple's continuity check follows the
+  draft allocator: an M-RoPE draft accepts forward position jumps, stale draft rows are trimmed
+  with a warning, and the rejection log no longer promises recovery on the next request (a
+  prompt-cache entry that stores a lagging draft memory keeps that prefix undrafted). MTP keeps
+  its deferred catch-up rows until the whole batch is built; DFlash clamps `n_max` so one noise
+  block per sequence fits the draft batch; the draft context is sized to at least the target's
+  `n_batch`.
   Left as upstream #29385 design: the mtmd callback copying embeddings per sub-batch (every
   current draft ignores or zero-substitutes embedding batches, so the copy is wasted, noted for
   upstream), the legacy conversion living beside `llama_batch_compat`, and one seq id per draft
@@ -307,6 +325,12 @@ Rejected. Re-evaluate only if upstream merges #28277 with a source build of the 
   `--hf-repo`, and the fork's build recipe sets `LLAMA_CURL=OFF`.
 - The two Vulkan build fixes were verified only by a Vulkan build and test-backend-ops on this
   box (shaderc 2026.3, ANV on DG2); other shaderc versions were not tried.
+- The M-RoPE branch of draft-simple's continuity check, the EAGLE3/MTP vocab rule and the DFlash
+  block clamp are verified by reading and building only: no vision draft pair, EAGLE3 or DFlash
+  model is on disk. An M-RoPE draft cannot tell a lag from an image jump and keeps mirroring across
+  the gap after a rejected token (degraded drafts, no failure).
+- The scheduler's `-1` handling in the host-weight expert-copy path is verified by build only; no
+  graph in this tree reaches that path with `-1` ids.
 - `test-backend-ops -o MUL_MAT_ID` with SYCL graphs enabled aborts in graph capture on this fork
   before and after the port (pre-existing, sequence-dependent); the MUL_MAT_ID regression tables
   are graphs-off runs.
