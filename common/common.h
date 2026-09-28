@@ -1147,13 +1147,15 @@ common_batch common_batch_get_one(struct llama_context * ctx, const llama_tokens
 common_batch common_batch_from_llama_batch(struct llama_context * ctx, const llama_batch & batch);
 
 // decodes a single batch of tokens for a prompt and manages session tokens
-// n_new selects the suffix of all_tokens; n_new == 0 succeeds without changing state
+// n_new selects the suffix of all_tokens and must be in [0, all_tokens.size()]; otherwise returns false
+// without changing state; n_new == 0 succeeds without changing state
 // advances n_past after each successful decode; returns false if a batch cannot be built or a decode fails
 // earlier progress is retained on failure; state-file save failures do not affect the return value
 //
-// Note: With save_state and n_new > 1 (which must be <= n_batch), we save state before the last token
-// so we can replay it for compatibility with all memory types. Recurrent/hybrid models cannot remove
-// tokens from memory, so this approach works across all model architectures.
+// Note: With save_state and n_new > 1, we save state before the last token so we can replay it for
+// compatibility with all memory types (n_new > n_batch returns false without changing state).
+// Recurrent/hybrid models cannot remove tokens from memory, so this approach works across all
+// model architectures.
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
                 const llama_tokens & all_tokens,
