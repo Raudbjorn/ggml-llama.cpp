@@ -146,6 +146,7 @@ struct decode_embd_batch {
     }
 
     // render the entries [offset, offset + n) into a batch owned by this object, ready for llama_process()
+    // returns nullptr when the batch cannot take the rows (n larger than the context batch size)
     llama_batch_ext * render(llama_context * lctx, int offset, int n) {
         GGML_ASSERT(offset >= 0 && n > 0 && offset + n <= n_tokens);
         if (!batch) {
@@ -155,7 +156,9 @@ struct decode_embd_batch {
         for (int i = offset; i < offset + n; i++) {
             const llama_embd e = { embd + (size_t) i * n_mmproj_embd, 1, (size_t) n_mmproj_embd };
             const int32_t idx = llama_batch_ext_add_embd(batch.get(), seq_id, e);
-            GGML_ASSERT(idx >= 0);
+            if (idx < 0) {
+                return nullptr;
+            }
 
             llama_pos p[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
             for (int j = 0; j < n_pos_per_embd; j++) {

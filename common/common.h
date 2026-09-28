@@ -1123,11 +1123,15 @@ struct common_batch {
     // pos points to n_pos positions
     int32_t add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output);
 
+    // remove the last entry, e.g. to roll back an add() whose set_embd() failed; false if empty
+    bool remove_last();
+
     int32_t size() const { return (int32_t) tokens.size(); }
 };
 
 // create a single-sequence batch from a list of tokens
 // last token always have output_logits set to true
+// returns an empty batch (size() == 0) if a token cannot be added (batch full or token outside the vocab)
 common_batch common_batch_get_one(struct llama_context * ctx, const llama_tokens & tokens);
 
 // convert a legacy llama_batch, applying its defaults: seq 0, positions continue from memory, last token is output

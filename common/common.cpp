@@ -1556,7 +1556,11 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
         if (llama_model_has_encoder(model)) {
             common_batch batch = common_batch_get_one(lctx, tmp);
-            llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
+            if (batch.size() != (int32_t) tmp.size()) {
+                LOG_WRN("%s: skipping the encoder warmup, the warmup batch could not be built\n", __func__);
+            } else {
+                llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
+            }
             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
             if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
                 decoder_start_token_id = bos;
@@ -1567,7 +1571,11 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         if (llama_model_has_decoder(model)) {
             tmp.resize(std::min(tmp.size(), (size_t) params.n_batch));
             common_batch batch = common_batch_get_one(lctx, tmp);
-            llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            if (batch.size() != (int32_t) tmp.size()) {
+                LOG_WRN("%s: skipping the decoder warmup, the warmup batch could not be built\n", __func__);
+            } else {
+                llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            }
         }
         llama_memory_clear(llama_get_memory(lctx), true);
         llama_synchronize(lctx);
@@ -1634,7 +1642,7 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
     int ret;
     {
         common_batch batch = common_batch_get_one(ctx, tmp);
-        ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+        ret = batch.size() == (int32_t) tmp.size() ? llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) : -1;
     }
     if (ret != 0) {
         COM_ERR("llama_process() failed: %d\n", ret);
@@ -2318,6 +2326,14 @@ bool common_batch::set_embd(int32_t idx, llama_embd embd) {
     return true;
 }
 
+bool common_batch::remove_last() {
+    if (tokens.empty()) {
+        return false;
+    }
+    tokens.pop_back();
+    return llama_batch_ext_remove_last(batch.get());
+}
+
 int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output) {
     const int32_t idx = llama_batch_ext_add_embd(batch.get(), seq_id, embd);
     if (idx < 0) {
@@ -2351,25 +2367,24 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
     const llama_seq_id n_seq_max = (llama_seq_id) llama_n_seq_max(ctx);
     std::vector<llama_pos> pos_next(n_seq_max, 0);
     if (!batch.pos) {
-        // a row shared by several sequences advanced every one of them
+        // mirror llama_batch_compat::init, which generated the positions at decode: it counts a row
+        // against its first sequence id only, so a row shared with other sequences advanced their
+        // memory without advancing their position counter
         std::vector<int32_t> n_rows(n_seq_max, 0);
         for (int32_t i = 0; i < batch.n_tokens; ++i) {
-            const int32_t n_sid = batch.seq_id && batch.n_seq_id ? batch.n_seq_id[i] : 1;
-            for (int32_t j = 0; j < n_sid; ++j) {
-                const llama_seq_id s = batch.seq_id ? batch.seq_id[i][j] : 0;
-                if (s >= 0 && s < n_seq_max) {
-                    n_rows[s]++;
-                }
+            const llama_seq_id s = batch.seq_id ? batch.seq_id[i][0] : 0;
+            if (s >= 0 && s < n_seq_max) {
+                n_rows[s]++;
             }
         }
         for (llama_seq_id s = 0; s < n_seq_max; ++s) {
-            pos_next[s] = llama_memory_seq_pos_max(mem, s) + 1 - n_rows[s];
+            pos_next[s] = std::max(0, llama_memory_seq_pos_max(mem, s) + 1 - n_rows[s]);
         }
     }
 
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
-        const int32_t      n_sid  = batch.n_seq_id ? batch.n_seq_id[i]  : 1;
-        const llama_seq_id seq_id = batch.seq_id   ? batch.seq_id[i][0] : 0;
+        const int32_t      n_sid  = batch.seq_id && batch.n_seq_id ? batch.n_seq_id[i]  : 1;
+        const llama_seq_id seq_id = batch.seq_id                    ? batch.seq_id[i][0] : 0;
 
         llama_pos pos[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
         if (!batch.pos) {
@@ -2394,6 +2409,7 @@ common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batc
         if (has_token) {
             idx = res.add(batch.token[i], pos[0], seq_id, output);
             if (idx >= 0 && has_embd && !res.set_embd(idx, embd)) {
+                res.remove_last();
                 idx = -2;
             }
         } else {
@@ -2437,9 +2453,10 @@ common_batch common_batch_get_one(llama_context * ctx, const llama_tokens & toke
     for (size_t i = 0; i < tokens.size(); ++i) {
         const bool output = i == tokens.size() - 1;
         if (batch.add(tokens[i], pos, 0, output) < 0) {
-            LOG_ERR("%s: could not add token %zu of %zu (batch full or token outside the vocab), the batch is truncated\n",
+            LOG_ERR("%s: could not add token %zu of %zu (batch full or token outside the vocab), returning an empty batch\n",
                     __func__, i, tokens.size());
-            break;
+            batch.clear();
+            return batch;
         }
         pos++;
     }
@@ -2472,6 +2489,10 @@ bool common_prompt_batch_decode(
         // is the reason for this logic.
         llama_tokens prefix_tokens(all_tokens.begin() + offset, all_tokens.begin() + offset + n_tokens_before_last);
         common_batch batch_prefix = common_batch_get_one(ctx, prefix_tokens);
+        if (batch_prefix.size() != (int32_t) prefix_tokens.size()) {
+            COM_ERR("%s", "failed to build the prompt batch\n");
+            return false;
+        }
         if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch_prefix.get())) {
             COM_ERR("%s", "failed to eval\n");
             return false;
@@ -2495,6 +2516,10 @@ bool common_prompt_batch_decode(
     } else {
         llama_tokens new_tokens(all_tokens.begin() + offset, all_tokens.begin() + offset + n_new);
         common_batch batch = common_batch_get_one(ctx, new_tokens);
+        if (batch.size() != (int32_t) new_tokens.size()) {
+            COM_ERR("%s", "failed to build the prompt batch\n");
+            return false;
+        }
         if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             COM_ERR("%s", "failed to eval\n");
             return false;

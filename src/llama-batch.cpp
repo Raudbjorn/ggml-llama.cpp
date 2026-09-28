@@ -1199,7 +1199,7 @@ int32_t llama_batch_ext_add_token(llama_batch_ext * batch, llama_seq_id seq_id, 
     }
     if (!batch->set_token_id(idx, id)) {
         // roll the entry back: a row without an id would fail the content-type check at decode
-        batch->tokens.pop_back();
+        llama_batch_ext_remove_last(batch);
         return -2;
     }
     return idx;
@@ -1212,10 +1212,26 @@ int32_t llama_batch_ext_add_embd(llama_batch_ext * batch, llama_seq_id seq_id, l
     }
     if (!batch->set_token_embd(idx, embd)) {
         // roll the entry back, see llama_batch_ext_add_token
-        batch->tokens.pop_back();
+        llama_batch_ext_remove_last(batch);
         return -2;
     }
     return idx;
+}
+
+bool llama_batch_ext_remove_last(llama_batch_ext * batch) {
+    if (batch->tokens.empty()) {
+        return false;
+    }
+    const auto & t = batch->tokens.back();
+    if (t.has_embd) {
+        // embeddings are appended in entry order, so the last entry's row is the tail
+        batch->embd.resize(t.embd_off);
+        if (batch->embd.empty()) {
+            batch->n_embd = 0;
+        }
+    }
+    batch->tokens.pop_back();
+    return true;
 }
 
 bool llama_batch_ext_add_seq(llama_batch_ext * batch, int32_t idx, llama_seq_id seq_id) {

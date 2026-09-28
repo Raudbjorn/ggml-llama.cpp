@@ -173,7 +173,12 @@ int32_t mtmd_helper_decode_image_chunk(
         LOG_INF("decoding %s batch %d/%d, n_tokens_batch = %d\n", name, i_batch+1, n_img_batches, n_tokens_batch);
 
         int64_t t1 = ggml_time_ms();
-        int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch_embd.render(lctx, pos_offset, n_tokens_batch));
+        llama_batch_ext * batch_view = batch_embd.render(lctx, pos_offset, n_tokens_batch);
+        if (!batch_view) {
+            LOG_ERR("failed to build the %s batch: %d rows do not fit the context batch\n", name, n_tokens_batch);
+            return -1;
+        }
+        int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch_view);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             return ret;
@@ -223,7 +228,10 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
             int32_t idx     = -1;
             for (; i < n_tokens && n_added < n_batch; i++) {
                 idx = llama_batch_ext_add_token(text_batch.get(), seq_id, tokens[i]);
-                GGML_ASSERT(idx >= 0);
+                if (idx < 0) {
+                    LOG_ERR("failed to add text token %d to the batch (error %d)\n", (int) tokens[i], (int) idx);
+                    return -1;
+                }
                 llama_pos pos = n_past++;
                 llama_batch_ext_set_pos(text_batch.get(), idx, &pos);
                 n_added++;
