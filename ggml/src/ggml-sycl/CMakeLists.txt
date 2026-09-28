@@ -54,7 +54,14 @@ if (GGML_SYCL_SEPARATE_BUILD)
     # package discovery and install RPATH settings do not reach the nested configure on their own;
     # this fork's documented recipe supplies them as cache variables (packaging/arch/PKGBUILD).
     # list values are joined with | and split again by LIST_SEPARATOR below
-    foreach (var MKL_DIR TBB_DIR IntelSYCL_DIR CMAKE_PREFIX_PATH CMAKE_INSTALL_RPATH CMAKE_BUILD_WITH_INSTALL_RPATH)
+    set(sycl_forward_vars MKL_DIR TBB_DIR IntelSYCL_DIR DNNL_DIR DNNL_GPU_VENDOR CMAKE_PREFIX_PATH
+                          CMAKE_INSTALL_RPATH CMAKE_BUILD_WITH_INSTALL_RPATH CMAKE_MAKE_PROGRAM)
+    get_property(sycl_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if (sycl_multi_config)
+        # custom configurations (e.g. Profile) must exist in the nested project too
+        list(APPEND sycl_forward_vars CMAKE_CONFIGURATION_TYPES)
+    endif()
+    foreach (var ${sycl_forward_vars})
         if (DEFINED ${var})
             string(REPLACE ";" "|" sycl_arg_value "${${var}}")
             list(APPEND sycl_args "-D${var}=${sycl_arg_value}")
@@ -63,7 +70,6 @@ if (GGML_SYCL_SEPARATE_BUILD)
 
     # multi-config generators put the module under a per-configuration directory and need
     # --config on the nested build; single-config generators leave both empty
-    get_property(sycl_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     if (sycl_multi_config)
         set(sycl_cfg_arg --config $<CONFIG>)
         set(sycl_cfg_dir $<CONFIG>/)
