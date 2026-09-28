@@ -374,6 +374,46 @@ if (GGML_SYCL_HOST_MEM_FALLBACK)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_HOST_MEM_FALLBACK)
 endif()
 
+# XMX gather GEMMs (fused-gemm.cpp, fork PR #67): dequant-in-GEMM kernels for IQ weight formats
+# that the runtime env var GGML_SYCL_XMX_GATHER_TYPES selects between. Full description:
+# docs/backend/SYCL.md, section "XMX gather GEMMs and DG2 AOT builds".
+#
+# The kernels use a sub-group-16 8x16x16 fp16 joint_matrix shape. DG2 (Alchemist, Arc A-series)
+# reports no such matrix combination (checked on the A770, acm-g10), so the runtime gate
+# (ggml_sycl_fused_dequant_gemm_f16_device_ok) never selects them there. JIT builds are fine,
+# because a kernel is only compiled for the device when first launched. Ahead-of-time builds
+# compile every kernel for the listed targets at link time, and IGC 2.41.5 crashes on these for
+# acm-g10 ("IGC: Internal Compiler Error: Floating point exception", every IQ instantiation;
+# the other DG2 variants were not tried but share the missing matrix shape).
+#
+# So:
+#   - GGML_SYCL_XMX_GATHER=ON (default): kernels are built, unless GGML_SYCL_DEVICE_ARCH names a
+#     DG2 device by an ocloc name this recognizes: acm-*, dg2*, the xe-hpg release, or IP version
+#     12.55-12.57. In that case they are compiled out automatically, for every target in the
+#     list, since the sources are compiled once for all of them. Other spellings (e.g. Flex/ATS-M
+#     names) are not matched; use OFF for those.
+#   - GGML_SYCL_XMX_GATHER=OFF: always compiled out.
+# Compiled out means GGML_SYCL_NO_XMX_GATHER is defined for ggml-sycl: the entry points return
+# false, the callers take their regular paths, GGML_SYCL_XMX_GATHER_TYPES has no effect, and the
+# startup log prints "XMX gather GEMMs disabled by compile flag". On DG2 this changes nothing at
+# runtime (the kernels could not be selected there anyway).
+option(GGML_SYCL_XMX_GATHER
+       "ggml: build the SYCL XMX gather GEMMs (auto-off when GGML_SYCL_DEVICE_ARCH names a DG2 device)" ON)
+string(TOLOWER "${GGML_SYCL_DEVICE_ARCH}" _ggml_sycl_arch_lower)
+if (NOT GGML_SYCL_XMX_GATHER)
+    message(STATUS "GGML_SYCL_XMX_GATHER=OFF: XMX gather GEMMs compiled out")
+    set(_ggml_sycl_xmx_gather OFF)
+elseif (_ggml_sycl_arch_lower MATCHES "(^|[,; ])(acm|dg2|xe-hpg|12\\.5[5-7])")
+    message(STATUS "GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} names a DG2 device: XMX gather GEMMs "
+                   "compiled out for all listed targets (AOT for DG2 crashes IGC on them; DG2 never runs them)")
+    set(_ggml_sycl_xmx_gather OFF)
+else()
+    set(_ggml_sycl_xmx_gather ON)
+endif()
+if (NOT _ggml_sycl_xmx_gather)
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_NO_XMX_GATHER)
+endif()
+
 if (GGML_SYCL_DEVICE_ARCH)
     message(STATUS "GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} (AOT via spir64_gen)")
     target_compile_options(
