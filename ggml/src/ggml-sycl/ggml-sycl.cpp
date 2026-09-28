@@ -5612,7 +5612,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
             nb11 == sizeof(float)*ne10 && nb1 == sizeof(float)*ne0) {
             grouped = ggml_sycl_grouped_dequant_gemm_f16(src0->type, src0_original, nb02,
                                                          (const float *) src1_contiguous.get(), (float *) dst_contiguous.get(),
-                                                         expert_row_offsets.data(), n_as, ne01, ne10, n_routed_rows,
+                                                         // skipped slots (-1 ids) own no slice, so the
+                                                         // slices cover n_valid_rows, not n_routed_rows
+                                                         expert_row_offsets.data(), n_as, ne01, ne10, n_valid_rows,
                                                          ctx.mmid_tile_schedule_host, ctx.pool(), stream);
         }
 
