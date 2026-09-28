@@ -10,6 +10,12 @@ endif()
 # thanks ggml backends talking only through C API, we can freely build one backend with it's own compiler
 # so this branch does exactly that: we build this backend as externalproject, an existing pattern from hexagon backend
 if (GGML_SYCL_SEPARATE_BUILD)
+    if (CMAKE_GENERATOR MATCHES "^Visual Studio")
+        # the nested project inherits the Visual Studio generator and its MSVC toolset, and
+        # CMAKE_CXX_COMPILER does not select a toolset there; use Ninja (docs/backend/SYCL.md),
+        # or the non-separate build, which already switches ggml-sycl to the Intel toolset
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD does not support Visual Studio generators, use -G Ninja")
+    endif()
     if (NOT GGML_BACKEND_DL)
         # only tested with shared libraries
         message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD requires GGML_BACKEND_DL")
