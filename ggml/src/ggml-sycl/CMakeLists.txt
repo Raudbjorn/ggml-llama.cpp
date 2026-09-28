@@ -45,6 +45,16 @@ if (GGML_SYCL_SEPARATE_BUILD)
         endif()
     endforeach()
 
+    # package discovery and install RPATH settings do not reach the nested configure on their own;
+    # this fork's documented recipe supplies them as cache variables (packaging/arch/PKGBUILD).
+    # list values are joined with | and split again by LIST_SEPARATOR below
+    foreach (var MKL_DIR TBB_DIR IntelSYCL_DIR CMAKE_PREFIX_PATH CMAKE_INSTALL_RPATH CMAKE_BUILD_WITH_INSTALL_RPATH)
+        if (DEFINED ${var})
+            string(REPLACE ";" "|" sycl_arg_value "${${var}}")
+            list(APPEND sycl_args "-D${var}=${sycl_arg_value}")
+        endif()
+    endforeach()
+
     set(sycl_lib ${CMAKE_SHARED_MODULE_PREFIX}ggml-sycl${CMAKE_SHARED_MODULE_SUFFIX})
     set(sycl_out ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${sycl_lib})
 
@@ -59,6 +69,7 @@ if (GGML_SYCL_SEPARATE_BUILD)
     ExternalProject_Add(ggml-sycl
         SOURCE_DIR ${sycl_src}
         BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/nested
+        LIST_SEPARATOR |
         CMAKE_ARGS ${sycl_args}
         BUILD_COMMAND ${CMAKE_COMMAND} --build . --target ggml-sycl
         BUILD_ALWAYS ON
