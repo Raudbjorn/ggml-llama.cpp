@@ -1224,8 +1224,17 @@ bool llama_batch_ext_remove_last(llama_batch_ext * batch) {
     }
     const auto & t = batch->tokens.back();
     if (t.has_embd) {
-        // embeddings are appended in entry order, so the last entry's row is the tail
-        batch->embd.resize(t.embd_off);
+        // rows are appended in set_token_embd() call order, not entry order, so the removed row can
+        // sit anywhere in embd: erase exactly that row and move the rows stored after it down
+        const size_t off = t.embd_off;
+        const size_t len = batch->n_embd;
+        batch->embd.erase(batch->embd.begin() + off, batch->embd.begin() + off + len);
+        for (size_t i = 0; i + 1 < batch->tokens.size(); ++i) {
+            auto & other = batch->tokens[i];
+            if (other.has_embd && other.embd_off > off) {
+                other.embd_off -= len;
+            }
+        }
         if (batch->embd.empty()) {
             batch->n_embd = 0;
         }
