@@ -160,7 +160,7 @@ common_chat_msg_spans common_chat_msg_delimiters::split(const llama_tokens & tok
             continue;
         }
         for (const auto & d : delimiters) {
-            if (i + d.tokens.size() > tokens.size()) {
+            if (d.tokens.empty() || d.tokens.size() > tokens.size() - i) {
                 continue;
             }
             if (std::equal(d.tokens.begin(), d.tokens.end(), tokens.begin() + i)) {

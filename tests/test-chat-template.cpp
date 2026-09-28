@@ -348,6 +348,19 @@ static common_chat_msg simple_msg(const std::string & role, const std::string & 
 }
 
 int main_automated_tests(void) {
+    // Empty tokenized delimiters must not shadow real delimiters or split every token.
+    {
+        const common_chat_msg_delimiters delims = {{
+            { COMMON_CHAT_ROLE_SYSTEM, "", {} },
+            { COMMON_CHAT_ROLE_USER, "", { 10, 11 } },
+        }};
+        const auto spans = delims.split({ 99, 10, 11, 100 }).spans;
+        assert(spans.size() == 1);
+        assert(spans[0].role == COMMON_CHAT_ROLE_USER && spans[0].pos == 1 && spans[0].len == 3);
+        assert(delims.split({ 99 }).spans.empty());
+        assert(delims.split({}).spans.empty());
+    }
+
     // jinja::enable_debug(true);
 
     std::vector<llama_chat_message> conversation {
