@@ -2,6 +2,7 @@
 
 #include <sycl/ext/oneapi/matrix/matrix.hpp>
 
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 
@@ -23,6 +24,13 @@ static_assert(FG_SG_ROWS == WARP_SIZE, "the A stage maps one lane to one row");
 static_assert(2 * FG_BN == GGML_SYCL_FG_MAX_N, "header gate must match the tile width");
 
 static size_t grouped_gemm_packed_capacity(size_t size) {
+    if (size <= 1) {
+        return 1;
+    }
+    // doubling capacity past this point would overflow size_t before reaching size
+    if (size > (std::numeric_limits<size_t>::max() / 2) + 1) {
+        return std::numeric_limits<size_t>::max();
+    }
     size_t capacity = 1;
     while (capacity < size) {
         capacity *= 2;
@@ -52,9 +60,9 @@ static bool fused_gemm_f16_supported(dpct::queue_ptr stream) {
 static void fused_gemm_pack_b(const sycl::half * y, sycl::half * packed, int N, int Npad, int K, dpct::queue_ptr stream) {
     const int kpairs = K / 2;
     stream->parallel_for(sycl::range<1>((size_t) Npad * kpairs), [=](sycl::id<1> id) {
-        const int idx = id[0];
-        const int n   = idx / kpairs;
-        const int kp  = idx - n * kpairs;
+        const size_t idx = id[0];
+        const int    n   = idx / kpairs;
+        const int    kp  = idx - (size_t) n * kpairs;
         sycl::half v0 = (sycl::half) 0.0f;
         sycl::half v1 = (sycl::half) 0.0f;
         if (n < N) {

@@ -5531,6 +5531,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         bool grouped = false;
         if (ggml_is_contiguous(src0) && src1->type == GGML_TYPE_F32 &&
             dst->type == GGML_TYPE_F32 && dst->op_params[0] == GGML_PREC_DEFAULT &&
+            // ggml_prec_set_src(dst, GGML_PREC_F32, 1) stores its requirement in op_params[3]
+            // (ggml_set_op_params_i32(a, 2 + idx, prec) with idx=1), not op_params[0]. Nodes
+            // that request it (e.g. Mistral MoE's expert-down projection in llama-graph.cpp,
+            // to avoid overflow past +-65504) must not take this path: grouped_gemm_pack_b
+            // casts every activation to sycl::half.
+            dst->op_params[3] != GGML_PREC_F32 &&
             nb11 == sizeof(float)*ne10 && nb1 == sizeof(float)*ne0) {
             grouped = ggml_sycl_grouped_dequant_gemm_f16(src0->type, src0_original, nb02,
                                                          (const float *) src1_contiguous.get(), (float *) dst_contiguous.get(),
