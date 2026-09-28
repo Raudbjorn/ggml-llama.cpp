@@ -809,10 +809,44 @@ User can use the device management in [docs/user/multi-gpu.md](../user/multi-gpu
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Request oneDNN. Only a request: if CMake finds no oneDNN built for the same GPU target, the build compiles with `GGML_SYCL_DNNL=0` and the oneDNN GEMM and flash-attention paths are compiled out. The `GGML_SYCL_DNNL: yes/no` startup log line is authoritative. |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
 | GGML_SYCL_SUPPORT_LEVEL_ZERO_API | ON *(default)* \|OFF *(Optional)* | Support to use Level Zero API for device memory allocation. Requires Level Zero headers/library at build time and Intel GPU driver (Level Zero runtime) at run time. Reduces system RAM usage during multi-GPU inference. SYCL backend always runs on Level Zero running time even if it's set as OFF (The SYCL api will be usage for memory allocation).|
+| GGML_SYCL_XMX_GATHER | ON *(default)* \|OFF *(Optional)* | Build the XMX gather GEMMs (dequant-in-GEMM kernels for IQ weight formats, see `GGML_SYCL_XMX_GATHER_TYPES` below). ON builds them, except that they are **compiled out automatically when `GGML_SYCL_DEVICE_ARCH` names a DG2 device** (`acm-*`, `dg2*`, `xe-hpg`, IP `12.55`-`12.57`): ahead-of-time compilation for DG2 crashes IGC on them, and DG2 never runs them. OFF always compiles them out. (2.) |
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
 1. FP32 or FP16 have different performance impact to LLM. Recommended to test them for better prompt processing performance on your models. You need to rebuild the code after change `GGML_SYCL_F16=OFF/ON`.
+
+2. See [XMX gather GEMMs and DG2 AOT builds](#xmx-gather-gemms-and-dg2-aot-builds).
+
+#### XMX gather GEMMs and DG2 AOT builds
+
+**What they are.** `ggml/src/ggml-sycl/fused-gemm.cpp` holds dequant-in-GEMM kernels for the IQ weight formats (IQ4_NL, IQ3_S, IQ4_XS, IQ3_XXS, IQ2_XXS, IQ2_XS, IQ2_S, IQ1_S, IQ1_M). The weights are decoded straight into XMX tiles instead of being written out to f16 first. There are two entry points: the grouped `MUL_MAT_ID` path used by MoE models, and a plain `MUL_MAT` path. At runtime `GGML_SYCL_XMX_GATHER_TYPES` picks which formats may use them. A device capability gate then decides whether they can run at all.
+
+**Why DG2 cannot use them.** The kernels need a sub-group-16 8x16x16 fp16/fp16/fp32 `joint_matrix` combination. DG2 (Alchemist, Arc A-series; checked on the A770, `acm-g10`) does not report that combination, so the capability gate always rejects it and the regular GEMM paths run instead. In a JIT build (no `GGML_SYCL_DEVICE_ARCH`) this is harmless: a kernel is compiled for the device only when it is first launched, and these never are. An ahead-of-time build compiles every kernel for every listed target at link time. For `acm-g10`, IGC 2.41.5 then crashes on all of these kernels:
+
+```
+[acm-g10] IGC: Internal Compiler Error: Floating point exception
+icpx: error: gen compiler command failed with exit code 245
+```
+
+**What the toggle does.**
+
+| `GGML_SYCL_XMX_GATHER` | `GGML_SYCL_DEVICE_ARCH` | Result |
+|---|---|---|
+| ON (default) | empty (JIT) | kernels built; the runtime gate decides per device |
+| ON (default) | no DG2 name (e.g. `bmg-g21`, `xe2-hpg`) | kernels built |
+| ON (default) | contains a DG2 name (e.g. `acm-g10`, `acm-g10,bmg-g21`, `12.55.8`) | **compiled out automatically**, for every target in the list |
+| OFF | anything | compiled out |
+
+The DG2 check lower-cases `GGML_SYCL_DEVICE_ARCH` and looks for a list entry that starts with `acm`, `dg2`, `xe-hpg`, or an IP version from `12.55` to `12.57`. Other spellings of a DG2 device (for example Flex/ATS-M product names) are not recognized; set `GGML_SYCL_XMX_GATHER=OFF` for those. Because the sources are compiled once for the whole list, a mixed list such as `acm-g10,bmg-g21` loses the kernels on the non-DG2 target as well. Build a separate package without the DG2 target if that target needs them.
+
+**What "compiled out" means.** CMake defines `GGML_SYCL_NO_XMX_GATHER` for the `ggml-sycl` target. `fused-gemm.cpp` then contains only stubs: the capability check and both entry points return false. Callers take the paths they would have taken on a device without the matrix shape, and `GGML_SYCL_XMX_GATHER_TYPES` has no effect. **On DG2 nothing changes at runtime**, because the kernels could not be selected there anyway. On a non-DG2 target in a mixed list, IQ prompt processing falls back to the library GEMM.
+
+**How to tell which build you have.**
+- At configure time, CMake prints `GGML_SYCL_DEVICE_ARCH=... names a DG2 device: XMX gather GEMMs compiled out ...` or `GGML_SYCL_XMX_GATHER=OFF: XMX gather GEMMs compiled out`. It prints nothing when the kernels are built.
+- At startup, the SYCL info block prints `GGML_SYCL_XMX_GATHER_TYPES: XMX gather GEMMs disabled by compile flag` instead of the bitmask value.
+- In `compile_commands.json`, the `fused-gemm.cpp` entry carries `-DGGML_SYCL_NO_XMX_GATHER`.
+
+**History.** The kernels arrived with fork PR #67. Arch packages that build with `GGML_SYCL_DEVICE_ARCH=acm-g10` hit the crash and carried a local patch plus `-DGGML_SYCL_NO_XMX_GATHER` in `CMAKE_CXX_FLAGS`. That patch is obsolete once this toggle is in the tree. Passing the flag by hand is still harmless, since it defines the same macro. A sub-group-8 variant for Alchemist was not written. The only sub-group-8 `joint_matrix` data on the A770 comes from the fork's XMX flash-attention kernel, which measured 4-7x slower than the vector FA kernel. A GEMM variant is unmeasured, and its payoff is not assumed. Evidence and reproduction: `docs/research/sycl-xmx-gather-dg2-aot-2026-09-28.md`.
 
 ### Runtime
 
@@ -858,7 +892,7 @@ User can use the device management in [docs/user/multi-gpu.md](../user/multi-gpu
 | GGML_SYCL_USE_ASYNC_MEM_OP | 1 (default) or 0 | Use asynchronous USM allocation/free (`ext_oneapi_async_memory_alloc`) for temporary buffers when every device supports it; `GGML_SYCL_ENABLE_GRAPH=1` turns it on regardless. Requires a build with `GGML_SYCL_GRAPH=ON`. |
 | GGML_OP_OFFLOAD_MIN_BATCH | 32 (default) or integer | Minimum batch size at which an op whose weights are in host memory is offloaded to the SYCL device. |
 | GGML_SYCL_MMVQ_WIDE | 0 or 1 (1 default) | Use the wide-load variant of the reordered Q8_0 mat-vec kernel, which reads four contiguous dwords per operand instead of one value at a time. Set to 0 to fall back to the per-value loads. Only affects Q8_0 weights in the reordered layout. |
-| GGML_SYCL_XMX_GATHER_TYPES | decimal bitmask, all bits set (default) | Select which quantized weight formats may take the XMX dequant-GEMM paths, where the weights are dequantized inside the GEMM (gathered straight into the XMX tiles) instead of being written out to f16 and read back. This covers the grouped `MUL_MAT_ID` path used by MoE models, and the plain `MUL_MAT` path when built with `GGML_SYCL_F16=ON` (the plain path sits inside that build's f16 branch). Both compute in f16 on the XMX units regardless of `GGML_SYCL_F16`, so enabling them for `MUL_MAT_ID` trades some precision for speed relative to the per-expert library GEMM they replace. Mainly affects prompt processing; token generation is unaffected. One bit per format, so a format can be enabled or benchmarked on its own:<br>* 1: IQ4_NL<br>* 2: IQ3_S<br>* 4: IQ4_XS<br>* 8: IQ3_XXS<br>* 16: IQ2_XXS<br>* 32: IQ2_XS<br>* 64: IQ2_S<br>* 128: IQ1_S<br>* 256: IQ1_M<br>Set to 0 to disable the paths entirely and fall back to the library GEMM, which is the baseline to compare against. A format is only taken when the shape also fits (the weights must cover whole blocks, and the tile is only used while N is narrow), so setting a bit does not force the path. Formats outside this list are never affected by this variable. |
+| GGML_SYCL_XMX_GATHER_TYPES | decimal bitmask, all bits set (default) | Select which quantized weight formats may take the XMX dequant-GEMM paths, where the weights are dequantized inside the GEMM (gathered straight into the XMX tiles) instead of being written out to f16 and read back. This covers the grouped `MUL_MAT_ID` path used by MoE models, and the plain `MUL_MAT` path when built with `GGML_SYCL_F16=ON` (the plain path sits inside that build's f16 branch). Both compute in f16 on the XMX units regardless of `GGML_SYCL_F16`, so enabling them for `MUL_MAT_ID` trades some precision for speed relative to the per-expert library GEMM they replace. Mainly affects prompt processing; token generation is unaffected. One bit per format, so a format can be enabled or benchmarked on its own:<br>* 1: IQ4_NL<br>* 2: IQ3_S<br>* 4: IQ4_XS<br>* 8: IQ3_XXS<br>* 16: IQ2_XXS<br>* 32: IQ2_XS<br>* 64: IQ2_S<br>* 128: IQ1_S<br>* 256: IQ1_M<br>Set to 0 to disable the paths entirely and fall back to the library GEMM, which is the baseline to compare against. A format is only taken when the shape also fits (the weights must cover whole blocks, and the tile is only used while N is narrow), so setting a bit does not force the path. Formats outside this list are never affected by this variable. No effect in builds where the kernels are compiled out (`GGML_SYCL_XMX_GATHER=OFF`, or any AOT build whose `GGML_SYCL_DEVICE_ARCH` names a DG2 device), see [XMX gather GEMMs and DG2 AOT builds](#xmx-gather-gemms-and-dg2-aot-builds). |
 | GGML_SYCL_SPARSE_FA | 0 (default) or 1 | Enable Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_DEBUG | 0 (default) or 1 | Enable to debug for Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|

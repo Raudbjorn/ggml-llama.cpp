@@ -6,6 +6,13 @@
 #include <mutex>
 #include <unordered_map>
 
+// GGML_SYCL_NO_XMX_GATHER compiles every kernel in this file out, leaving stubs that report the
+// paths as unavailable (bottom of the file). CMake defines it for GGML_SYCL_XMX_GATHER=OFF and,
+// automatically, for AOT builds whose GGML_SYCL_DEVICE_ARCH names a DG2 device: the sub-group-16
+// joint_matrix shape below does not exist on DG2 and AOT-compiling it crashes IGC. See the
+// GGML_SYCL_XMX_GATHER block in CMakeLists.txt and docs/backend/SYCL.md.
+#ifndef GGML_SYCL_NO_XMX_GATHER
+
 namespace mx = sycl::ext::oneapi::experimental::matrix;
 
 // XMX f16 tile: 8x16 (A) times 16x16 (B) into an 8x16 f32 accumulator
@@ -639,3 +646,24 @@ bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type src0_type, const void * src0_b
     }
     return true;
 }
+
+#else // GGML_SYCL_NO_XMX_GATHER
+
+// Built without the XMX gather kernels (CMake: GGML_SYCL_XMX_GATHER=OFF, or an AOT target list
+// that includes DG2, where compiling them crashes IGC). The callers fall back to the regular paths.
+bool ggml_sycl_fused_dequant_gemm_f16_device_ok(dpct::queue_ptr) {
+    return false;
+}
+
+bool ggml_sycl_fused_dequant_gemm_f16(ggml_type, const void *, const sycl::half *, float *, int64_t, int64_t, int64_t,
+                                      int64_t, ggml_sycl_pool &, dpct::queue_ptr) {
+    return false;
+}
+
+bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type, const void *, size_t, const float *, float *, const int64_t *,
+                                        int64_t, int64_t, int64_t, int64_t, std::vector<ggml_sycl_gg_tile> &,
+                                        ggml_sycl_pool &, dpct::queue_ptr) {
+    return false;
+}
+
+#endif // GGML_SYCL_NO_XMX_GATHER

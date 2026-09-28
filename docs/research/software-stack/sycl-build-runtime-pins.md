@@ -118,3 +118,10 @@ commit before launch, and run detached with a durable log, PID, exact command,
 and exit marker in `RALPH_PROGRESS.md`. The observed clean-build ceiling is
 approximately 45 minutes. Do not reuse a JIT directory for AOT or present an
 AOT artifact as the default product build.
+
+AOT for `acm-g10` compiles the XMX gather GEMMs (`fused-gemm.cpp`, fork PR #67)
+out automatically. IGC 2.41.5 crashes on them for DG2, and DG2 never selects
+them at runtime. CMake prints the reason at configure time, and the startup log
+shows `GGML_SYCL_XMX_GATHER_TYPES: XMX gather GEMMs disabled by compile flag`.
+`GGML_SYCL_XMX_GATHER=OFF` forces the same for any build. See
+`docs/backend/SYCL.md`, "XMX gather GEMMs and DG2 AOT builds".
