@@ -11502,8 +11502,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    // skipped slots (negative ids)
-    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4}) {
+    // skipped slots (negative ids); IQ4_NL covers the SYCL grouped dequant GEMM, which only takes IQ types
+    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4, GGML_TYPE_IQ4_NL}) {
         for (int n_used : {1, 2, 4}) {
             for (bool b : {false, true}) {
                 for (int n : {1, 4, 33, 129}) {

@@ -76,14 +76,10 @@ common_speculative_draft_params & common_speculative_get_draft_params(common_spe
 // optionally call once at the beginning of a new generation
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
 
-// process a batch already evaluated by the target and update the speculative context's internal state
-// returns true for a null spec; otherwise stops at the first implementation returning false
-// updates made by earlier implementations are retained on failure
+// process the batch and update the internal state of the speculative context
 bool common_speculative_process(common_speculative * spec, const common_batch & batch);
 
 // legacy llama_batch input, converted with common_batch_from_llama_batch()
-// returns false if conversion fails; without explicit positions, target memory must still end at this batch
-// otherwise has the same result and state-update behavior as the common_batch overload
 bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
 
 // generate drafts for the sequences specified with `common_speculative_get_draft_params`
