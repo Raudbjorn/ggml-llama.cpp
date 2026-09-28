@@ -153,8 +153,7 @@ static int common_http_get_free_port() {
         return -1;
     }
 
-    struct sockaddr_in serv_addr;
-    std::memset(&serv_addr, 0, sizeof(serv_addr));
+    struct sockaddr_in serv_addr = {};
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     serv_addr.sin_port = htons(0);
