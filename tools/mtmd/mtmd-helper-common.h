@@ -127,6 +127,8 @@ struct decode_embd_batch {
     }
 
     // describe the entries [offset, offset + n) with section-major positions
+    // requires a nonempty range within the batch; positions are invalidated by the next get_view() or destruction
+    // embeddings remain borrowed from the caller's buffer
     mtmd_helper_embd_batch get_view(int offset, int n) {
         GGML_ASSERT(offset >= 0 && n > 0 && offset + n <= n_tokens);
         pos_view.clear();
@@ -146,6 +148,8 @@ struct decode_embd_batch {
     }
 
     // render the entries [offset, offset + n) into a batch owned by this object, ready for llama_process()
+    // reuses the first lctx's batch configuration; the next render() replaces the returned batch's contents
+    // aborts for an invalid/empty range or if a row cannot be added (capacity, sequence ID, or embedding size)
     llama_batch_ext * render(llama_context * lctx, int offset, int n) {
         GGML_ASSERT(offset >= 0 && n > 0 && offset + n <= n_tokens);
         if (!batch) {

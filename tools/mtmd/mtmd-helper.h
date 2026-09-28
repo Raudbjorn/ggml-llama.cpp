@@ -107,6 +107,10 @@ MTMD_API int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
                                          llama_pos * new_n_past);
 
 // works like mtmd_helper_eval_chunks(), but only for a single chunk
+// n_batch must be positive; each resulting sub-batch must fit the context's batch capacity
+// initialize *new_n_past to n_past: text decoding increments it after each successful sub-batch
+// image/audio decoding sets it only after the entire chunk succeeds; logits_last applies only to text
+// returns encoding/decoding errors unchanged; completed sub-batches are not rolled back
 // this function is NOT thread-safe
 MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                struct llama_context * lctx,
@@ -129,9 +133,12 @@ struct mtmd_helper_embd_batch {
 
 typedef int32_t (*mtmd_helper_post_decode_callback)(const struct mtmd_helper_embd_batch * batch, void * user_data);
 
-// helper function to decode an image whose embeddings have already been calculated
+// helper function to decode an image or audio chunk whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)
-// ret 0 on success, -1 on chunk not being a valid image chunk, 1 on decode failure
+// n_batch must be positive; each resulting sub-batch must fit the context's batch capacity
+// calls callback, if non-null, after each successful sub-batch; its batch view is valid only during the call
+// returns 0 on success, -1 for text input or missing M-RoPE image tokens, otherwise forwards decode/callback errors
+// sets *new_n_past only on full success; does not roll back completed sub-batches on failure
 MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 struct llama_context * lctx,
                                                 const mtmd_input_chunk * chunk,
