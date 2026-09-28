@@ -227,6 +227,10 @@ extern "C" {
     // with other instances on the same device ("ggml_backend_init_private_stream", used by the
     // scheduler's expert prefetch). Returns NULL if the device cannot provide one.
     typedef ggml_backend_t               (*ggml_backend_init_private_stream_t)(ggml_backend_dev_t device);
+    // True if every async operation and graph compute of backends on this device runs in issue order
+    // on one stream ("ggml_backend_async_is_stream_ordered"). The scheduler then skips the host sync
+    // before a host-to-device split input copy and enqueues it with set_tensor_async instead.
+    typedef bool                         (*ggml_backend_async_is_stream_ordered_t)(ggml_backend_dev_t device);
 
     //
     // Backend registry
