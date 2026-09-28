@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 #include <cstring>
 #include <iomanip>
 #include <map>
@@ -947,8 +948,16 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         block_size = 16;
         {
             char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dflash.block_size", buf, sizeof(buf)) >= 0) {
-                block_size = std::atoi(buf);
+            const int32_t len = llama_model_meta_val_str(model_dft, "dflash.block_size", buf, sizeof(buf));
+            if (len >= 0) {
+                int32_t parsed = 0;
+                const auto result = std::from_chars(buf, buf + std::strlen(buf), parsed);
+                if ((size_t) len >= sizeof(buf) || result.ec != std::errc() ||
+                        result.ptr != buf + len || parsed < 1) {
+                    LOG_WRN("%s: invalid dflash.block_size '%s'; using %d\n", __func__, buf, block_size);
+                } else {
+                    block_size = parsed;
+                }
             }
         }
         mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
