@@ -219,6 +219,8 @@ else()
 endif()
 set   (GGML_SYCL_SEPARATE_BUILD_CXX "${GGML_SYCL_SEPARATE_BUILD_CXX_DEFAULT}" CACHE STRING
                                             "ggml: C++ compiler for GGML_SYCL_SEPARATE_BUILD (icx on Windows, icpx elsewhere)")
+set   (GGML_SYCL_SEPARATE_BUILD_ARGS "" CACHE STRING
+                                            "ggml: extra arguments for the GGML_SYCL_SEPARATE_BUILD nested configure, one -D per list element, | stands for ;")
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
 

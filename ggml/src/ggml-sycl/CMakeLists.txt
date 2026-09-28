@@ -67,6 +67,8 @@ if (GGML_SYCL_SEPARATE_BUILD)
             list(APPEND sycl_args "-D${var}=${sycl_arg_value}")
         endif()
     endforeach()
+    # anything else the nested configure needs (list values use | for ;)
+    list(APPEND sycl_args ${GGML_SYCL_SEPARATE_BUILD_ARGS})
 
     # multi-config generators put the module under a per-configuration directory and need
     # --config on the nested build; single-config generators leave both empty
