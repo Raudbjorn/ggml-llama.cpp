@@ -31,10 +31,11 @@ if (GGML_SYCL_SEPARATE_BUILD)
         -DGGML_CPU=OFF
         -DGGML_BUILD_TESTS=OFF
         -DGGML_BUILD_EXAMPLES=OFF
-        -DGGML_CCACHE=${GGML_CCACHE})
-    if (CMAKE_CXX_COMPILER_LAUNCHER) # support when ccache or similar program passed as launcher
-        list(APPEND sycl_args -DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER} -DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER})
-    endif()
+        -DGGML_CCACHE=OFF)
+    # no compiler cache in front of the nested icpx build: an sccache launcher has replaced icpx with
+    # the host c++ on this fork (AGENTS.md, build gotchas). Empty launchers alone are not enough,
+    # because GGML_CCACHE then installs ccache or sccache as a global rule launcher, so it is OFF too.
+    list(APPEND sycl_args -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER=)
 
     # append everything starting with GGML_SYCL to the flags
     get_cmake_property(cache_vars CACHE_VARIABLES)
