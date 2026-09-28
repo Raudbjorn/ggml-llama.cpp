@@ -212,8 +212,13 @@ set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
 option(GGML_SYCL_SEPARATE_BUILD             "ggml: build in a nested project with its own C++ compiler, so the rest can use another compiler such as GCC or hipcc" OFF)
-set   (GGML_SYCL_SEPARATE_BUILD_CXX "icpx" CACHE STRING
-                                            "ggml: C++ compiler for GGML_SYCL_SEPARATE_BUILD")
+if (WIN32)
+    set(GGML_SYCL_SEPARATE_BUILD_CXX_DEFAULT "icx")
+else()
+    set(GGML_SYCL_SEPARATE_BUILD_CXX_DEFAULT "icpx")
+endif()
+set   (GGML_SYCL_SEPARATE_BUILD_CXX "${GGML_SYCL_SEPARATE_BUILD_CXX_DEFAULT}" CACHE STRING
+                                            "ggml: C++ compiler for GGML_SYCL_SEPARATE_BUILD (icx on Windows, icpx elsewhere)")
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
 
