@@ -1027,6 +1027,18 @@ struct ggml_backend_sched {
     ggml_backend_sched_eval_callback callback_eval;
     void * callback_eval_user_data;
 
+    // Stream-ordered split input copies (port of Andrei-Dr local-ai 0018/0020). A host-buffer
+    // input bound for a backend whose async work runs in issue order on one stream is uploaded
+    // with set_tensor_async and no host sync first. stream_ordered[b] caches the backend's
+    // "ggml_backend_async_is_stream_ordered" answer. pending_host_reads[b] marks backend b as
+    // possibly still reading a host compute-buffer intermediate that the host could overwrite;
+    // it is flushed before any host split and at the end of every graph compute.
+    bool     stream_ordered[GGML_SCHED_MAX_BACKENDS];
+    bool     pending_host_reads[GGML_SCHED_MAX_BACKENDS];
+    uint64_t n_stream_ordered_copies;
+    uint64_t n_host_read_flushes_split;
+    uint64_t n_host_read_flushes_graph;
+
     // mindcontrol-port of --prefetch-experts-slots: full-tensor lookahead prefetch of
     // offloaded MUL_MAT_ID weights (MoE experts resident in CPU/host memory, i.e. ncmoe).
     // While split[i] computes, a private-stream backend instance on the same device uploads
@@ -2171,6 +2183,38 @@ static void ggml_backend_sched_prefetch_stage(
     ggml_backend_event_record(sched->prefetch_ready[slot], sched->prefetch_backend);
 }
 
+// GGML_SCHED_COPY_SYNC=1 restores the host sync before every host-to-device split input copy.
+static bool ggml_backend_sched_copy_sync_forced(void) {
+    static const bool forced = [] {
+        const char * env = getenv("GGML_SCHED_COPY_SYNC");
+        return env != nullptr && atoi(env) != 0;
+    }();
+    return forced;
+}
+
+// Synchronizes a scheduler backend and clears its pending host reads.
+static void ggml_backend_sched_synchronize_backend(ggml_backend_sched_t sched, ggml_backend_t backend) {
+    ggml_backend_synchronize(backend);
+    const int id = ggml_backend_sched_backend_id(sched, backend);
+    if (id >= 0) {
+        sched->pending_host_reads[id] = false;
+    }
+}
+
+// Synchronizes every backend that may still be reading a host compute-buffer intermediate
+// through a stream-ordered upload. Returns true if any backend needed it.
+static bool ggml_backend_sched_flush_host_reads(ggml_backend_sched_t sched) {
+    bool flushed = false;
+    for (int b = 0; b < sched->n_backends; b++) {
+        if (sched->pending_host_reads[b]) {
+            ggml_backend_synchronize(sched->backends[b]);
+            sched->pending_host_reads[b] = false;
+            flushed = true;
+        }
+    }
+    return flushed;
+}
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
@@ -2301,13 +2345,19 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
 
+        // A host split writes host memory, starting with its own input copies, and that memory
+        // may be the source of a stream-ordered upload another backend has not executed yet.
+        if (ggml_backend_buft_is_host(sched->bufts[split_backend_id]) && ggml_backend_sched_flush_host_reads(sched)) {
+            sched->n_host_read_flushes_split++;
+        }
+
         // ensure the previous split's async work has completed before we start
         // this split, the allocator may have reused buffer regions across splits
         if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
             if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
             } else {
-                ggml_backend_synchronize(sched->backends[prev_backend_id]);
+                ggml_backend_sched_synchronize_backend(sched, sched->backends[prev_backend_id]);
             }
         }
 
@@ -2323,15 +2373,25 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    ggml_backend_sched_synchronize_backend(sched, split_backend);
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
+                // Port of Andrei-Dr local-ai 0018/0020: a copy from a host buffer that is enqueued on
+                // the split backend's own stream (set_tensor_async) runs after every earlier use of
+                // input_cpy on that stream, so it needs no host-side wait. Without events the wait
+                // below is a full synchronize: the host blocks until the device drains, then issues a
+                // blocking copy while the device idles. Only for backends that declare stream order
+                // ("ggml_backend_async_is_stream_ordered"); GGML_SCHED_COPY_SYNC=1 restores the wait.
+                const bool stream_ordered = sched->stream_ordered[split_backend_id] &&
+                    !ggml_backend_sched_copy_sync_forced() && input->buffer != NULL &&
+                    ggml_backend_buffer_is_host(input->buffer) && split_backend->iface.set_tensor_async != NULL;
+
                 // wait for the split backend to finish using the input before overwriting it
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
-                } else {
-                    ggml_backend_synchronize(split_backend);
+                } else if (!stream_ordered) {
+                    ggml_backend_sched_synchronize_backend(sched, split_backend);
                 }
 
                 // mindcontrol-port: full-tensor prefetch for MoE expert weights in large batches.
@@ -2384,7 +2444,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     const int64_t n_expert   = node->op == GGML_OP_MUL_MAT_ID ? input->ne[2] : input->ne[1];
                     const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
 
-                    ggml_backend_synchronize(input_backend);
+                    ggml_backend_sched_synchronize_backend(sched, input_backend);
 
                     // get the ids
                     ggml_tensor * ids_tensor = node->src[2];
@@ -2407,7 +2467,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     if (ids_tensor != prev_ids_tensor) {
                         ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
                         ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
-                        ggml_backend_synchronize(ids_backend);
+                        ggml_backend_sched_synchronize_backend(sched, ids_backend);
 
                         // find the used experts; an id of -1 marks a skipped slot (see ggml_mul_mat_id)
                         used_ids.clear();
@@ -2468,11 +2528,20 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         last_id = id;
                     }
                     copy_experts(first_id, last_id);
+                } else if (stream_ordered) {
+                    ggml_backend_sched_synchronize_backend(sched, input_backend);
+                    ggml_backend_tensor_set_async(split_backend, input_cpy, input->data, 0, ggml_nbytes(input));
+                    sched->n_stream_ordered_copies++;
+                    // the device reads input->data when the copy executes; a compute-buffer
+                    // intermediate can be overwritten by the host before then, weights cannot
+                    if (ggml_backend_buffer_get_usage(input->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                        sched->pending_host_reads[split_backend_id] = true;
+                    }
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-                        ggml_backend_synchronize(input_backend);
+                        ggml_backend_sched_synchronize_backend(sched, input_backend);
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                         } else {
@@ -2644,6 +2713,15 @@ ggml_backend_sched_t ggml_backend_sched_new(
         sched->bufts[b] = bufts ? bufts[b] : ggml_backend_get_default_buffer_type(backends[b]);
         GGML_ASSERT(ggml_backend_supports_buft(backends[b], sched->bufts[b]));
 
+        ggml_backend_dev_t dev = ggml_backend_get_device(backends[b]);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : NULL;
+        ggml_backend_async_is_stream_ordered_t is_stream_ordered = reg == NULL ? NULL :
+            (ggml_backend_async_is_stream_ordered_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_async_is_stream_ordered");
+        // tensor copies are allocated from bufts[b]; backends only take set_tensor_async into their
+        // default buffer type (SYCL asserts on anything else)
+        sched->stream_ordered[b] = is_stream_ordered != NULL && is_stream_ordered(dev) &&
+            sched->bufts[b] == ggml_backend_get_default_buffer_type(backends[b]);
+
         if (sched->n_copies > 1) {
             for (int c = 0; c < sched->n_copies; c++) {
                 sched->events[b][c] = ggml_backend_event_new(backends[b]->device);
@@ -2761,6 +2839,12 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
             ggml_backend_event_free(sched->events[b][c]);
         }
     }
+    if (sched->n_stream_ordered_copies > 0) {
+        GGML_LOG_DEBUG("%s: stream-ordered input copies: %llu, host-read flushes: %llu at a host split, %llu at graph end\n",
+                       __func__, (unsigned long long) sched->n_stream_ordered_copies,
+                       (unsigned long long) sched->n_host_read_flushes_split,
+                       (unsigned long long) sched->n_host_read_flushes_graph);
+    }
     // uploads may still be in flight on the private stream and kernels may still read a slot;
     // the teardown synchronizes both before freeing
     ggml_backend_sched_prefetch_free(sched);
@@ -2873,13 +2957,20 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
         }
     }
 
-    return ggml_backend_sched_compute_splits(sched);
+    const enum ggml_status status = ggml_backend_sched_compute_splits(sched);
+    // on every exit, before the caller writes the next graph's inputs: an input's memory can be
+    // reused by an intermediate that a stream-ordered upload is still reading
+    if (ggml_backend_sched_flush_host_reads(sched)) {
+        sched->n_host_read_flushes_graph++;
+    }
+    return status;
 }
 
 void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     for (int i = 0; i < sched->n_backends; i++) {
         ggml_backend_synchronize(sched->backends[i]);
+        sched->pending_host_reads[i] = false;
     }
     if (!sched->is_alloc) {
         // if the graph is not already allocated, always use copy 0 after a synchronization

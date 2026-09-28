@@ -8561,6 +8561,16 @@ static ggml_backend_t ggml_backend_sycl_init_private_stream(ggml_backend_dev_t d
     }
 }
 
+// Every SYCL backend op, the buffer set/get/copy calls, the host allocator and the MoE cache
+// submit to the device's one in-order default queue (dpct in_order_queue); the only other queue,
+// the private stream above, is never handed to the scheduler as a split backend. So async work
+// on a SYCL backend runs in issue order, which lets the scheduler skip its host sync before a
+// host-to-device split input copy (see ggml_backend_async_is_stream_ordered_t).
+static bool ggml_backend_sycl_async_is_stream_ordered(ggml_backend_dev_t dev) {
+    GGML_UNUSED(dev);
+    return true;
+}
+
 static void *ggml_backend_sycl_reg_get_proc_address(ggml_backend_reg_t reg, const char *name) {
     GGML_UNUSED(reg);
 
@@ -8569,6 +8579,9 @@ static void *ggml_backend_sycl_reg_get_proc_address(ggml_backend_reg_t reg, cons
     }
     if (strcmp(name, "ggml_backend_init_private_stream") == 0) {
         return (void *)ggml_backend_sycl_init_private_stream;
+    }
+    if (strcmp(name, "ggml_backend_async_is_stream_ordered") == 0) {
+        return (void *)ggml_backend_sycl_async_is_stream_ordered;
     }
 
     // Tensor parallelism (--split-mode tensor) entry points.
