@@ -329,8 +329,25 @@ stage_scaling() {
     return
   fi
 
-  TURBO_TPS=$(grep "prompt eval" "$log_t" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+' | tail -1)
-  Q8_TPS=$(grep "prompt eval" "$log_q" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+' | tail -1)
+  # Prefer the perf-summary "prompt eval ... tokens per second" line; fall back
+  # to deriving prefill t/s from "perplexity: N seconds per pass" and the n_ctx
+  # printed on the "calculating perplexity" line (upstream 2026-07 dropped the
+  # perf summary from llama-perplexity output).
+  extract_prefill_tps() {
+    local log="$1" tps spp nctx
+    tps=$(grep "prompt eval" "$log" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+' | tail -1)
+    if [ -n "$tps" ]; then
+      printf '%s' "$tps"
+      return
+    fi
+    spp=$(grep -oE 'perplexity: [0-9.]+ seconds per pass' "$log" | grep -oE '[0-9.]+' | tail -1)
+    nctx=$(grep -oE 'n_ctx=[0-9]+' "$log" | grep -oE '[0-9]+' | tail -1)
+    if [ -n "$spp" ] && [ -n "$nctx" ]; then
+      awk -v n="$nctx" -v s="$spp" 'BEGIN { if (s > 0) printf "%.2f", n / s }'
+    fi
+  }
+  TURBO_TPS=$(extract_prefill_tps "$log_t")
+  Q8_TPS=$(extract_prefill_tps "$log_q")
 
   if ! validate_numeric "TURBO_TPS" "$TURBO_TPS" || ! validate_numeric "Q8_TPS" "$Q8_TPS" || \
      ! awk -v q="$Q8_TPS" 'BEGIN { exit !(q > 0) }'; then

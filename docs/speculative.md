@@ -78,6 +78,71 @@ See:
 
 - #22105
 
+### Chained MTP (`--spec-chain N`)
+
+Chained MTP drafts N tokens in one decode. It currently supports dense Qwen3.5-family models and requires flash attention. For recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2.
+
+
+### Adaptive MTP (`draft-mtp-adaptive`)
+
+Multi Token Prediction (MTP) with an adaptive draft depth. Same machinery as `draft-mtp`
+(MTP heads from the main model, see the Qwen3 MTP head docs), but the number of draft tokens is
+tuned per sequence at runtime by a hysteresis controller instead of being fixed at
+`--spec-draft-n-max`.
+
+The depth starts at the floor `max(1, --spec-draft-n-min-adaptive)` (default 3) and stays in
+`[floor, n_max]`. It climbs one step after a run of consecutive verifies that accepted every
+drafted token (the run length required is low at the floor and at depth, high in the middle), and
+drops one step when accumulated misses reach a depth-scaled budget. Content that verifies well
+quickly reaches high depth; content that keeps missing sheds depth until it stops wasting
+drafting compute. Use `--spec-draft-n-min-adaptive` to keep the depth above 1 on difficult
+content:
+
+```bash
+llama-server -m Qwen3-4B.gguf --spec-type draft-mtp-adaptive \
+    --spec-draft-n-max 8 --spec-draft-n-min-adaptive 2
+```
+
+`--spec-draft-n-min-adaptive` must be in `[1, --spec-draft-n-max]`.
+
+### DSpark (`draft-dspark`)
+
+DSpark extends DFlash with a semi-autoregressive _Markov head_: the draft still emits a whole
+block per forward pass, but each block position's logits are biased by a low-rank term keyed on
+the previous token, chained in-graph across the block. This keeps drafting at one decode per
+block while recovering some of the left-to-right signal that pure block diffusion loses.
+
+The draft is a small DeepSpec checkpoint trained for a specific target (for example
+[`deepseek-ai/dspark_qwen3_4b_block7`](https://huggingface.co/deepseek-ai/dspark_qwen3_4b_block7)
+for `Qwen/Qwen3-4B`). Convert it with `--target-model-dir` so it inherits the target's tokenizer
+and token embeddings:
+
+```bash
+python convert_hf_to_gguf.py deepseek-ai/dspark_qwen3_4b_block7 \
+    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-DSpark.gguf
+
+llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
+    --spec-type draft-dspark --spec-draft-n-max 7 -fa on --jinja
+```
+
+`--spec-draft-n-max` is clamped to the draft model's trained block size.
+
+`--spec-draft-conf-min P` truncates each drafted block at the first position whose predicted
+acceptance (from the draft's confidence head, if present) falls below `P` (default 0 = disabled).
+
+Currently only standalone drafts (converted via `--target-model-dir`) with a Qwen3 backbone are
+supported; support for other backbones (e.g. Gemma4) is planned. DeepSeek-V4 does not use a
+standalone draft - it ships its own DSpark head inside the target checkpoint, extracted with
+`--dspark` instead (see `convert_hf_to_gguf.py --help`).
+
+DSpark drafts exported in the [speculators](https://github.com/vllm-project/speculators) format
+(for example [`RedHatAI/gemma-4-31B-it-speculator.dspark`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dspark))
+convert the same way.
+
+See:
+
+- #25173
+
 ### n-gram Cache (`ngram-cache`)
 
 An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
@@ -170,10 +235,25 @@ Example Video:
 
 If a draft model is combined with a draftless decoding the draftless decoding has higher precedence.
 
+### Backend Sampling
+
+Use `--backend-sampling` to run supported target-model samplers on the model backend. Draft-model sampling uses the backend by default and can be controlled with `--spec-draft-backend-sampling` and `--no-spec-draft-backend-sampling`.
+
+Unsupported samplers and device layouts fall back to CPU sampling. Tensor split mode does not support backend sampling. A fixed seed produces repeatable random draws, but stochastic CPU and backend sampling can still select different tokens because floating-point operations can differ between implementations and devices. Use greedy sampling when exact output matching is required.
+
+### Synthetic Acceptance
+
+`llama-server` and `llama-cli` can replace normal speculative verification with synthetic decisions for benchmarking. The generated output is not valid model output because accepted draft tokens do not have to match the target model.
+
+Use exactly one of these options:
+
+- `--spec-synth-rates P0,P1,...` sets unconditional per-position acceptance probabilities. Entry `i` is the probability that the first `i+1` draft tokens are all accepted. The number of entries must match the effective maximum draft length. Values must be finite, within `[0, 1]`, and monotonically non-increasing.
+- `--spec-synth-len L` sets the target mean acceptance length, including the target token. For `K` maximum draft tokens, `L` must be within `[1, K+1]`. The server finds a constant conditional probability `p` such that `p + p^2 + ... + p^K = L - 1`, then uses unconditional rates `[p, p^2, ..., p^K]`.
+
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|draft-mtp-adaptive|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
@@ -193,9 +273,16 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 --spec-draft-n-max                      N
                                         number of tokens to draft for speculative decoding (default: 3)
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_MAX)
+--spec-chain                            0|1|N
+                                        chained MTP drafting: all draft tokens in one decode (default: off).
+                                        Use N to enable and set the draft depth.
+                                        (env: LLAMA_ARG_SPEC_CHAIN)
 --spec-draft-n-min                      N
                                         minimum number of draft tokens to use for speculative decoding (default: 0)
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_MIN)
+--spec-draft-n-min-adaptive             N
+                                        minimum adaptive MTP draft depth; the depth starts here and never drops below it (default: 3)
+                                        (env: LLAMA_ARG_SPEC_DRAFT_N_MIN_ADAPTIVE)
 --spec-draft-p-split, --draft-p-split   P
                                         speculative decoding split probability (default: 0.10)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)
@@ -314,7 +401,9 @@ Specifies a comma-separated list of speculative decoding types to use.
 | `draft-simple` | Use a simple draft model for speculation |
 | `draft-eagle3` | Use an EAGLE-3 draft model that reads the target's hidden states |
 | `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step |
+| `draft-dspark` | Use a DSpark draft model (DFlash backbone + semi-autoregressive Markov head) |
 | `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
+| `draft-mtp-adaptive` | MTP with an adaptive draft depth tuned per sequence at runtime |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |
 | `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |
@@ -329,6 +418,17 @@ Specifies a comma-separated list of speculative decoding types to use.
 **Example:** Multiple speculative implementations.
 ```bash
 ./llama-server [...] --spec-type ngram-mod,ngram-map-k4v
+```
+
+**Laguna DFlash drafters** (for example `poolside/Laguna-XS-2.1-DFlash` for
+`poolside/Laguna-XS-2.1`) go through the same `draft-dflash` flow. Their GGUF is
+marked with `dflash.decoder_arch = laguna`, which switches the draft layers to the
+Laguna decoder contract (softplus attention gate, per-aux feature norms, context
+K/V through the input layernorm, causal noise block) instead of the generic DFlash
+contract:
+```bash
+./llama-server -m Laguna-XS-2.1.gguf -md Laguna-XS-2.1-DFlash.gguf \
+    --spec-type draft-dflash --spec-draft-n-max 15 -fa on --jinja
 ```
 
 ### `--spec-ngram-*-size-n N`

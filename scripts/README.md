@@ -102,7 +102,6 @@ for you.
 | `server-test-function-call.py` | Multi-turn chat-completions tool-calling test suite with mocked tool responses and semantic validators. |
 | `server-test-parallel-tc.py` | Parallel tool-call test suite; only use with a model/server configuration that supports parallel calls. |
 | `server-test-structured.py` | Structured-output and JSON-schema test suite for chat completions. |
-| `fetch_server_test_models.py` | Downloads the small model fixtures required by server tests. |
 | `serve-static.js` | Minimal static-file server used by local UI/server test workflows. |
 
 ## Data, model, and template utilities

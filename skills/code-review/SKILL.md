@@ -7,8 +7,10 @@ description: Review llama.cpp changes against project conventions and common rev
 
 This skill reviews changes against llama.cpp's conventions and the pitfalls that reviewers flag most often, so the contributor can fix them before a maintainer has to. It has two modes:
 
-- **Self-review (default):** review the contributor's own local changes (uncommitted work, or a branch vs `master`) as a pre-PR pass. Ask which if it's ambiguous; default to `git diff master...HEAD` plus any uncommitted changes.
+- **Self-review (default):** review the contributor's own local changes (uncommitted work, or a branch vs its base) as a pre-PR pass. Ask which if it's ambiguous; default to `git diff feature/turboquant-kv-cache...HEAD` plus any uncommitted changes (use the upstream merge-base of the fork as the base when the diff against the feature branch is noisy).
 - **Read-only review of a PR/file:** if the user points at a PR number or specific files (including code they didn't write), review those and report findings.
+
+**Fork context:** this repo is the TurboQuant fork, not upstream llama.cpp. Most changes here are fork-internal and never go to ggml-org; the upstream-facing rules below (issue-first, quick-reject gates, maintainer approval expectations) still apply to the shared upstream code, but the fork-specific checklist at the end takes precedence for TurboQuant paths. The `AGENTS.md` overview is required context - read it first if not already in context; its "Known pitfalls" list is the first place to check on any turbo regression.
 
 In both modes the output is **private review notes for the user to read and act on** - it is never something to post. This is a hard rule from `AGENTS.md`: an agent must NEVER write, or help write, a PR comment, a review comment, or a reply to a reviewer, by any means including `gh`. Do not offer to. If the user asks you to post the notes, refuse and point them at that rule. Present findings in the conversation only.
 
@@ -20,6 +22,7 @@ Identify what actually changed and which area checklists below apply. Run `git d
 
 - `conversion/`, `gguf-py/`, `src/models/`, `src/llama-arch.*` -> **New model / architecture**
 - `ggml/` (any backend, op, or `ggml.h`) -> **ggml / backend**
+- `ggml-turbo-quant.c`, turbo/TQ weight or cache types, `GGML_OP_TURBO_WHT`, turbo kernels in any backend -> **TurboQuant / fork-specific** (in addition to ggml / backend)
 - `include/llama.h` and other public headers -> **Public API**
 - `tools/server/` -> **Server**
 - anything else, plus all of the above -> **General** (always runs)
@@ -46,7 +49,10 @@ Mandatory on every review; any finding here is **blocking**. Rule of thumb: GGUF
 
 - **Sizes/counts from tensor dims:** validate before allocating. Products like `ne[i]*nb[i]`/nbytes can overflow on crafted dims into an undersized alloc then heap overflow. Overflow checks must run BEFORE the arithmetic they guard - padding/alignment macros wrap to 0 near `SIZE_MAX`, so a guard after the pad passes.
 - **GGUF strings/arrays:** cap declared lengths and element counts before using them to size a loop or buffer; validate element type and length before casting an array to a pointer or reading fixed indices (`[i+1]`, `[0..2]`).
+- **Element-type confusion:** casting `gguf_get_arr_data()` or `tensor->data` to `float *`/`int32_t *` needs an element-type check first (`gguf_get_kv_type() == GGUF_TYPE_ARRAY` then `gguf_get_arr_type()`; `type == GGML_TYPE_F32` for tensors). A `UINT8` array or `I8` tensor passes every length check, then gets read 4 bytes per element - a nearby length check is not a type check.
+- **Loaders:** `GGML_ASSERT` on a file-derived value aborts the process; throw instead where the caller already catches (vocab, model loader, clip).
 - **File-supplied counts indexing fixed arrays:** bound any count (e.g. layer/block count into a `LLAMA_MAX_*` array) before indexing; watch checks that only fire when an optional key is present.
+- **Declared vs actual array length:** check the declared length of a GGUF array against the count actually read, not just against a buffer size.
 - **Bounds comparisons:** flag narrowing casts (`size_t`->`int32_t`) and signed/unsigned mixing that can bypass a length check and copy past a buffer.
 - **Parsed/derived indices:** range-check `stoi`/`atoi` results and catch parse throws; never use a default or derived token id (EOS/BOS/...) as an index without a bounds check.
 - **Reused/reserved buffers:** recheck bounds after a buffer is shrunk or reused; watch `reserve()` then index-by-assumed-size, and header fields read before their length is checked.
@@ -110,6 +116,16 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - Security: don't trust client-supplied headers (e.g. `X-Forwarded-For`) or add footguns; things like IP allowlisting belong at a reverse proxy unless there's a trusted-proxy design.
 - Wire new behavior into the existing request/response and checkpoint paths correctly; watch for resource leaks across requests.
 
+## Multimodal (`tools/mtmd/`)
+
+- Tensor names must be prefixed by `v.`, `a.`, `mm.` or `a.mm.` (legacy naming doesn't follow this convention - this is expected, but new code should follow it).
+- Do not use explicit sin/cos for RoPE; use `ggml_rope_ext` instead, see `HOWTO-add-model.md`. If it can't express the needed behavior, that's a design discussion, not a PR.
+- New GGML ops must not be introduced in the same PR, you must push it as a separate PR.
+- In most cases, `build_vit` should be enough to build the transformer graph for vision models. Do not add a loop to build the transformer graph manually, unless you have a very good reason to do so. If you do, please explain why in the PR description.
+- If you need a dedicated preprocessor, there is a high chance that it can be a derived class from one of the existing preprocessors. Check carefully before adding a new preprocessor class.
+- If the model need a new public API in `mtmd.h`, open a discussion first.
+- For audio generation models, see `tools/mtmd/README-dev.md`
+
 ## General (always)
 
 Enforce the `AGENTS.md` / `CONTRIBUTING.md` coding and naming guidelines on every changed line - this is a distinct pass from checking that the code works, and matters just as much for review speed:
@@ -122,6 +138,21 @@ Enforce the `AGENTS.md` / `CONTRIBUTING.md` coding and naming guidelines on ever
 - Reuse existing infrastructure over introducing new components; no new third-party dependencies, extra headers, or files unless clearly justified.
 - Keep it simple: a simpler change doing 90% is often preferable to a complex one doing 100%. Flag unnecessary templates/fancy STL; basic `for` loops are fine here.
 - Every added line should be something the contributor can explain and defend to a reviewer without AI help - flag anything that looks copied-in without understanding.
+- `Co-authored-by:` must be reserved for human co-authors; AI contributions (claude, cursor, codex, etc.) must use `Assisted-by:`; if this point is violated, it's a blocking finding.
+- Any mentions of Minja must be treated as blocking; see `AGENTS.md` for why.
+
+## TurboQuant / fork-specific (takes precedence on fork paths)
+
+Run this in addition to the General checklist whenever the diff touches turbo code, and instead of the upstream-facing gates where they conflict. The AGENTS.md "Known pitfalls" list is the regression checklist - each entry there cost a real bug; verify the diff doesn't disturb those invariants.
+
+- **Type/enum stability:** `GGML_TYPE_TURBO2_0=43, TURBO3_0=44, TURBO4_0=45, TQ3_1S=46, TQ4_1S=47` and `GGML_OP_TURBO_WHT` are baked into GGUF files and cross-backend dispatch - never renumber, reorder, or repurpose. New fork types go after 47.
+- **Codec fidelity:** `ggml/src/ggml-turbo-quant.c` must stay byte-identical to fork tip conventions; any change needs `test-turbo-quant` passing (turbo3 MSE=0/Cosine=1.0, turbo4 Cosine=0.9956) plus `test-quantize-fns` (TQ3_1S/TQ4_1S cases).
+- **Backend coverage matrix:** this fork ships CPU, BLAS, SYCL, Vulkan, and OpenVINO only - CUDA, HIP, Metal, CANN, MUSA, WebGPU, RPC, and Hexagon are deleted from the tree; a change to turbo KV or TQ weight behavior must keep the retained backends in sync, and must never reintroduce a removed one. Vulkan SET_ROWS pipeline registration missing TURBO types or the `require_full_subgroups=true, subgroup_size=32` flags is the classic Vulkan regression (abort).
+- **KV cache types:** changes to cache-type handling must be exercised with turbo types (`-ctk/-ctv turbo3`), which require flash attention (auto-enabled). Respect the 128-element rotation block: zero-padding of head dims, and no V rotation/padding for MLA models. K/V types must stay identical for MLA/DeepSeek4.
+- **Env knobs:** `TURBO_LAYER_ADAPTIVE`, `TURBO_AUTO_ASYMMETRIC`, `TURBO_SPARSE_V`, `LLAMA_ATTN_ROT_*` semantics in `docs/KV-cache-quantization.md` are the contract - changing behavior without updating that doc is a finding.
+- **Rebase hygiene:** shared upstream files (`src/`, `ggml/`, `common/`) should stay structurally close to upstream so the next upstream rebase does not produce stacked duplicates - the `gguf-py/gguf/constants.py` duplicate-model-tensor crash is the canonical example. Fork-only logic in shared files needs a `fork:` tag in the comment so rebase conflict resolution can find it.
+- **Test gates:** run `test-backend-ops` sweeps that cover TQ3_1S/TQ4_1S in `all_types` and the turbo3/4 FA cases on SYCL and Vulkan, not just the default CPU matrix. `llama-bench` with `-ctk/-ctv turboN` is the perf gate for cache-type work.
+- **Upstream-facing sections below** still apply to changes in shared code, but do not block fork-internal work on upstream acceptance criteria (issue-first, two-maintainer approvals, upstream docs) that do not apply here.
 
 ## Reporting
 

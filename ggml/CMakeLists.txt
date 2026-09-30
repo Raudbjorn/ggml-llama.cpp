@@ -4,8 +4,8 @@ project("ggml" C CXX ASM)
 
 ### GGML Version
 set(GGML_VERSION_MAJOR 0)
-set(GGML_VERSION_MINOR 17)
-set(GGML_VERSION_PATCH 0)
+set(GGML_VERSION_MINOR 25)
+set(GGML_VERSION_PATCH 3)
 set(GGML_VERSION_BASE "${GGML_VERSION_MAJOR}.${GGML_VERSION_MINOR}.${GGML_VERSION_PATCH}")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
@@ -191,7 +191,6 @@ set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
 option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
 
-
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)
 option(GGML_VULKAN_CHECK_RESULTS            "ggml: run Vulkan op checks"                      OFF)
 option(GGML_VULKAN_DEBUG                    "ggml: enable Vulkan debug output"                OFF)
@@ -200,6 +199,7 @@ option(GGML_VULKAN_SHADER_DEBUG_INFO        "ggml: enable Vulkan shader debug in
 option(GGML_VULKAN_VALIDATE                 "ggml: enable Vulkan validation"                  OFF)
 option(GGML_VULKAN_RUN_TESTS                "ggml: run Vulkan tests"                          OFF)
 option(GGML_OPENMP                          "ggml: use OpenMP"                                ON)
+option(GGML_OPENMP_FETCH                    "ggml: fetch LLVM OpenMP"                         OFF)
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
 option(GGML_SYCL_GRAPH                      "ggml: enable graphs in the SYCL backend"         ON)
@@ -211,11 +211,18 @@ set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
+option(GGML_SYCL_SEPARATE_BUILD             "ggml: build in a nested project with its own C++ compiler, so the rest can use another compiler such as GCC or hipcc" OFF)
+if (WIN32)
+    set(GGML_SYCL_SEPARATE_BUILD_CXX_DEFAULT "icx")
+else()
+    set(GGML_SYCL_SEPARATE_BUILD_CXX_DEFAULT "icpx")
+endif()
+set   (GGML_SYCL_SEPARATE_BUILD_CXX "${GGML_SYCL_SEPARATE_BUILD_CXX_DEFAULT}" CACHE STRING
+                                            "ggml: C++ compiler for GGML_SYCL_SEPARATE_BUILD (icx on Windows, icpx elsewhere)")
+set   (GGML_SYCL_SEPARATE_BUILD_ARGS "" CACHE STRING
+                                            "ggml: extra arguments for the GGML_SYCL_SEPARATE_BUILD nested configure, one -D per list element, | stands for ;")
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
-option(GGML_ET                              "ggml: use ET backend"                            OFF)
-option(GGML_ET_SYSEMU                       "ggml: use ET backend via sysemu"                 OFF)
-
 
 # toolchain for vulkan-shaders-gen
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
@@ -338,19 +345,15 @@ configure_package_config_file(
               GGML_BIN_INSTALL_DIR)
 
 write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/ggml-config-version.cmake
     VERSION ${GGML_INSTALL_VERSION}
     COMPATIBILITY SameMajorVersion)
 
-target_compile_definitions(ggml-base PRIVATE
-    GGML_VERSION="${GGML_INSTALL_VERSION}"
-    GGML_COMMIT="${GGML_BUILD_COMMIT}"
-)
 message(STATUS "ggml version: ${GGML_INSTALL_VERSION}")
 message(STATUS "ggml commit:  ${GGML_BUILD_COMMIT}")
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/ggml-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
 
 if (MSVC)

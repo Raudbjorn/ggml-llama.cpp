@@ -69,6 +69,9 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q5_K_M",   LLAMA_FTYPE_MOSTLY_Q5_K_M,   " 5.33G, +0.0569 ppl @ Llama-3-8B",  },
     { "Q6_K",     LLAMA_FTYPE_MOSTLY_Q6_K,     " 6.14G, +0.0217 ppl @ Llama-3-8B",  },
     { "Q8_0",     LLAMA_FTYPE_MOSTLY_Q8_0,     " 7.96G, +0.0026 ppl @ Llama-3-8B",  },
+    { "Q8_CR",    LLAMA_FTYPE_MOSTLY_Q8_CR,    " 7.96G, ConvRot-rotated Q8_0",  },
+    { "Q5_CR",    LLAMA_FTYPE_MOSTLY_Q5_CR,    " 5.21G, ConvRot-rotated Q5_0",  },
+    { "Q6_CR",    LLAMA_FTYPE_MOSTLY_Q6_CR,    " 6.56G, ConvRot-rotated Q6_K",  },
     { "F16",      LLAMA_FTYPE_MOSTLY_F16,      "14.00G, +0.0020 ppl @ Mistral-7B",  },
     { "BF16",     LLAMA_FTYPE_MOSTLY_BF16,     "14.00G, -0.0050 ppl @ Mistral-7B",  },
     { "F32",      LLAMA_FTYPE_ALL_F32,         "26.00G              @ 7B",          },
@@ -124,7 +127,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
     printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
-    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run]\n");
+    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run] [--max-buffer-size]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize\n");
     printf("                                      allow requantizing tensors that have already been quantized\n");
@@ -163,7 +166,10 @@ static void usage(const char * executable) {
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --dry-run\n");
     printf("                                      calculate and show the final quantization size without performing quantization\n");
-    printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n\n");
+    printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n");
+    printf("  --max-buffer-size MiB\n");
+    printf("                                      max amount of tensor rows kept in memory while quantizing one tensor (default: 8192)\n");
+    printf("                                      lower it to quantize models with very large tensors on a machine with little RAM\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
     printf(" allowed quantization types\n");
@@ -469,6 +475,16 @@ int llama_quantize(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
             params.keep_split = true;
+        } else if (strcmp(argv[arg_idx], "--max-buffer-size") == 0) {
+            if (arg_idx == argc-1) {
+                usage(argv[0]);
+            }
+            const int mib = atoi(argv[++arg_idx]);
+            if (mib <= 0) {
+                fprintf(stderr, "%s: invalid --max-buffer-size '%s'\n", __func__, argv[arg_idx]);
+                return 1;
+            }
+            params.max_buf_size = (size_t) mib * 1024 * 1024;
         } else {
             usage(argv[0]);
         }
@@ -613,7 +629,7 @@ int llama_quantize(int argc, char ** argv) {
         }
     }
 
-    llama_print_build_info();
+    llama_print_build_info(llama_version());
 
     if (params.dry_run) {
         fprintf(stderr, "%s: calculating quantization size for '%s' as %s", __func__, fname_inp.c_str(), ftype_str.c_str());

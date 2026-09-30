@@ -54,8 +54,6 @@ struct pca_model {
     struct ggml_tensor * dev_eigenvector;
 
     pca_model(struct ggml_tensor * t_input) {
-        // CPU-only fallback; CUDA/Metal paths were pruned with the backends.
-        // if there aren't GPU Backends fallback to CPU backend
         if (!backend) {
             backend = ggml_backend_cpu_init();
         }

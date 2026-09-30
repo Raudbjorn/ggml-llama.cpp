@@ -54,6 +54,7 @@ static inline dst_t llama_cast(src_t v) {
     }
 }
 
+// Helper: apply Hadamard rotation matrix to the last dimension via mul_mat
 static inline ggml_tensor * llama_mul_mat_hadamard(
         ggml_context * ctx,
         ggml_tensor * cur,
@@ -92,6 +93,8 @@ struct buffer_view {
         return data && size > 0;
     }
 };
+
+void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size);
 
 void replace_all(std::string & s, const std::string & search, const std::string & replace);
 
