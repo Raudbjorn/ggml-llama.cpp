@@ -954,10 +954,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     parse_cli_args();
 
     if (ctx_arg.ex == LLAMA_EXAMPLE_SERVER) {
-        if (std::getenv("LLAMA_ARG_API_KEY") != nullptr && params.api_keys.empty()) {
-            LOG_WRN("LLAMA_ARG_API_KEY is ignored; use LLAMA_API_KEY, LLAMA_ARG_API_KEY_FILE, --api-key, or --api-key-file\n");
-        }
-        if (std::getenv("HUGGINGFACE_HUB_TOKEN") != nullptr && params.hf_token.empty()) {
+        if (std::getenv("HUGGINGFACE_HUB_TOKEN") != nullptr && common_models_handler_get_hf_token(params).empty()) {
             LOG_WRN("HUGGINGFACE_HUB_TOKEN is ignored by llama-server; use HF_TOKEN or --hf-token\n");
         }
     }
@@ -1058,7 +1055,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         const std::vector<std::string> unknown_env_vars =
             find_unknown_env_vars(ctx_arg.options, common_get_process_environment());
         for (const std::string & name : unknown_env_vars) {
-            LOG_WRN("unknown environment variable: %s\n", name.c_str());
+            if (ctx_arg.ex == LLAMA_EXAMPLE_SERVER && name == "LLAMA_ARG_API_KEY" && params.api_keys.empty()) {
+                LOG_WRN("LLAMA_ARG_API_KEY is ignored; use LLAMA_API_KEY, LLAMA_ARG_API_KEY_FILE, --api-key, or --api-key-file\n");
+            } else {
+                LOG_WRN("unknown environment variable: %s\n", name.c_str());
+            }
         }
     }
 

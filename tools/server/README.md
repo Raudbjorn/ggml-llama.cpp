@@ -525,11 +525,11 @@ docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/l
 | --- | --- | --- |
 | API key | `--api-key` | `LLAMA_API_KEY` |
 | API key file | `--api-key-file` | `LLAMA_ARG_API_KEY_FILE` |
-| Hugging Face token | `--hf-token` | `HF_TOKEN` |
+| Hugging Face token | `--hf-token` | `HF_TOKEN`, then `HUGGING_FACE_HUB_TOKEN` |
 | Model endpoint | None | `MODEL_ENDPOINT`, then `HF_ENDPOINT`, then `https://huggingface.co/` |
 | CORS allowlist | `--cors-origins` | `LLAMA_ARG_CORS_ORIGINS` |
 
-`LLAMA_ARG_API_KEY` and `HUGGINGFACE_HUB_TOKEN` are not accepted by `llama-server`.
+`LLAMA_ARG_API_KEY` and `HUGGINGFACE_HUB_TOKEN` are not accepted by `llama-server`. Unknown `LLAMA_ARG_*` diagnostics require `--warn-unknown-env` (or `LLAMA_ARG_WARN_UNKNOWN_ENV=1`); when no API key resolves, the diagnostic for `LLAMA_ARG_API_KEY` names the supported sources. The server warns about `HUGGINGFACE_HUB_TOKEN` when no supported Hugging Face token resolves.
 
 For non-loopback deployments, require API authentication and configure an explicit CORS origin. Keep `--ui-mcp-proxy`, `--tools`, and `--agent` disabled in untrusted environments. When enabled, `/cors-proxy` blocks non-global numeric, local, and metadata direct targets by default; `--ui-mcp-proxy-allow` adds exact host exceptions. Redirect destinations and DNS answers are not revalidated or pinned. It is not a general-purpose reverse proxy.
 
