@@ -229,8 +229,8 @@ extern "C" {
     typedef ggml_backend_t               (*ggml_backend_init_private_stream_t)(ggml_backend_dev_t device);
     // True if every async operation and graph compute of backends on this device runs in issue order
     // on one stream, or joins any other stream back before the operation returns
-    // ("ggml_backend_async_is_stream_ordered"). Without pipeline-parallel events the scheduler then
-    // skips the host sync before a host-to-device split input copy and uses set_tensor_async.
+    // ("ggml_backend_async_is_stream_ordered"). Single-copy schedulers can then use set_tensor_async
+    // without a destination wait. Mutable sources also require an upload-completion event.
     typedef bool                         (*ggml_backend_async_is_stream_ordered_t)(ggml_backend_dev_t device);
 
     //

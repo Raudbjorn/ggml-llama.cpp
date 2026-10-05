@@ -75,24 +75,31 @@ Decode t/s did not change beyond noise.
 
    The guard works like this:
    - `pending_host_reads[b]` is set when a stream-ordered upload reads a non-WEIGHTS host
-     source. Weights are immutable, so they never set it.
+     source. An event is recorded immediately after the upload, before later kernels.
+     Weights are immutable, so they never set it. Mutable sources retain the blocking
+     copy path when the backend cannot provide an upload-completion event.
    - Before a host split (`ggml_backend_buft_is_host(bufts[b])`, which covers CPU and BLAS)
-     starts, including its own input copies, every flagged backend is synchronized.
+     starts, including its own input copies, each pending upload event is waited.
    - After every `ggml_backend_sched_compute_splits`, whatever its status (in
      `ggml_backend_sched_graph_compute_async`), the same happens, and `ggml_backend_sched_synchronize`
      clears the flags.
-   - The existing scheduler syncs of a backend clear its flag too, so the flush adds no new sync
-     on the common decode path. There, a CPU split needs the GPU's output anyway, so the flush
-     only moves that wait ahead of its input loop.
+   - Upload-event waits leave later device kernels in flight. A CPU split that depends on
+     their output still performs its existing backend synchronization. The first revision
+     drained the whole backend in the guard, causing a redundant full wait on that path
+     and draining final device work before async graph return. That claim of merely moving
+     an existing wait was incorrect. Event waits add work; their runtime cost is unmeasured.
 5. **MoE-weight and prefetch inputs.** When the stream-ordered condition holds for these, the
    step-1 wait is skipped as well. This is safe because the SYCL stream is in-order: the routed
    copy into the destination runs after every earlier read of it. The ids readback is not the
    argument, because it does not always synchronize the split backend. The weight sources are
    immutable. Prefetch writes a staging slot, not the destination's own memory.
+   CPU-from-pointer buffers are excluded from the new stream-ordered path, including ordinary
+   mapped MUL_MAT weights. Their existing copy path preserves the SYCL/PVC malloc staging
+   workaround; the scheduler must not pass a mapped address directly to the async setter.
 6. **Counters.** The number of stream-ordered copies, flushes at a host split and flushes at graph
    end are printed as one `GGML_LOG_DEBUG` line when the scheduler is freed, visible with `-v`.
-   In decode with CPU experts, expect roughly one host-split flush per CPU MoE layer. As noted
-   above, that is the wait the CPU split needed anyway.
+   These count upload-event waits separately from full backend synchronization; they do not
+   establish a performance improvement.
 
 ## Obstacles
 
@@ -107,14 +114,30 @@ Decode t/s did not change beyond noise.
 
 2026-10-05 review follow-up, after rebasing onto master `a17b8400d`:
 
-- CPU-only `test-sched-stream-ordered` uses real scheduler splits with a CPU-backed
+- The initial CPU-only `test-sched-stream-ordered` at `c834a7490` used real scheduler splits with a CPU-backed
   destination advertising stream order but returning null events. It checks the selected
   copy path and output values across repeated graph computations in both scheduler modes.
-- Before the fix, the serial control passed with three async uploads; parallel mode
+- Before the single-copy fix, the serial control passed with three async uploads; parallel mode
   incorrectly made nine async uploads and failed. With `n_copies == 1` required, serial
-  still makes three async uploads and parallel mode makes zero, retaining synchronization.
-- This checks scheduler selection, not delayed device execution or GPU host-source lifetime.
+  still made three async uploads and parallel mode made zero, retaining synchronization.
+- That initial test checked scheduler selection, not delayed device execution or GPU host-source lifetime.
   GPU correctness, model output comparisons, and timing runs remain pending.
+
+The subsequent lifetime follow-up replaces that immediate-copy mock with a deterministic
+deferred queue. The CPU-only build and CTest pass seven cases: successful async return,
+an independent host split with only user inputs, a dependent host split, failed device
+compute after upload submission, serial and parallel null-event fallback, and mapped-buffer
+WEIGHTS in ordinary MUL_MAT. Successful and failed async returns release the upload source;
+successful returns leave unrelated compute queued. The host-input-only case overwrites the
+source before graph return and checks that the uploaded values remain correct. The dependent
+host split requires exactly one full producer synchronization before its computation.
+
+Four temporary negative controls each failed the test: removing the host-split flush,
+removing the graph-return flush, removing mapped-buffer exclusion, and replacing event waits
+with full destination synchronization. The production source was restored and CTest passed
+again. Run it with `ctest --test-dir BUILD -R '^test-sched-stream-ordered$' --output-on-failure`.
+These synthetic checks do not verify SYCL event execution, the PVC driver workaround itself,
+or runtime performance.
 
 ## Not claimed
 
