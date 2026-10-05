@@ -2,14 +2,6 @@
 #include "llama.h"
 #include "ggml.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
-
 #include <cstdio>
 #include <ctime>
 #include <random>
@@ -61,13 +53,6 @@ struct pca_model {
     struct ggml_tensor * dev_eigenvector;
 
     pca_model(struct ggml_tensor * t_input) {
-#ifdef GGML_USE_CUDA
-        fprintf(stderr, "%s: using CUDA backend\n", __func__);
-        backend = ggml_backend_cuda_init(0); // init device 0
-        if (!backend) {
-            fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
-        }
-#endif
 
 // TODO: enable Metal support when support for GGML_OP_SQRT is added
 // #ifdef GGML_USE_METAL
