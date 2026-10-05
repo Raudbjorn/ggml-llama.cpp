@@ -33,13 +33,13 @@ git clone https://huggingface.co/openai/clip-vit-large-patch14-336
 2. Use `llava_surgery.py` to split the LLaVA model to LLaMA and multimodel projector constituents:
 
 ```sh
-python ./tools/mtmd/llava_surgery.py -m path/to/MobileVLM-1.7B
+python ./tools/mtmd/legacy-models/llava_surgery.py -m path/to/MobileVLM-1.7B
 ```
 
 3. Use `convert_image_encoder_to_gguf.py` with `--projector-type ldp` (for **V2** please use `--projector-type ldpv2`) to convert the LLaVA image encoder to GGUF:
 
 ```sh
-python ./tools/mtmd/convert_image_encoder_to_gguf.py \
+python ./tools/mtmd/legacy-models/convert_image_encoder_to_gguf.py \
     -m path/to/clip-vit-large-patch14-336 \
     --llava-projector path/to/MobileVLM-1.7B/llava.projector \
     --output-dir path/to/MobileVLM-1.7B \
@@ -47,7 +47,7 @@ python ./tools/mtmd/convert_image_encoder_to_gguf.py \
 ```
 
 ```sh
-python ./tools/mtmd/convert_image_encoder_to_gguf.py \
+python ./tools/mtmd/legacy-models/convert_image_encoder_to_gguf.py \
     -m path/to/clip-vit-large-patch14-336 \
     --llava-projector path/to/MobileVLM-1.7B_V2/llava.projector \
     --output-dir path/to/MobileVLM-1.7B_V2 \
@@ -68,15 +68,7 @@ python ./examples/convert_legacy_llama.py path/to/MobileVLM-1.7B --skip-unknown
 Now both the LLaMA part and the image encoder is in the `MobileVLM-1.7B` directory.
 
 ## Android compile and run
-### compile
-refer to `tools/mtmd/android/build_64.sh`
-```sh
-mkdir tools/mtmd/android/build_64
-cd tools/mtmd/android/build_64
-../build_64.sh
-```
-### run on Android
-refer to `android/adb_run.sh`, modify resources' `name` and `path`
+The `build_64.sh` and `adb_run.sh` helper scripts were removed upstream and are not in this tree. See [android.md](../android.md) for building on Android; the Android results below are historical.
 
 ## Some result on Android with `Snapdragon 888` chip
 ### case 1
@@ -191,58 +183,13 @@ llama_print_timings:        eval time =   14497.49 ms /   186 runs   (   77.94 m
 llama_print_timings:       total time =   44411.01 ms /   377 tokens
 ```
 
-**input**
-```sh
-./llama-mtmd-cli \
-    -m /data/local/tmp/ggml-model-q4_k.gguf \
-    --mmproj /data/local/tmp/mmproj-model-f16.gguf \
-    --image /data/local/tmp/demo.jpeg \
-    -p "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: <image>\nWho is the author of this book? \nAnswer the question using a single word or phrase. ASSISTANT:" \
-    --n-gpu-layers 999
-```
-**output**
-```sh
-
-encode_image_with_clip: image encoded in   296.62 ms by CLIP (    2.06 ms per image patch)
-
- Susan Wise Bauer
-
-llama_print_timings:        load time =    1067.64 ms
-llama_print_timings:      sample time =       1.53 ms /     6 runs   (    0.25 ms per token,  3934.43 tokens per second)
-llama_print_timings: prompt eval time =     306.84 ms /   246 tokens (    1.25 ms per token,   801.72 tokens per second)
-llama_print_timings:        eval time =      91.50 ms /     6 runs   (   15.25 ms per token,    65.58 tokens per second)
-llama_print_timings:       total time =    1352.63 ms /   252 tokens
-```
-
-### case 2
-**input**
-```sh
-./llama-mtmd-cli \
-    -m /data/local/tmp/ggml-model-q4_k.gguf \
-    --mmproj /data/local/tmp/mmproj-model-f16.gguf \
-    -p "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: <image>\nWhat is in the image? ASSISTANT:" \
-    --n-gpu-layers 999
-
-```
-**output**
-```sh
-encode_image_with_clip: image encoded in   302.15 ms by CLIP (    2.10 ms per image patch)
-
- The image features a cat lying in the grass.
-
-llama_print_timings:        load time =    1057.07 ms
-llama_print_timings:      sample time =       3.27 ms /    11 runs   (    0.30 ms per token,  3360.83 tokens per second)
-llama_print_timings: prompt eval time =     213.60 ms /   232 tokens (    0.92 ms per token,  1086.14 tokens per second)
-llama_print_timings:        eval time =     166.65 ms /    11 runs   (   15.15 ms per token,    66.01 tokens per second)
-llama_print_timings:       total time =    1365.47 ms /   243 tokens
-```
-
 ## Running on Intel(R) Core(TM) i7-10750H
 ### Operating system
 Ubuntu22.04
 ### compile
 ```sh
-make -j32
+cmake -B build
+cmake --build build --config Release -j 32
 ```
 ### MobileVLM-1.7B case
 **input**
@@ -300,7 +247,8 @@ llama_print_timings:       total time =   15513.95 ms /   412 tokens
 Windows11
 ### compile
 ```sh
-make -j32
+cmake -B build
+cmake --build build --config Release -j 32
 ```
 ### MobileVLM-1.7B case
 **input**
@@ -360,7 +308,7 @@ llama_print_timings:       total time =   14371.19 ms /   446 tokens
 
       - Optimize the structure definition to avoid unnecessary memory rearrangements, to reduce the use of `ggml_permute_cpy`;
       - Optimize operator implementation (ARM CPU/NVIDIA GPU): such as depthwise conv, hardswish, hardsigmoid, etc.
-- [x] run MobileVLM on `Jetson Orin`
+- [x] run MobileVLM on `Jetson Orin` (upstream CUDA build; CUDA is not in this fork)
 - [ ] Support more model variants, such as `MobileVLM-3B`.
 
 

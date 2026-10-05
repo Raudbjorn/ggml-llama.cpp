@@ -43,13 +43,13 @@ pip install -r tools/mtmd/requirements.txt
 3. Use `llava_surgery.py` to split the LLaVA model to LLaMA and multimodel projector constituents:
 
 ```sh
-python ./tools/mtmd/llava_surgery.py -m ../llava-v1.5-7b
+python ./tools/mtmd/legacy-models/llava_surgery.py -m ../llava-v1.5-7b
 ```
 
 4. Use `convert_image_encoder_to_gguf.py` to convert the LLaVA image encoder to GGUF:
 
 ```sh
-python ./tools/mtmd/convert_image_encoder_to_gguf.py -m ../clip-vit-large-patch14-336 --llava-projector ../llava-v1.5-7b/llava.projector --output-dir ../llava-v1.5-7b
+python ./tools/mtmd/legacy-models/convert_image_encoder_to_gguf.py -m ../clip-vit-large-patch14-336 --llava-projector ../llava-v1.5-7b/llava.projector --output-dir ../llava-v1.5-7b
 ```
 
 5. Use `examples/convert_legacy_llama.py` to convert the LLaMA part of LLaVA to GGUF:
@@ -74,7 +74,7 @@ pip install -r tools/mtmd/requirements.txt
 
 3) Use `llava_surgery_v2.py` which also supports llava-1.5 variants pytorch as well as safetensor models:
 ```console
-python tools/mtmd/llava_surgery_v2.py -C -m ../llava-v1.6-vicuna-7b/
+python tools/mtmd/legacy-models/llava_surgery_v2.py -C -m ../llava-v1.6-vicuna-7b/
 ```
 - you will find a llava.projector and a llava.clip file in your model directory
 
@@ -88,7 +88,7 @@ curl -s -q https://huggingface.co/cmp-nct/llava-1.6-gguf/raw/main/config_vit.jso
 
 5) Create the visual gguf model:
 ```console
-python ./tools/mtmd/convert_image_encoder_to_gguf.py -m vit --llava-projector vit/llava.projector --output-dir vit --clip-model-is-vision
+python ./tools/mtmd/legacy-models/convert_image_encoder_to_gguf.py -m vit --llava-projector vit/llava.projector --output-dir vit --clip-model-is-vision
 ```
 - This is similar to llava-1.5, the difference is that we tell the encoder that we are working with the pure vision model part of CLIP
 
@@ -131,13 +131,11 @@ For llava-1.5 and llava-1.6, you need to use `vicuna` chat template. Simply add 
 
 ## How to know if you are running in llava-1.5 or llava-1.6 mode
 
-When running llava-cli you will see a visual information right before the prompt is being processed:
+When running `llama-mtmd-cli`, the image token count is logged in the `decoding image batch i/N, n_tokens_batch = ...` lines (sum them if the image spans several batches):
 
-**Llava-1.5:**
-`encode_image_with_clip: image embedding created: 576 tokens`
+**Llava-1.5:** 576 tokens
 
-**Llava-1.6 (anything above 576):**
-`encode_image_with_clip: image embedding created: 2880 tokens`
+**Llava-1.6 (anything above 576):** e.g. 2880 tokens
 
 
 Alternatively just pay notice to how many "tokens" have been used for your prompt, it will also show 1000+ tokens for llava-1.6

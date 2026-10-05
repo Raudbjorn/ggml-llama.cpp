@@ -13,32 +13,32 @@ The unified auto-parser uses a pure differential, compositional approach (inspir
 
 **Analysis + Parser Building in Two Steps**:
 
-1. `autoparser::autoparser tmpl_analysis(tmpl)` — runs all differential comparisons and populates the analysis structs
-2. `autoparser::peg_generator::generate_parser(tmpl, generation_params, tmpl_analysis)` — uses the analysis to build a PEG parser and optional GBNF grammar
+1. `autoparser::autoparser tmpl_analysis; tmpl_analysis.analyze_template(tmpl)` - runs all differential comparisons and populates the analysis structs
+2. `autoparser::peg_generator::generate_parser(tmpl, generation_params, tmpl_analysis)` - uses the analysis to build a PEG parser and optional GBNF grammar
 
 ## Data Structures
 
-All structs are defined in [common/chat-auto-parser.h](common/chat-auto-parser.h).
+All structs are defined in [common/chat-auto-parser.h](../common/chat-auto-parser.h).
 
 ### Top-Level: `autoparser` (main analyzer and generator)
 
-[common/chat-auto-parser.h:367-388](common/chat-auto-parser.h#L367-L388) — top-level analysis result aggregating `jinja_caps`, `reasoning`, `content`, and `tools` sub-analyses, plus `preserved_tokens` (union of all non-empty markers).
+[common/chat-auto-parser.h:381-409](../common/chat-auto-parser.h#L381-L409) - top-level analysis result aggregating `jinja_caps`, `reasoning`, `content`, and `tools` sub-analyses, plus `user_start`/`assistant_start` message markers, `preserved_tokens` (union of all non-empty markers) and `additional_stops` (literal stop strings).
 
 ### `analyze_reasoning`
 
-[common/chat-auto-parser.h:254-274](common/chat-auto-parser.h#L254-L274) — reasoning analysis result: `mode` enum, `start` marker (e.g. `<think>`), and `end` marker (e.g. `</think>`).
+[common/chat-auto-parser.h:256-277](../common/chat-auto-parser.h#L256-L277) - reasoning analysis result: `mode` enum, `start` marker (e.g. `<think>`), and `end` marker (e.g. `</think>`).
 
 ### `analyze_content`
 
-[common/chat-auto-parser.h:280-295](common/chat-auto-parser.h#L280-L295) — content analysis result: `mode` enum, `start`/`end` markers, and `requires_nonnull_content` flag.
+[common/chat-auto-parser.h:283-298](../common/chat-auto-parser.h#L283-L298) - content analysis result: `mode` enum, `start`/`end` markers, and `requires_nonnull_content` flag.
 
 ### `analyze_tools` and its sub-structs
 
-- [common/chat-auto-parser.h:176-194](common/chat-auto-parser.h#L176-L194) — `tool_format_analysis`: `mode` enum, `section_start/end`, `per_call_start/end`, JSON field names (`function_field`, `name_field`, `args_field`, `id_field`, `gen_id_field`), and format flags (`fun_name_is_key`, `tools_array_wrapped`)
-- [common/chat-auto-parser.h:196-200](common/chat-auto-parser.h#L196-L200) — `tool_function_analysis`: `name_prefix`, `name_suffix`, `close` markers around function names
-- [common/chat-auto-parser.h:202-210](common/chat-auto-parser.h#L202-L210) — `tool_arguments_analysis`: `start/end` container markers, `name_prefix/suffix`, `value_prefix/suffix`, `separator`
-- [common/chat-auto-parser.h:212-217](common/chat-auto-parser.h#L212-L217) — `tool_id_analysis`: `pos` enum, `prefix`/`suffix` markers around call ID values
-- [common/chat-auto-parser.h:301-361](common/chat-auto-parser.h#L301-L361) — `analyze_tools`: aggregates the four sub-structs above
+- [common/chat-auto-parser.h:174-192](../common/chat-auto-parser.h#L174-L192) - `tool_format_analysis`: `mode` enum, `section_start/end`, `per_call_start/end`, JSON field names (`function_field`, `name_field`, `args_field`, `id_field`, `gen_id_field`), `parameter_order`, and format flags (`fun_name_is_key`, `tools_array_wrapped`, `openai_wrapper_trigger`)
+- [common/chat-auto-parser.h:194-199](../common/chat-auto-parser.h#L194-L199) - `tool_function_analysis`: `name_prefix`, `name_suffix`, `args_separator`, `close` markers around function names
+- [common/chat-auto-parser.h:201-210](../common/chat-auto-parser.h#L201-L210) - `tool_arguments_analysis`: `start/end` container markers, `name_prefix/suffix`, `value_prefix/suffix`, `separator`, `tolerate_intertag_whitespace`
+- [common/chat-auto-parser.h:212-217](../common/chat-auto-parser.h#L212-L217) - `tool_id_analysis`: `pos` enum, `prefix`/`suffix` markers around call ID values
+- [common/chat-auto-parser.h:304-375](../common/chat-auto-parser.h#L304-L375) - `analyze_tools`: aggregates the four sub-structs above
 
 ### Enums
 
@@ -50,17 +50,16 @@ All structs are defined in [common/chat-auto-parser.h](common/chat-auto-parser.h
 | `TAG_BASED`     | Tag-based: `<think>...</think>` (start can be empty for delimiter-style formats)  |
 | `TOOLS_ONLY`    | Reasoning only appears in tool call responses, not plain content                  |
 
-**Generation Prompt & Reasoning Prefill**: Computed in `common_chat_templates_apply_jinja` before invoking either the specialized handlers or the auto-parser, by rendering the template twice — once with `add_generation_prompt=false` and once with `add_generation_prompt=true` — and storing the diff suffix as `generation_params::generation_prompt`. This string is propagated into `common_chat_params::generation_prompt` and `common_chat_parser_params::generation_prompt`.
+**Generation Prompt & Reasoning Prefill**: Computed by `common_chat_template_generation_prompt()` (specialized handlers call its `_impl` variant) in `common/chat.cpp`, which renders the template twice - once with `add_generation_prompt=false` and once with `add_generation_prompt=true` - and returns the diff suffix. The auto-parser and the specialized handlers store it in `common_chat_params::generation_prompt`, which is propagated into `common_chat_parser_params::generation_prompt` and `common_params_sampling::generation_prompt`.
 
-The generation prompt is prepended to model output before PEG parsing via `wrap_for_generation_prompt()`. The portion *before* the reasoning start marker (if any) is prepended as a literal to ensure any boilerplate added by the template is consumed. The full string is also fed to the grammar sampler via `llama_sampler_accept` (stored in `common_params_sampling::grammar_prefill`), advancing the grammar past tokens already in the prompt. It is used to determine the reasoning budget sampler's initial state — COUNTING if the prefill tokens begin with the reasoning start sequence (but don't also contain the end sequence), IDLE otherwise.
+The generation prompt is prepended to model output before PEG parsing (`common_chat_peg_parse()`). `autoparser::build_parser()` starts the parser with `p.prefix(generation_prompt, reasoning_start)`, a literal for the portion *before* the reasoning start marker (if any), so any boilerplate added by the template is consumed. The full string is also fed to the grammar sampler via `llama_sampler_accept`, advancing the grammar past tokens already in the prompt, and to the reasoning budget sampler, which therefore starts COUNTING when the generation prompt opens reasoning without closing it.
 
-**`grammar_prefill`** (`common_params_sampling`): The generation prompt string tokenized and accepted by the grammar sampler at init time. Only applied when `grammar_external` is false (i.e., the grammar was not set explicitly by the user).
+**Grammar prefill** (`common_sampler_init()`): the tokenized generation prompt is accepted by the grammar sampler only for output-format and tool-call grammars (`common_grammar_needs_prefill()`) and only when the grammar is not lazy; user-supplied grammars are never prefilled.
 
-Three outcomes for reasoning-prefill handling (in `generate_parser()`):
+How the reasoning parser sees a prefilled generation prompt:
 
-1. **Start+end in generation prompt** (e.g. `<think></think>\n`): the parser sees reasoning as opened and immediately closed; whitespace-only reasoning content is discarded.
-2. **Only start in generation prompt** (e.g. `<think>\n`): the parser sees reasoning as already open.
-3. **Start marker present but not at the end** (e.g. Apriel's `<|begin_assistant|>` followed by boilerplate): the marker is a template artifact; the start literal is cleared so reasoning uses delimiter-style (end-only). For templates that ignore `add_generation_prompt` (empty diff), the rendered `data.prompt` is used as fallback — but only for non-TOOLS_ONLY modes, since in TOOLS_ONLY the start tag is model-generated and may appear in prior conversation turns.
+1. **Start+end in generation prompt** (e.g. `<think></think>\n`): the parser sees reasoning as opened and immediately closed; whitespace-only reasoning content is discarded by the mapper.
+2. **Only start in generation prompt** (e.g. `<think>\n`): the prepended start marker opens reasoning, so the model output is parsed as reasoning until the end marker.
 
 **`content_mode`**: How the template wraps assistant content.
 
@@ -180,7 +179,7 @@ String values (`Paris`, `celsius`, `2+2`) are unquoted; `options` (object type) 
 ## Analysis Flow
 
 ```text
-autoparser::autoparser(tmpl)
+autoparser::analyze_template(tmpl)
     |
     |-- Phase 1: analyze_reasoning(tmpl, jinja_caps.supports_tool_calls)
     |     |-- R1: compare_reasoning_presence()   — with/without reasoning_content field
@@ -215,6 +214,8 @@ autoparser::autoparser(tmpl)
     |     |
     |     '-- T7: extract_call_id_markers()      — call_id "call00001" vs "call99999"
     |
+    |-- detect_assistant_start_marker() / detect_user_start_marker()
+    |
     '-- collect_preserved_tokens()               — union of all non-empty markers
     |
     '-- apply workarounds()                      — post-hoc patches for edge-case templates
@@ -224,7 +225,7 @@ autoparser (analysis result)
     |
     v
 autoparser::peg_generator::generate_parser(tmpl, inputs, analysis)
-    |-- analysis.build_parser(inputs)            — builds PEG parser arena
+    |-- analysis.build_parser(inputs, generation_prompt) - builds PEG parser arena
     |     |-- reasoning.build_parser(ctx)        — reasoning parser (mode-dependent)
     |     |-- content.build_parser(ctx)          — content parser (mode-dependent)
     |     '-- tools.build_parser(ctx)            — tool parser (dispatches by tool_format)
@@ -232,8 +233,8 @@ autoparser::peg_generator::generate_parser(tmpl, inputs, analysis)
     |           |-- build_tool_parser_tag_json()
     |           '-- build_tool_parser_tag_tagged()
     |
-    |-- Build GBNF grammar (if tools present and trigger_marker non-empty)
-    '-- Set grammar_triggers from section_start or per_call_start
+    |-- Build GBNF grammar (json_schema set, or tools with a trigger marker or tool_choice=required)
+    '-- Set grammar_triggers from section_start or per_call_start (lazy grammar only)
     |
     v
 common_chat_params (prompt, parser, grammar, triggers, preserved_tokens)
@@ -241,19 +242,19 @@ common_chat_params (prompt, parser, grammar, triggers, preserved_tokens)
 
 ## Entry Point
 
-The auto-parser is invoked in [common/chat.cpp:1280-1310](common/chat.cpp#L1280-L1310) in `common_chat_templates_apply_jinja`. A few specialized templates are handled first (Ministral/Magistral Large 3, GPT-OSS with `<|channel|>`, Functionary v3.2 with `>>>all`), then the auto-parser handles everything else via `autoparser::autoparser` + `peg_generator::generate_parser`.
+The auto-parser is invoked in [common/chat.cpp:1332-1366](../common/chat.cpp#L1332-L1366) in `common_chat_templates_apply_jinja`. Templates that need a dedicated handler are matched first by source substrings in `common_chat_try_specialized_template()` ([common/chat.cpp:1091-1224](../common/chat.cpp#L1091-L1224)); the handlers live in [common/parsers/](../common/parsers/) (Ministral/Magistral Large 3, GPT-OSS, Muse Glimmer, Functionary v3.2, Kimi K2 Thinking, Kimi K3, Ling 3.0, Cohere2 MoE, LFM2/LFM2.5, GigaChatV3, MiniMax-M3, DeepSeek V3.2/V4, Gemma 4, MiniCPM5, Qwen3-Coder). The auto-parser handles everything else via `autoparser::analyze_template` + `peg_generator::generate_parser`.
 
 ## Algorithm Details
 
 ### Core Mechanism: Differential Comparison
 
-All analysis phases use the same factorized comparison function declared in [common/chat-auto-parser-helpers.h:68](common/chat-auto-parser-helpers.h#L68):
+All analysis phases use the same factorized comparison function declared in [common/chat-auto-parser-helpers.h:69](../common/chat-auto-parser-helpers.h#L69):
 
 ```cpp
 compare_variants(tmpl, params_A, params_modifier)
 ```
 
-This creates variant B by applying a modifier lambda to a copy of `params_A`, renders both through the template, and computes a `diff_split` ([common/chat-auto-parser.h:28-37](common/chat-auto-parser.h#L28-L37)):
+This creates variant B by applying a modifier lambda to a copy of `params_A`, renders both through the template, and computes a `diff_split` ([common/chat-auto-parser.h:30-39](../common/chat-auto-parser.h#L30-L39)):
 
 - `prefix` — common prefix between A and B
 - `suffix` — common suffix between A and B
@@ -352,32 +353,39 @@ Classification logic:
 
 A workaround array in `common/chat-diff-analyzer.cpp` applies post-hoc patches after analysis. Each workaround is a lambda that inspects the template source and overrides analysis results. Current workarounds:
 
-1. **Old Qwen/DeepSeek thinking templates** — source contains `content.split('</think>')` but not `<SPECIAL_12>`: sets `reasoning.mode = TAG_BASED` with `<think>`/`</think>` markers if no reasoning was detected
+1. **Old Qwen/DeepSeek thinking templates** - source contains `content.split('</think>')` but neither `reasoning_content` nor `<SPECIAL_12>`: sets `reasoning.mode = TAG_BASED` with `<think>`/`</think>` markers if no reasoning was detected
 2. **Granite 3.3** — source contains specific "Write your thoughts" text: forces `TAG_BASED` reasoning with `<think>`/`</think>` and `WRAPPED_WITH_REASONING` content with `<response>`/`</response>`
 3. **Cohere Command R+** — source contains `<|CHATBOT_TOKEN|>`: sets `ALWAYS_WRAPPED` content mode if no content start is already set
 4. **Functionary 3.1** — source contains `set has_code_interpreter`: forces `PLAIN` content, specific `per_call_start/end`, clears preserved tokens to only keep Functionary-specific markers
 5. **DeepSeek-R1-Distill-Qwen** — source contains `tool▁calls▁begin` markers: overrides tool section/per-call markers with the correct Unicode block characters
+6. **Nemotron Nano v2** - source contains `<SPECIAL_10>`/`<SPECIAL_11>`/`<SPECIAL_12>` and `<TOOL_RESPONSE>`: forces `JSON_NATIVE` tools in an array wrapped by `<TOOLCALL>`/`</TOOLCALL>`, `TAG_BASED` reasoning, and the message start markers
+7. **Fireworks Firefunction v2** - matches its system prompt line: sets the Llama 3 header user/assistant start markers
+8. **Solar Open** - source contains `<|begin|>assistant<|think|><|end|>`: sets the assistant start marker
+9. **Apriel 1.6** - matches its `[BEGIN FINAL RESPONSE]` check: sets the `<|begin_user|>`/`<|begin_assistant|>` start markers
+10. **JSON name/parameters tool instruction** - source asks for `{"name": function name, ...}` output: sets `openai_wrapper_trigger` so the lazy grammar also triggers on the OpenAI function wrapper
+11. **Laguna** - source contains `laguna_glm_thinking`: trims whitespace from reasoning and argument markers, tolerates whitespace between argument tags, and adds `</assistant>` as a literal stop
+12. **Bailing V3** - source contains `Bailing V3 chat template`: trims the argument value suffix and tolerates whitespace between argument tags
 
 ### Parser Building
 
-Each analyzer struct (`analyze_reasoning`, `analyze_content`, `analyze_tools`) implements `build_parser(parser_build_context&)`. They share a `parser_build_context` that carries the PEG builder, inference inputs, the pre-built reasoning parser, and a pointer to the content analyzer.
+Each analyzer struct (`analyze_reasoning`, `analyze_content`, `analyze_tools`) implements `build_parser(parser_build_context&)`. They share a `parser_build_context` that carries the PEG builder, inference inputs, the pre-built reasoning parser, the `extracting_reasoning` flag, and pointers to the reasoning and content analyzers.
 
 #### Reasoning Parser (`analyze_reasoning::build_parser`)
 
 | Mode                                          | Parser                                                                    |
 |-----------------------------------------------|---------------------------------------------------------------------------|
 | Not extracting reasoning                      | `eps()`                                                                   |
-| `TAG_BASED` or `TOOLS_ONLY` (non-empty start) | `optional(start + reasoning(until(end)) + end + space())`                 |
-| `TAG_BASED` or `TOOLS_ONLY` (empty start)     | `optional(reasoning(until(end)) + end + space())` — delimiter-style       |
+| `TAG_BASED` or `TOOLS_ONLY` (non-empty start) | `optional(space() + optspace(start) + reasoning(until(end)) + optspace(end))` |
+| `TAG_BASED` or `TOOLS_ONLY` (empty start)     | `optional(reasoning(until(end)) + optspace(end))` - delimiter-style       |
 
-Note: The start marker may be empty either because the analyzer detected delimiter-style reasoning, or because `generate_parser()` cleared a template artifact start marker (see Generation Prompt & Reasoning Prefill above). Whitespace-only reasoning content (e.g. from a `<think></think>` prefill) is discarded by the mapper.
+Note: The start marker is empty when the analyzer detected delimiter-style reasoning. `optspace()` makes leading/trailing whitespace inside a marker optional. Whitespace-only reasoning content (e.g. from a `<think></think>` prefill) is discarded by the mapper.
 
 #### Content Parser (`analyze_content::build_parser`)
 
 | Condition                              | Parser                                                                          |
 |----------------------------------------|---------------------------------------------------------------------------------|
-| `json_schema` present                  | `reasoning + space() + content(schema(json(), "response-format", ...)) + end()` |
-| Tools present                          | Dispatches to `analyze_tools::build_parser()`                                   |
+| `json_schema` present (selected in `autoparser::build_parser`) | `reasoning + space() + content(schema(json(), "response-format-schema", ...)) + end()`, optionally in a json code fence |
+| Tools present (selected in `autoparser::build_parser`) | `analyze_tools::build_parser()`                                   |
 | `ALWAYS_WRAPPED` with reasoning        | `reasoning + start + content(until(end)) + end + end()`                         |
 | `ALWAYS_WRAPPED` without reasoning     | `content(until(start)) + start + content(until(end)) + end + end()`             |
 | Default (PLAIN)                        | `reasoning + content(rest()) + end()`                                           |
@@ -420,7 +428,7 @@ All three tool parsers return:
 reasoning + optional(content(until(trigger_marker))) + tool_calls + end()
 ```
 
-Each returned parser is wrapped by `wrap_for_generation_prompt()`, which prepends a literal for any boilerplate prefix of the generation prompt (the portion before the reasoning start marker).
+`autoparser::build_parser()` prepends `p.prefix(generation_prompt, reasoning_start)` to the returned parser: a literal for any boilerplate prefix of the generation prompt (the portion before the reasoning start marker).
 
 ## Mapper
 
@@ -440,9 +448,10 @@ Each returned parser is wrapped by `wrap_for_generation_prompt()`, which prepend
 | `common/chat-auto-parser-generator.cpp`   | Parser generator: `generate_parser()` and `build_parser()` methods              |
 | `common/chat-diff-analyzer.cpp`           | Differential analysis implementation and workarounds                            |
 | `common/chat-auto-parser-helpers.h/cpp`   | `calculate_diff_split()`, `segmentize_markers()`, `compare_variants()`,         |
-|                                           | `wrap_for_generation_prompt()`, string helpers                                  |
+|                                           | `until_common_prefix()`, `after_common_suffix()`, string helpers                |
 | `common/chat-peg-parser.h/cpp`            | `common_chat_peg_builder`, `common_chat_peg_mapper`, and helpers                |
 | `common/chat.cpp`                         | Entry point: `common_chat_templates_apply_jinja()`                              |
+| `common/parsers/`                         | Specialized handlers, dispatched by `common_chat_try_specialized_template()`    |
 | `tests/test-chat-auto-parser.cpp`         | Auto-parser unit tests; also a debug tool when given a template path            |
 | `tests/test-chat-analysis.cpp`            | Template differential analysis debug tool                                       |
 
@@ -459,11 +468,11 @@ Each returned parser is wrapped by `wrap_for_generation_prompt()`, which prepend
 
 - Usage: `./bin/test-chat-analysis --template-file path/to/template.jinja` (without arguments, it runs on all templates from the test suite)
 
-**Debug Logging**: Enable with `LLAMA_ARG_LOG_VERBOSITY=2`
+**Debug Logging**: Enable with `LLAMA_ARG_LOG_VERBOSITY=5` (or `-lv 5`); the debug tools above already log at maximum verbosity
 
 - Shows detailed analysis steps, pattern extraction results, and generated parser structure
 
-**PEG Test Builder**: Fluent API for creating test cases — see [tests/test-chat.cpp:947-1043](tests/test-chat.cpp#L947-L1043). Example usage:
+**PEG Test Builder**: Fluent API for creating test cases - see [tests/test-chat.cpp:1465-1589](../tests/test-chat.cpp#L1465-L1589). Example usage:
 
 ```cpp
 auto tst = peg_tester("models/templates/Template.jinja");
@@ -478,24 +487,24 @@ tst.test("input text")
 
 ### Tested Templates
 
-The following templates have active tests in `tests/test-chat.cpp`:
+The following templates have active tests in `tests/test-chat.cpp` (partial list; "Specialized" means the template is routed to a handler in `common/parsers/`):
 
 | Template | Format | Notes |
 | -------- | ------ | ----- |
 | Ministral-3-14B-Reasoning | Reasoning | `[THINK]...[/THINK]` tags (specialized handler) |
-| NVIDIA-Nemotron-3-Nano-30B | TAG_WITH_TAGGED | Reasoning + tools |
+| NVIDIA-Nemotron-3-Nano-30B | Specialized | Reasoning + tools (Qwen3-Coder handler) |
 | CohereForAI Command-R7B | JSON_NATIVE | `<\|START_THINKING\|>`/`<\|START_RESPONSE\|>` markers |
 | Google Gemma 2 2B | Content only | No tool support |
 | Qwen-QwQ-32B | Reasoning | Forced-open thinking |
 | NousResearch Hermes 2 Pro | JSON_NATIVE | `<tool_call>` wrapper |
 | IBM Granite 3.3 | JSON_NATIVE | `<think></think>` + `<response></response>` |
-| IBM Granite 4.0 | JSON_NATIVE | `<tool_call>` wrapper (same template used by 4.1) |
+| IBM Granite 4.0 / 4.1 | JSON_NATIVE | `<tool_call>` wrapper (separate templates, both tested) |
 | ByteDance Seed-OSS | TAG_WITH_TAGGED | Custom `<seed:think>` and `<seed:tool_call>` tags |
-| Qwen3-Coder | TAG_WITH_TAGGED | XML-style tool format |
+| Qwen3-Coder | Specialized | XML-style tool format (dedicated handler) |
 | DeepSeek V3.1 | JSON_NATIVE | Forced thinking mode |
 | GLM-4.6 | TAG_WITH_TAGGED | `<tool_call>name\n<arg_key>...<arg_value>...` format |
 | GLM-4.7-Flash | TAG_WITH_TAGGED | Updated GLM format |
-| Kimi-K2-Thinking | JSON_NATIVE | Reasoning + JSON tools |
+| Kimi-K2-Thinking | Specialized | Reasoning + JSON tools (Kimi K2 handler) |
 | Apertus-8B-Instruct | JSON_NATIVE | Function name as JSON key |
 | MiniMax-M2 | TAG_WITH_JSON | XML invoke with JSON args |
 | NVIDIA-Nemotron-Nano-v2 | JSON_NATIVE | `<TOOLCALL>` wrapper (nested) |
@@ -506,14 +515,14 @@ The following templates have active tests in `tests/test-chat.cpp`:
 | Fireworks Firefunction v2 | TAG_WITH_JSON | Fireworks tool format |
 | DeepSeek R1 Distill (Llama/Qwen) | Reasoning | Forced-open thinking |
 | llama-cpp-deepseek-r1 | Reasoning | Forced-open thinking |
-| Kimi-K2 / Kimi-K2-Instruct | JSON_NATIVE | JSON tools with special markers |
+| Kimi-K2 / Kimi-K2-Instruct | Specialized | JSON tools with special markers (Kimi K2 handler) |
 | Llama 3.1/3.2/3.3 | JSON_NATIVE | Standard Llama tool format |
 | OpenAI GPT-OSS | Specialized | Channel-based (dedicated handler) |
 | Apriel 1.5 | JSON_NATIVE | `<tool_calls>` wrapper with JSON array |
 | Apriel 1.6 Thinker | Reasoning | Implicit reasoning start |
 | Mistral Small 3.2 | JSON_NATIVE | `[TOOL_CALLS]func[ARGS]{...}` with call ID |
-| Devstral | JSON_NATIVE | `[TOOL_CALLS]func[ARGS]{...}` without call ID |
-| StepFun 3.5 Flash | TAG_WITH_TAGGED | `<function=X><parameter=Y>` format |
+| Devstral | Specialized | `[TOOL_CALLS]func[ARGS]{...}` without call ID (Ministral 3 handler) |
+| StepFun 3.5 Flash | Specialized | `<function=X><parameter=Y>` format (Qwen3-Coder handler) |
 | Spark2.5 | TAG_WITH_TAGGED | `<tool_call>name<arg_key>...<arg_value>...` format |
 
 ## Adding Support for New Templates
@@ -522,11 +531,11 @@ To support a new template format:
 
 1. **If it follows standard patterns** — The auto-parser should detect it automatically. Run `test-chat-auto-parser <template_path>` to verify markers are correctly extracted.
 2. **If differential analysis extracts incorrect markers** — Add a workaround lambda to the `workarounds` vector in `common/chat-diff-analyzer.cpp`. Inspect the template source for a unique identifying substring.
-3. **If it needs fundamentally different handling** — Add a dedicated handler function in `chat.cpp` before the auto-parser block (as done for GPT-OSS, Functionary v3.2, and Ministral).
+3. **If it needs fundamentally different handling** - Add a dedicated handler in `common/parsers/` (listed in `common/parsers/sources.cmake`) and match it in `common_chat_try_specialized_template()` in `chat.cpp` (as done for GPT-OSS, Functionary v3.2, Ministral 3 and others).
 
 ## Edge Cases and Quirks
 
-1. **Generation Prompt & Reasoning Prefill**: The generation prompt is extracted by diffing `add_generation_prompt=false` vs `true` in `common_chat_templates_apply_jinja`, so it contains exactly what the template appends — avoiding false positives from prior conversation turns.
+1. **Generation Prompt & Reasoning Prefill**: The generation prompt is extracted by diffing `add_generation_prompt=false` vs `true` in `common_chat_template_generation_prompt()`, so it contains exactly what the template appends - avoiding false positives from prior conversation turns.
 2. **Per-Call vs Per-Section Markers**: Some templates wrap each tool call individually (`per_call_start/end`); others wrap the entire section (`section_start/end`). T2 (`check_per_call_markers()`) disambiguates by checking if the second call in a two-call output starts with the section marker.
 3. **Tag Boundary Fixing**: `calculate_diff_split()` iteratively adjusts prefix/suffix boundaries to avoid splitting `<tag>` or `[marker]` tokens, ensuring clean extraction.
 4. **Call ID Side Effects**: When a call ID is detected, `per_call_end` may have been incorrectly set to include the call ID suffix. T7 clears `per_call_end` in this case.

@@ -13,13 +13,10 @@ You can use pre-quantized model from [ggml-org](https://huggingface.co/ggml-org)
 cmake -B build
 cmake --build build --target llama-mtmd-cli
 
-# alternatively, install from brew (MacOS)
-brew install llama.cpp
-
 # run it
-llama-mtmd-cli -hf ggml-org/gemma-3-4b-it-GGUF
-llama-mtmd-cli -hf ggml-org/gemma-3-12b-it-GGUF
-llama-mtmd-cli -hf ggml-org/gemma-3-27b-it-GGUF
+./build/bin/llama-mtmd-cli -hf ggml-org/gemma-3-4b-it-GGUF
+./build/bin/llama-mtmd-cli -hf ggml-org/gemma-3-12b-it-GGUF
+./build/bin/llama-mtmd-cli -hf ggml-org/gemma-3-27b-it-GGUF
 
 # note: 1B model does not support vision
 ```

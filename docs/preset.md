@@ -54,8 +54,10 @@ The preset will be loaded similarly to the `--models-preset` option. Therefore, 
 
 ```sh
 # Force temp = 0.1, overriding the preset value
-llama-cli -hf username/my-preset --temp 0.1
+llama-server -hf username/my-preset --temp 0.1
 ```
+
+Only `llama-server` accepts a preset repo: it starts in router mode with the downloaded `preset.ini`. Other tools (including `llama-cli`) exit with `--model is required`.
 
 ### Named presets
 
@@ -86,13 +88,13 @@ temp        = 1.0
 chat-template-kwargs = {"reasoning_effort": "high"}
 ```
 
-You can then use it via `llama-cli` or `llama-server`, example:
+You can then use it via `llama-server`, example:
 
 ```sh
-llama-server -hf user/repo:gpt-oss-120b-hf
+llama-server -hf user/repo
 ```
 
-Please make sure to provide the correct `hf-repo` for each child preset. Otherwise, you may get error: `The specified tag is not a valid quantization scheme.`
+Each named section becomes a model in router mode; select one with the `"model"` field of a request (e.g. `"model": "gpt-oss-120b-hf"`). A `:tag` suffix on the preset repo is ignored. Make sure each section sets `hf` (or `hf-repo`) to the actual model repo.
 
 ## System-level config
 
