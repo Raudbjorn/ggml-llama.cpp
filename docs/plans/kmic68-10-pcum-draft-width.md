@@ -1,7 +1,7 @@
 # P10 - Cumulative-probability draft width
 
-**Kind:** decoupling
-**Depends on:** P04 for the dataset that sets the default
+**Kind:** port
+**Depends on:** P01 for the baseline, P04 for the dataset that sets the default
 
 ## Purpose
 
@@ -12,36 +12,36 @@ threshold that ramps with depth, and report that the benefit only appears deep i
 context, where each extra verify row costs a full attention pass over the KV
 cache.
 
-**Correction to the source, found while reading our tree.** Kmic-68's loop has a
-per-token confidence stop already; ours does not. Our MTP drafter commits to a
-width up front, `n_cap[seq_id] = adaptive ? adaptive_ctrl[seq_id].n_cur : params.n_max`
-(`common/speculative.cpp:2285`), and never inspects a probability mid-draft. So
-this is not a port but a new stop rule for our loop, and it has two distinct
-sites:
-
-- **non-chained MTP, eagle3, dflash**: the loop samples on the host
-  (`common/speculative.cpp:2348`, candidates at `:2351`, push at `:2375`, stop at
-  `:2404`). A running product breaks out of this loop cleanly.
-- **`--spec-chain`**: all `n_chain` tokens come from one in-graph argmax decode
-  (`common/speculative.cpp:2210-2216`). There is no host loop and therefore no
-  per-token stop. Chain mode is explicitly out of scope for this plan.
-
 ## Source
 
 - Kmic-68 `common/speculative.cpp`: `p_cum`, `p_cum_min`, and the stop condition
   `pc_next < p_cum_min(pos0)` alongside the existing `p_min` test.
 
+## In this fork
+
+- `common/speculative.cpp:2363`, the non-chained per-token stop
+  `cur_p->data[0].p < params.p_min`.
+- `common/speculative.cpp:2221`, the chained per-token stop `p < params.p_min`,
+  over the packed `[id, prob]` rows that the in-graph decode emits at `:2210-2216`.
+
+Both paths already carry a per-token confidence stop, so this is an additional
+stop condition rather than a new mechanism. Note that the chained path fuses the
+*decode* into one graph but still runs a host-side *selection* loop at
+`:2213-2229`, so chain mode is in scope. In both paths the crossing token is
+discarded: the stop `break`s before `result.push_back(id)`.
+
 ## Requirements
 
 - **R10.1** (optional feature) WHERE `LLAMA_SPEC_P_CUM` is set, the <drafter> shall multiply each successive drafted token's top-1 probability into a running product initialised to one, and shall stop drafting when that product falls below the threshold.
-- **R10.2** (ubiquitous) The <stop rule> shall apply in addition to, and never in place of, any existing per-token stop rule.
+- **R10.2** (ubiquitous) The <cumulative rule> shall apply in addition to, and never in place of, the existing `p_min` stop at `:2221` and `:2363`.
 - **R10.3** (optional feature) WHERE the threshold is not set, the <drafter> shall apply no cumulative-probability stop, regardless of padded verify state.
 - **R10.4** (event-driven) WHEN the threshold is depth-dependent, the <default> shall be derived from a paired A770 measurement over our production depth range, not copied from Kmic-68's P100 values.
 - **R10.5** (event-driven) WHEN `LLAMA_SPEC_P_CUM` is set to a negative value, the <drafter> shall use the measured default ramp.
-- **R10.6** (unwanted) IF drafting stops by the cumulative rule at a depth of one, THEN the <drafter> shall still emit that first token.
-- **R10.7** (event-driven) WHEN the running product falls below the threshold, the <drafter> shall discard that token and end the round, matching the existing `p_min` behaviour.
-- **R10.8** (unwanted) IF the drafter is the chained MTP path, THEN the <cumulative rule> shall not apply, and the reason shall be documented at the call site.
-- **R10.9** (event-driven) WHEN the adaptive controller selects the draft width, the <cumulative rule> shall clamp the selected width rather than replace the controller's choice.
+- **R10.6** (event-driven) WHEN the running product falls below the threshold, the <drafter> shall discard that token and end the round, matching the existing `p_min` behaviour which breaks before pushing.
+- **R10.7** (event-driven) WHEN the rule stops drafting at depth zero, the <drafter> shall fall back to the ordinary `p_min` stop for that round.
+- **R10.8** (event-driven) WHEN the adaptive controller selects the draft width, the <cumulative rule> shall clamp the selected width rather than replace the controller's choice.
+- **R10.9** (event-driven) WHEN the drafter is the chained path, the <cumulative rule> shall read the probability from the packed row rather than from a host-side sampler.
+- **R10.10** (event-driven) WHEN the threshold is active, the <acceptor> shall not treat a token discarded by it as drafted, so it cannot appear in the verification batch.
 
 ## Acceptance
 

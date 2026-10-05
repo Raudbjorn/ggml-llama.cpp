@@ -10,6 +10,10 @@ Kmic-68s `p100-docs/FINDINGS.md` records eleven ways its own measurements misled
 it. Every default in these plans is therefore measured on the A770 rather than
 copied from its thresholds.
 
+Line numbers throughout this set refer to commit `001d906a6`. They drift as the
+code moves; the plans would need re-verification when implemented, not just when
+written.
+
 Requirements use EARS (Easy Approach to Requirements Syntax): the *Ubiquitous*
 form `The <system> shall <response>`, *event-driven* `WHEN <trigger>, the
 <system> shall <response>`, *unwanted behaviour* `IF <trigger>, THEN the <system>
@@ -29,7 +33,7 @@ and *optional feature* `WHERE <feature included>, the <system> shall <response>`
 | P07 | [Block verification](kmic68-07-block-verify.md) | port | P06 |
 | P08 | [Draft-context ubatch cap](kmic68-08-draft-ubatch-cap.md) | port | none |
 | P09 | [Padded fixed-width verify](kmic68-09-padded-verify.md) | decoupling | none |
-| P10 | [Cumulative-probability draft width](kmic68-10-pcum-draft-width.md) | decoupling | P04 |
+| P10 | [Cumulative-probability draft width](kmic68-10-pcum-draft-width.md) | port | P01, P04 |
 | P11 | [Per-tile fp32 fold for the F16 FA output](kmic68-11-fp32-vkq-fold.md) | port | P03 |
 | P12 | [Non-materialised causal mask](kmic68-12-non-materialised-mask.md) | port | P08 |
 
@@ -38,7 +42,8 @@ and *optional feature* `WHERE <feature included>, the <system> shall <response>`
 ```
 P01 -------------------------------> (re-baselines the numbers P10 is judged against)
 P02, P03 ---> (measurement discipline for every plan below)
-P04 ---> P06 ---> P07 ---> P10
+P04 ---> P06 ---> P07
+P01 ---> P10
 P05 (independent)
 P08 ---> P12
 P09 (independent; P10 is deliberately NOT coupled to it)
@@ -54,9 +59,11 @@ and P12 last.
 
 ## Regression floor
 
-`test-qwen4exp-mtp` (77 assertions CPU, 51 with `--q8-kv`) and
-`scripts/test_bench_spec.py` (25 tests) pass before and after every plan that
-touches `common/` or the FA kernels. Plans that change output tokens (P05, P06,
+`test-qwen4exp-mtp` (75 assertions CPU on the final source, 50 with
+`--q8-kv`; 76 and 51 on Arc A770) and `scripts/test_bench_spec.py` (25 tests) pass
+before and after every plan that touches `common/` or the FA kernels. The counts
+are from `docs/research/qwen4exp-mtp-correctness-2026-10-04.md:351-352`; a lower
+count than that is a regression. Plans that change output tokens (P05, P06,
 P07) additionally require seeded output-distribution parity against their own
 pre-change path.
 

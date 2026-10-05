@@ -27,10 +27,11 @@ This is pure instrumentation. It changes no output and no performance when unset
 
 ## Requirements
 
-- **R04.1** (optional feature) WHERE `LLAMA_SPEC_LOG=<path>` is set, the <MTP drafter> shall append one line per draft cycle and sequence carrying position, draft time, verify-and-sample time, accepted count, and the top-1 probability of every drafted token including the one that stopped drafting.
+- **R04.1** (optional feature) WHERE `LLAMA_SPEC_LOG=<path>` is set, the <MTP drafter> shall append one line per draft cycle and sequence carrying a request or generation identifier, position, draft time, verify-and-sample time, accepted count, and the top-1 probability of every drafted token including the one that stopped drafting.
 - **R04.2** (optional feature) WHERE `LLAMA_SPEC_PROFILE` is set, the <MTP drafter> shall report synchronised catch-up and draft-step wall times averaged per draft call, every 64 calls.
 - **R04.3** (unwanted) IF `LLAMA_SPEC_PROFILE` is set, THEN the <drafter> shall synchronise the draft context before reading each phase timestamp.
 - **R04.4** (ubiquitous) The <log format> shall remain parseable when the optional fields are absent, so a consumer written before this plan still reads it.
+- **R04.4a** (event-driven) WHEN a server slot is reused by a new request, the <request identifier> shall differ from the previous request on that slot, so two requests beginning at the same position produce distinguishable records.
 - **R04.5** (event-driven) WHEN neither `LLAMA_SPEC_LOG` nor `LLAMA_SPEC_PROFILE` is set, the <drafter> shall not synchronise and shall not branch inside the decode loop.
 
 ## Acceptance

@@ -29,9 +29,10 @@ gain with no timing run at all.
 ## Requirements
 
 - **R07.1** (event-driven) WHEN `LLAMA_SPEC_BLOCK_VERIFY` is not zero and the chain is stateless, the <acceptor> shall evaluate every position in the block rather than stopping at the first rejection.
-- **R07.2** (event-driven) WHEN position *i* is evaluated, the <acceptor> shall compute `keep[i]` as `min(keep[i-1] * p(x_i)/q(x_i), 1)`.
+- **R07.2** (event-driven) WHEN position *i* is evaluated, the <acceptor> shall compute `keep[i]` as `keep[i-1] * min(1, p(x_i)/q(x_i))`, clamping the ratio rather than the product, so that `keep` is non-increasing.
+- **R07.2a** (unwanted) IF `keep[i]` would exceed `keep[i-1]`, THEN the <acceptor> shall reject the implementation, because `keep` is a prefix survival probability and may not rise after a position fails. Note that Kmic-68's `min(keep[i-1] * p/q, 1)` does allow this and is not the form to port.
 - **R07.3** (event-driven) WHEN a position is rejected, the <acceptor> shall continue evaluating later positions, accepting the longest prefix whose `keep` value covers the drawn variate.
-- **R07.4** (event-driven) WHEN `LLAMA_SPEC_BLOCK_VERIFY=2`, the <acceptor> shall every 256 blocks log the expected accepted tokens per drafted token under both rules, `sum_i keep[i]` against `sum_i prod_{j<=i} min(1, p_j/q_j)`.
+- **R07.4** (event-driven) WHEN `LLAMA_SPEC_BLOCK_VERIFY=2`, the <acceptor> shall every 256 blocks log the expected accepted tokens per drafted token under both rules, `sum_i keep[i]` against `sum_i prod_{j<=i} min(1, p_j/q_j)`. The second term is the same recurrence as R07.2, so the two figures are comparable only because `keep` is non-increasing.
 - **R07.5** (event-driven) WHEN a position is rejected, the <acceptor> shall draw the correction from the residual scaled by the surviving prefix's `keep` value.
 - **R07.6** (unwanted) IF a grammar, penalty, DRY, mirostat or reasoning budget is active, THEN the <acceptor> shall use the per-token rule from P06.
 - **R07.7** (unwanted) IF `LLAMA_SPEC_BLOCK_VERIFY=0`, THEN the <acceptor> shall use the per-token rule from P06.

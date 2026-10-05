@@ -36,7 +36,7 @@ unaffected by this plan.
 ## Requirements
 
 - **R05.1** (ubiquitous) The <sampler> shall, where the chain's first non-no-op entry is TOP_K with `top_k <= 128` and no logit bias is configured, populate `cur_p` with the `k` largest logits descending without materialising the full vocabulary.
-- **R05.2** (event-driven) WHEN two logits are equal, the <prefilter> shall order them by ascending token id, matching the partial sort it replaces.
+- **R05.2** (unwanted) IF a tie for the k-th position exists among the selected logits, THEN the <prefilter> shall fall back to the existing full-vocabulary path, because `llama_token_data_array_partial_sort_inplace` compares `a.logit > b.logit` only and `std::partial_sort` is not stable, so the existing order among equal logits is arbitrary and an ascending-id rule would not reproduce it.
 - **R05.3** (unwanted) IF a logit bias is configured, or `mirostat` is non-zero, or `top_k > 128`, or `top_k <= 0`, THEN the <sampler> shall use the existing full-vocabulary path.
 - **R05.4** (unwanted) IF a forcing reasoning budget is active, THEN the <sampler> shall use the existing full-vocabulary path.
 - **R05.5** (unwanted) IF `LLAMA_SAMPLER_PREFILTER=0`, THEN the <sampler> shall use the existing full-vocabulary path.

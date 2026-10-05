@@ -32,10 +32,12 @@ it.
 
 ## Requirements
 
-- **R12.1** (optional feature) WHERE a decode batch carries a single sequence in position order, the <mask builder> shall represent causality as a per-query prefix length instead of an `n_kv x n_tokens` tensor.
+- **R12.1** (optional feature) WHERE a decode batch carries a single sequence in position order, `cparams.causal_attn` is true and `hparams.use_alibi` is false, the <mask builder> shall represent causality as a per-query prefix length instead of an `n_kv x n_tokens` tensor.
 - **R12.2** (event-driven) WHEN the prefix-length representation is in use, the <FA kernel> shall derive each query's visible cell count from it rather than from a mask tensor.
 - **R12.3** (ubiquitous) The <representation> shall yield bit-identical attention output to the materialised mask for every query position.
 - **R12.4** (unwanted) IF a batch carries multiple sequences, or non-contiguous positions, or sliding-window attention, THEN the <mask builder> shall allocate the full tensor as it does today.
+- **R12.4a** (unwanted) IF `cparams.causal_attn` is false, THEN the <mask builder> shall allocate the full tensor, because `fill_mask` only masks future tokens under `cparams.causal_attn` and a prefix representation would hide cells a noncausal attention is meant to see.
+- **R12.4b** (unwanted) IF `hparams.use_alibi` is true, THEN the <mask builder> shall allocate the full tensor, because `fill_mask` writes `-abs(p0 - p1)` rather than 0, so the tensor carries a position-dependent bias that a visible-cell count cannot express.
 - **R12.5** (event-driven) WHEN the reservation sizes a compute buffer, the <planner> shall size against the prefix-length representation's memory.
 - **R12.6** (unwanted) IF the prefix representation would exceed the materialised mask's own size at the current depth, THEN the <builder> shall materialise the tensor instead.
 - **R12.7** (event-driven) WHEN this plan lands, the <PR #90 T36 residual> shall be updated to record that the 8 KiB variance is bounded by construction.
