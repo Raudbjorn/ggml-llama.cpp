@@ -49,6 +49,8 @@ before committing. Ask only for inputs needed for the assigned task, per the sha
 - Op tables come from `test-backend-ops -b <dev> support --output csv > docs/ops/<Backend>.csv`
   built from the branch being documented, then `scripts/create_ops_docs.py`. State the device in
   the commit (A770 for Vulkan and SYCL; `GGML_OPENVINO_DEVICE=GPU` for OpenVINO).
+  AGENTS.md permits the generator's status glyphs in `docs/ops.md` legend and table cells;
+  the exception is limited to that generated output.
 
 ## Gates before commit
 
@@ -63,7 +65,8 @@ before committing. Ask only for inputs needed for the assigned task, per the sha
   with `git commit -- <paths>` after the contract's three checks and with the brief's trailers.
 - Run a GPU command without `flock` and `timeout`, kill processes you did not start, stop or start
   services, or use sudo for anything but `sudo -n dmesg`.
-- Add code paths for removed backends, non-ASCII text, or `owner/repo#N` references.
+- Add code paths for removed backends, non-ASCII text outside AGENTS.md's generated op-table
+  exception, or `owner/repo#N` references.
 
 ## Report
 

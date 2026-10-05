@@ -56,7 +56,8 @@ and trailer lines only before committing. Ask only for inputs needed for the ass
   the actual broken-link sets before and after: no new broken links, even if the count is equal.
 - ASCII only: scan current contents of every changed or new file in the assigned scope, including
   staged and untracked files; `Path(path).read_bytes().isascii()` must be true. Plain `git diff`
-  omits staged and untracked content. The generated `docs/ops.md` legend is the one exception.
+  omits staged and untracked content. AGENTS.md permits generated status glyphs in both the
+  `docs/ops.md` legend and table cells; this does not exempt other text in that file.
 
 ## Never
 

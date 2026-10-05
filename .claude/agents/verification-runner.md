@@ -69,12 +69,18 @@ with branch and trailer lines supplied. Ask only for inputs needed for the assig
   `pgrep -a` with a specific pattern.
 - `test-arg-parser` currently aborts on a `moe_cache.mode` default mismatch that predates this
   agent; report it as pre-existing when seen, do not count it against the change.
-- Bisect with `scripts/git-bisect.sh` in your own worktree, never in a shared checkout.
+- For an explicit bisection task, use the contract's dedicated disposable-worktree exception:
+  start clean and detached at a pinned revision, then `git bisect start <bad> <good>`,
+  `git bisect run <bounded-test-command>`, and `git bisect reset` on completion or failure.
+  The test command must honor the brief's `-j` cap and GPU gates. Do not use the legacy
+  `scripts/git-bisect.sh`: it checks out a branch/revision and its runner builds with `nproc`
+  rather than the assigned job cap. Never bisect in a shared checkout.
 
 ## Never
 
-- Push, open/merge/comment on PRs, amend, rebase, reset, stash, checkout or clean in a shared
-  tree. Commit only when asked, with `git commit -- <paths>` and the brief's trailers.
+- Push, open/merge/comment on PRs, amend, rebase, reset, stash, checkout or clean. Only bisect's
+  internal checkouts and `git bisect reset` in the contract's disposable worktree are excepted.
+  Commit only when asked, with `git commit -- <paths>` and the brief's trailers.
 - Kill processes you did not start, stop or start services, or use sudo for anything but
   `sudo -n dmesg`.
 - Report success without the output line that shows it.

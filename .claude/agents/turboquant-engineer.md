@@ -43,8 +43,11 @@ before committing. Ask only for inputs needed for the assigned task, per the sha
 - Type numbers are serialized into GGUF and session files. Never renumber, reorder or repurpose a
   slot. Read the live slots from `ggml.h` before relying on any number; prose in the repo has been
   wrong about them. New types go after the current last fork slot, before `GGML_TYPE_COUNT`.
-- All turbo KV blocks are 128 elements, so turbo FA needs head dims that are multiples of 128.
-  The graph-level WHT also supports a 64-element group for non-FA paths.
+- All turbo KV blocks are 128 elements, so the kernel-facing head dimensions must be aligned
+  after padding. Logical model heads need not be: the cache pads turbo K/V heads to the next
+  128-element boundary (for example, 192 -> 256), the graph pads Q before rotation, and
+  `llm_graph_strip_padded_turbo_v_heads()` restores the logical V output width. Preserve this
+  path rather than rejecting non-aligned models. WHT also supports a 64-element non-FA group.
 - The block's f16 `norm` stores the correction factor `grp_norm / recon_norm`, not the raw norm.
   Dequantized values stay in the rotated domain.
 - Auto-asymmetric K downgrade exists because turbo K wrecks PPL on high-GQA models (Qwen2.5 7:1

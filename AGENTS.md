@@ -33,6 +33,9 @@ At the same level, the most recent specific instruction overrides an older or br
 ## Code and Commit Standards
 
 - **ASCII only**: No emdash, unicode arrows, or unicode symbols in code or commits. Use `-`, `->`, `x`, `...`
+- **Generated op-table exception**: `docs/ops.md` may retain the status glyphs emitted by
+  `scripts/create_ops_docs.py` in its legend and table cells. This exception does not permit
+  non-ASCII prose, code, comments or commit messages; regenerate the table rather than editing it.
 - **Concise comments**: No redundant or excessive inline commentary
 - **Reuse existing infrastructure**: No new subsystems or invasive changes that risk breaking existing behavior
 - **Read before write**: Understand existing patterns; your changes must blend in with the surrounding codebase

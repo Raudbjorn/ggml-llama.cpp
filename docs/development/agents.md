@@ -118,7 +118,7 @@ agents were spawned; their build/test behavior and sandbox enforcement were not 
 | `model-spec-engineer` | `src/models`, conversion and gguf-py, model loading, speculative decoding, MTP heads, the server's draft and accept loops | A brand-new architecture: the main session runs `skills/add-new-model/SKILL.md`, which is interactive |
 | `server-engineer` | `tools/server` HTTP layer, CORS and MCP proxy policy, `tools/ui` build, server-only flags | Draft and accept loops (model-spec-engineer) |
 | `upstream-porter` | One upstream ggml-org or TheTom PR or commit onto a named branch | Whole-tree syncs (upstream-sync-lead) |
-| `upstream-sync-lead` | Whole-tree syncs per `upstream-merge.md`: inventory, audits, conflict clusters, verification ladder; lib branch and API/ABI checks | Hand-resolving markers (merge-conflict-resolver) |
+| `upstream-sync-lead` | Whole-tree syncs per `upstream-merge.md`: inventory, audits, conflict clusters, verification ladder; lib release preparation/audits and API/ABI checks | Hand-resolving markers (merge-conflict-resolver) |
 | `merge-conflict-resolver` | Resolving conflict markers in one disjoint file cluster during a merge | Anything else |
 | `a770-benchmarker` | Numbers: throughput, PPL/KLD, capacity, cold JIT; hardening the harnesses | Pass/fail checks (verification-runner) |
 | `verification-runner` | Pass/fail: builds, the CPU-vs-SYCL oracle, `test-backend-ops`, ctest, bisects | Timing (a770-benchmarker) |
@@ -189,6 +189,8 @@ controls remain a separate, unimplemented hardening task. Do not claim they were
 Agents may commit locally on the branch the brief names. They never push, open, merge or comment
 on PRs, post anything to GitHub, or rewrite history.
 
+For ordinary commits:
+
 1. `git -C <worktree> branch --show-current` must print the branch from the brief.
 2. `git -C <worktree> diff --cached --stat` must be empty or hold only your own work.
 3. `git -C <worktree> diff HEAD -- <paths>` must contain only your own hunks. If another session
@@ -198,9 +200,27 @@ on PRs, post anything to GitHub, or rewrite history.
    ASCII message, and exactly the trailer lines from the brief. `Assisted-by:` is required; an AI
    `Co-Authored-By:` line is accepted on this fork.
 
+For an explicitly requested merge commit, `upstream-sync-lead` may instead run full-index
+`git commit` (no pathspec) in its assigned, exclusively owned merge worktree. Before committing,
+verify the expected branch and both parent object IDs, no unmerged entries or unstaged changes,
+and the entire staged diff against both parents, including automatic resolutions. Every staged
+change must be reviewed merge work, with no unrelated hunks. Run the runbook's gates first and
+include the brief's required trailers. This exception does not permit partial merge commits,
+history rewriting or commits by `merge-conflict-resolver`.
+
 Never run `checkout`, `switch`, `stash`, `reset`, `rebase`, `commit --amend`, `clean`, `push`, or
-`gh pr checkout`. Commit only after the gates for the change have passed; list anything left
-uncommitted in the report.
+`gh pr checkout`, except this narrowly scoped bisection workflow: when explicitly dispatched
+to bisect, `verification-runner` may use `git bisect start`, `git bisect run` and `git bisect reset`
+in a dedicated disposable worktree prepared by the dispatcher. It must start clean and detached,
+own that worktree exclusively, and use pinned good/bad commits plus a bounded test command.
+Bisect's internal checkouts and final restoration are allowed there; arbitrary `git reset`,
+branch switching, ref rewriting and work in shared checkouts remain forbidden. Restore with
+`git bisect reset` on completion or failure and report if cleanup cannot finish.
+
+Generating `lib` is a main-session operation: `scripts/prune-to-lib.sh` creates a detached
+commit and force-updates a branch. Subagents may prepare or audit the source and return the
+exact command to the dispatcher, but must not execute the generator against the project repository.
+Commit only after the gates for the change have passed; list anything left uncommitted.
 
 ## GPU protocol
 
@@ -242,6 +262,8 @@ card for every user, including production services.
 ASCII only in code, comments, commit messages and docs. Concise comments that explain why.
 Reuse existing infrastructure. Read the surrounding code first. Read env knobs through
 `ggml_sycl_get_env` in SYCL code.
+The sole documentation exception is AGENTS.md's generated status glyphs in the `docs/ops.md`
+legend and table cells; all other text remains subject to the ASCII rule.
 
 ## Known stale prose (as of 2026-10-05)
 
