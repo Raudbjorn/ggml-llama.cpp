@@ -55,8 +55,8 @@ view of latent K and skips separate V rotation and padding.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `TURBO_LAYER_ADAPTIVE` | `0` | Layer precision policy; mode 7 uses q8_0 V at boundary layers |
-| `TURBO_AUTO_ASYMMETRIC` | `1` | Downgrade symmetric turbo K to q8_0 for GQA >= 6, excluding MLA |
+| `TURBO_LAYER_ADAPTIVE` | unset | Layer precision policy, modes 1, 2, 5, 6 or 7 (other values are ignored with a warning); mode 7 keeps q8_0 V on the first and last two layers. Unset means mode 7 for turbo2 V on models with at least 8 layers, otherwise off; `0` turns it off |
+| `TURBO_AUTO_ASYMMETRIC` | on | When K and V request the same turbo type, store K as q8_0 if the GQA ratio is at least 6 or the architecture is Qwen-family; MLA and DeepSeek4 models are excluded; `0` turns it off |
 | `LLAMA_ATTN_ROT_K_OVERRIDE` | off | Opt into the separate upstream K rotation path |
 | `LLAMA_ATTN_ROT_V_OVERRIDE` | off | Opt into the separate upstream V rotation path |
 | `LLAMA_ATTN_ROT_DISABLE` | `0` | Disable both upstream rotation overrides |
