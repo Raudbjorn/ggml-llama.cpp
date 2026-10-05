@@ -14,7 +14,7 @@ The version is set in the three variables at the top of the root `CMakeLists.txt
 
 ```cmake
 set(LLAMA_VERSION_MAJOR 0)
-set(LLAMA_VERSION_MINOR 1)
+set(LLAMA_VERSION_MINOR 5)
 set(LLAMA_VERSION_PATCH 0)
 ```
 
@@ -26,17 +26,9 @@ identify which PRs require a version bump before cutting a release._
 
 ## Making a release
 
-Releases are created by running the [make-release](.github/workflows/make-release.yml)
-which is a manual workflow.
-
-The workflow runs against the branch selected in the "Run workflow" dialog
-(default `master`) and takes an optional `commit` SHA. When a commit is given,
-the workflow validates that the commit belongs to the branch and is not older
-than 3 days from the branch HEAD, then releases that commit instead of the
-branch HEAD.
-
-The workflow creates an annotated git tag (e.g. `v0.1.0`) and pushes it to the
-remote. No GitHub Release object is created, the tag is the release artifact.
+This fork has no release automation. Upstream cuts releases with its manual
+`make-release` GitHub workflow, but `.github/` is not part of this fork's tree,
+and no `vX.Y.Z` release tag has been cut here.
 
 ## Building a release
 
@@ -46,10 +38,6 @@ release tag must pass `-DLLAMA_BUILD_IS_DEV=OFF` to produce a clean version stri
 (e.g. `0.1.0` instead of `0.1.0-dev`).
 
 ## How releases reach users
-Currently releases are not published to github releases, only nightly/development
-builds are available there. The way users can access releases are using the following
-channels:
-
-- **llama-install.sh**  — downloads pre-built binaries built from the release tag.
-- **Package managers**  — consume the git tag directly.
-- **Build from source** — users clone the repo and check out the tag.
+This fork publishes no GitHub releases, pre-built binaries, or packages. Users
+clone the repository and build from source (see [build.md](build.md)). The
+pre-built packages listed in [install.md](install.md) are upstream builds.

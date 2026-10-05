@@ -51,6 +51,19 @@ ignores `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER` and silently falls back to
 MSVC. `build-profile.ps1` passes `-G Ninja` so clang is actually used, this
 is required on ARM64.
 
+The scripts enable no GPU backend, so on Linux they profile a CPU-only build
+(CPU plus the Accelerate BLAS backend on macOS). They write
+`build-profile-baseline/` or `build-profile-full/` under the repository root,
+and when `ccache` is installed they run `ccache -C -z`, which empties the whole
+ccache.
+
+The tables below are upstream measurements from commit `3bcfeb700` and have not
+been re-measured on this fork. Upstream later removed the precompiled headers
+(`f3a184b15`) and kept only the unity build of the model sources
+(`src/CMakeLists.txt`), so the "with PCH" rows describe a configuration that no
+longer exists. The macOS rows include upstream's Metal backend, which this fork
+does not have.
+
 ### Linux (Ubuntu 24.04)
 
 Environment:

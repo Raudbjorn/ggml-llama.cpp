@@ -1,6 +1,9 @@
 
 # Android
 
+> [!NOTE]
+> In this fork, Android builds use the CPU backend (with optional KleidiAI on `arm64-v8a`). Upstream's Android accelerator backends (OpenCL for Adreno GPUs, Hexagon NPU) are not in this tree. The Vulkan backend is in the tree, but this fork documents no Android Vulkan configuration and has no recorded Android test of it.
+
 ## Build GUI binding using Android Studio
 
 Import the `examples/llama.android` directory into Android Studio, then perform a Gradle sync and build the project.
@@ -32,7 +35,7 @@ $ apt update && apt upgrade -y
 $ apt install git cmake libandroid-spawn
 ```
 
-Then, follow the [build instructions](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md), specifically for CMake.
+Then, follow the [build instructions](./build.md), specifically for CMake.
 
 Once the binaries are built, download your model of choice (e.g., from Hugging Face). It's recommended to place it in the `~/` directory for best performance:
 

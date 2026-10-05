@@ -1,5 +1,8 @@
 # Install pre-built version of llama.cpp
 
+> [!NOTE]
+> Every package below installs upstream [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), not this fork. None of them include the TurboQuant+ codec stack or this fork's SYCL work, and some of their backends (CUDA, Metal) are not in this fork. This fork publishes no pre-built binaries or packages; build it from source with [build.md](build.md).
+
 | Install via | Windows | Mac  | Linux |
 |-------------|---------|------|-------|
 | conda-forge | ✅      | ✅   | ✅   |
