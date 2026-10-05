@@ -44,8 +44,8 @@ These rows started as skips, then were explicitly covered later in session:
 | turbo FA reachability | `LLAMA_TEST_TURBO_FA=1 ./build-port/bin/test-sycl-turbo-correctness` | covered; turbo3/turbo4 pass, turbo2 xfail |
 | f16 XMX reachability | `GGML_SYCL_FA_XMX=1 ./build-port/bin/test-sycl-turbo-correctness` | covered; XMX pass |
 | turbo-XMX combined reachability | `LLAMA_TEST_TURBO_FA=1 GGML_SYCL_FA_XMX=1 ./build-port/bin/test-sycl-turbo-correctness` | covered; no support skip, no GATE fail |
-| full 60-case matrix | `python scripts/bench-a770-fork-unique.py --quick` (bg_3) | covered; 60/60 ok, `docs/research/a770-fork-unique-2026-07-09/` |
-| coherence probes | `llama-completion` deterministic smoke, 5 fork cases x 3 models | covered; 15/15 coherent, `docs/research/coherence-2026-07-09/` |
+| full 60-case matrix | `python scripts/bench-a770-fork-unique.py --quick` (bg_3) | covered; 60/60 ok, `docs/research/sycl/a770-fork-unique-2026-07-09/` |
+| coherence probes | `llama-completion` deterministic smoke, 5 fork cases x 3 models | covered; 15/15 coherent, `docs/research/sycl/coherence-2026-07-09/` |
 
 ## Newly-recorded skips found while mining RALPH/ASSUMPTIONS docs
 

@@ -6,7 +6,7 @@ The INI preset feature, introduced in [PR#17859](https://github.com/ggml-org/lla
 
 ## Using Presets with the Server
 
-When running multiple models on the server (router mode), INI preset files can be used to configure model-specific parameters. Please refer to the [server documentation](../tools/server/README.md) for more details.
+When running multiple models on the server (router mode), INI preset files can be used to configure model-specific parameters. Please refer to the [server documentation](../../tools/server/README.md) for more details.
 
 ### Using a Hugging Face Preset
 

@@ -26,7 +26,7 @@ probe run on one driver/runtime version and not a campaign; **source** means rea
 
 ## Probe: can a second queue overlap copy with compute on the A770?
 
-Standalone program, `docs/research/sycl-prefetch-second-queue-probe.cpp` (not built by CMake).
+Standalone program, `docs/research/sycl/sycl-prefetch-second-queue-probe.cpp` (not built by CMake).
 Two in-order
 queues share one `sycl::context`: a busy kernel runs on q1 and a 512 MiB H2D `memcpy` runs on q2.
 Overlap is judged from device profiling intervals (`command_start..command_end`) intersecting,

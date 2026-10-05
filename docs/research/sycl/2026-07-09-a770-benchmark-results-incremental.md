@@ -4,7 +4,7 @@ Date: 2026-07-09
 Branch: `benchmark/fork-vs-upstream-a770`
 Status: complete - matrix 60/60 ok, coherence 15/15 (see Final verdict below; sections between are incremental snapshots captured while the job ran)
 Matrix job: `bg_3` completed
-Matrix artifact: `docs/research/a770-fork-unique-2026-07-09/results.jsonl`
+Matrix artifact: `docs/research/sycl/a770-fork-unique-2026-07-09/results.jsonl`
 Important: current `--quick` matrix uses `p64/n16/r1`. Smoke only. Directional only. Not final throughput claim.
 
 ## Build parity used for comparison
@@ -288,7 +288,7 @@ Still missing after this update:
 
 ## Corroborating prior results (from RALPH/ASSUMPTIONS docs, not this session's runs)
 
-Source docs: `RALPH_PROGRESS.md` and `docs/ppl-results/*` (in this repo); plus `RALPH_TASKS.md`, `ASSUMPTIONS.md`, and `docs/research/turbo-capacity-validation.md` (external, parent working tree, not in this repo).
+Source docs: `RALPH_PROGRESS.md` and `docs/turboquant/ppl-results/*` (in this repo); plus `RALPH_TASKS.md`, `ASSUMPTIONS.md`, and `docs/research/turbo-capacity-validation.md` (external, parent working tree, not in this repo).
 These add the quality and capacity axes that this session's short `llama-bench` smoke does not measure. Attributed to prior work, re-cited here so all results live together.
 
 ### PPL quality (CPU-FA, wikitext-2, 564-chunk unless noted)

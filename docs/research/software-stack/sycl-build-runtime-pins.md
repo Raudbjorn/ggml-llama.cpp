@@ -31,7 +31,7 @@ flash attention enabled, context 8192, and port 8088. The unit was
 stopping, enabling, or rewriting it.
 
 The P4.1 baseline hashes and results are in
-`docs/research/standard-sycl-baseline-2026-07-11.md`. Those binaries are
+`docs/research/sycl/standard-sycl-baseline-2026-07-11.md`. Those binaries are
 pinned evidence, not the service artifact and not a substitute for a fresh
 current-HEAD build.
 

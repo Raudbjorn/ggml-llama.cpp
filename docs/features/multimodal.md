@@ -1,9 +1,9 @@
 # Multimodal
 
 llama.cpp supports multimodal input via `libmtmd`. Currently, there are 3 tools support this feature:
-- [llama-cli](../tools/cli/README.md)
-- [llama-server](../tools/server/README.md) via OpenAI-compatible `/chat/completions` API
-- [llama-mtmd-cli](../tools/mtmd/README.md), for testing and development
+- [llama-cli](../../tools/cli/README.md)
+- [llama-server](../../tools/server/README.md) via OpenAI-compatible `/chat/completions` API
+- [llama-mtmd-cli](../../tools/mtmd/README.md), for testing and development
 
 Currently, we support **image**, **audio** and **video** input.
 

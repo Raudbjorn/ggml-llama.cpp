@@ -193,7 +193,7 @@ this model/configuration. No threshold was relaxed.
 An additional context-2048 Q8 SYCL control produced NaNs, both with 512-token
 and 2048-token batches. A separate SYCL build of the pre-integration tree
 reproduces the NaNs with context/batch/ubatch 2048 and two chunks: this failure
-predates the integration and is tracked in [the open defect note](sycl-q8-context-2048-nan.md).
+predates the integration and is tracked in [the open defect note](../sycl/sycl-q8-context-2048-nan.md).
 Its corresponding KLD run is invalid and is not
 counted as quality evidence. The synthetic oracle's green status does not
 establish that every model/context configuration is usable.

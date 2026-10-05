@@ -640,7 +640,7 @@ build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.ggu
 ### 5. Docker Build
 
 This fork ships no Dockerfiles: `.devops/openvino.Dockerfile` is not in this tree (see
-[Docker](../docker.md)). Build from source as above.
+[Docker](../build/docker.md)). Build from source as above.
 
 Run Llama.cpp Server with OpenVINO Backend.
 > [!NOTE]

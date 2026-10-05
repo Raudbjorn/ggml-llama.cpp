@@ -11,7 +11,7 @@ The bug and its consumer were re-verified live against upstream `ggml-org/llama.
 `raw.githubusercontent.com`), not assumed from a stale local mirror. Line numbers below are
 for that commit and will drift on subsequent upstream commits - re-check before filing.
 
-Internal evidence trail: `docs/research/fa-occupancy-prereg-2026-07-25.md` (pre-registered
+Internal evidence trail: `docs/research/sycl/fa-occupancy-prereg-2026-07-25.md` (pre-registered
 prediction, Phase 0/1/2b measurement, promotion gate). This fork's fix landed via PR #35
 (squashed; original branch commit `53f390a91`, "fix(sycl): grow flash-attention split-K
 from one, not from the occupancy cap").
@@ -238,5 +238,5 @@ the formula - makes prefill invariant to the governor (1 split, 4,096 blocks at 
       independently.
 - [ ] Consider filing as two smaller issues (formula bug; floor-not-cap bug) if that suits
       upstream's triage process better than one combined report.
-- [ ] Optionally attach the fork's `docs/research/fa-occupancy-prereg-2026-07-25.md` as
+- [ ] Optionally attach the fork's `docs/research/sycl/fa-occupancy-prereg-2026-07-25.md` as
       supporting evidence (public repo, linkable).

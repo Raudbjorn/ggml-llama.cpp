@@ -52,13 +52,13 @@ Skill-specific addition: before writing `src/models/<name>.cpp`, read at least 1
 
 ## Step 4 - Optional: multimodal encoder
 
-Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
+Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/features/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
 
 Skill-specific addition, and read this carefully: **whether the multimodal encoder can be bundled into the same PR as the base text-model support depends on how conventional the change is.** It's OK to bundle it if the encoder support is conventional - i.e. no new infra or logic is needed, it's just a new cgraph reusing existing preprocessing/projector machinery (e.g. siglip/pixtral/qwen with just a new projector). If it requires anything beyond that - a new preprocessor, non-standard projector logic, or changes to shared `libmtmd` infra/logic - STOP, tell the contributor this is non-conventional, and have them land the text model first with the encoder as a dedicated follow-up PR. Do not let this decision pass silently - call it out explicitly to the contributor before writing any `clip.cpp`/`mtmd.cpp` code.
 
 ## Step 5 - Optional: chat template / parsing support
 
-Only do this if the model needs a new built-in chat template (`src/llama-chat.cpp`) or a new output parser (see `docs/development/parsing.md` and `docs/autoparser.md`). If either is needed beyond what a user-supplied Jinja template already covers, treat it as its own dedicated follow-up PR, not part of the base model-support PR - call this out explicitly to the contributor rather than silently bundling it in.
+Only do this if the model needs a new built-in chat template (`src/llama-chat.cpp`) or a new output parser (see `docs/development/parsing.md` and `docs/development/autoparser.md`). If either is needed beyond what a user-supplied Jinja template already covers, treat it as its own dedicated follow-up PR, not part of the base model-support PR - call this out explicitly to the contributor rather than silently bundling it in.
 
 ## Common pitfalls (from past PR reviews)
 

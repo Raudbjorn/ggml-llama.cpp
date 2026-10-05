@@ -1,7 +1,7 @@
 # Token generation performance troubleshooting
 
 ## Verifying that the model is running on the GPU
-Make sure you compiled llama with a GPU backend according to [this guide](/docs/build.md#sycl) (SYCL, or [Vulkan](/docs/build.md#vulkan)), so that the `-ngl N` (or `--n-gpu-layers N`) flag can offload layers. `N` also accepts `auto` (the default) and `all`. When running llama, you may configure `N` to be very large, and llama will offload the maximum possible number of layers to the GPU, even if it's less than the number you configured. For example:
+Make sure you compiled llama with a GPU backend according to [this guide](/docs/build/build.md#sycl) (SYCL, or [Vulkan](/docs/build/build.md#vulkan)), so that the `-ngl N` (or `--n-gpu-layers N`) flag can offload layers. `N` also accepts `auto` (the default) and `all`. When running llama, you may configure `N` to be very large, and llama will offload the maximum possible number of layers to the GPU, even if it's less than the number you configured. For example:
 ```shell
 ./llama-cli -m "path/to/model.gguf" -ngl 200000 -p "Please sir, may I have some "
 ```

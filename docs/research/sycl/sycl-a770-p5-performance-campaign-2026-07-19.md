@@ -644,7 +644,7 @@ dead-off-3 27.83 t/s with six observed trips.
 > **Correction (2026-08-12).** The f16 exactness claim in the paragraph above
 > ("the fixed f16 suite was target-exact and exceeded 1.5x in every class")
 > was retracted on 2026-07-26 by
-> [`scripts/perf/FINDINGS.md`](../../scripts/perf/FINDINGS.md) ("the f16
+> [`scripts/perf/FINDINGS.md`](../../../scripts/perf/FINDINGS.md) ("the f16
 > exactness claim does not reproduce"). On re-run with the identical model
 > file, `REPEATS=3`, `ONLY=f16`, `free_prose` produced three distinct token
 > hashes in three deterministic runs. Two further separate `REPEATS=3`

@@ -68,7 +68,7 @@ python ./examples/convert_legacy_llama.py path/to/MobileVLM-1.7B --skip-unknown
 Now both the LLaMA part and the image encoder is in the `MobileVLM-1.7B` directory.
 
 ## Android compile and run
-The `build_64.sh` and `adb_run.sh` helper scripts were removed upstream and are not in this tree. See [android.md](../android.md) for building on Android; the Android results below are historical.
+The `build_64.sh` and `adb_run.sh` helper scripts were removed upstream and are not in this tree. See [android.md](../../build/android.md) for building on Android; the Android results below are historical.
 
 ## Some result on Android with `Snapdragon 888` chip
 ### case 1

@@ -1,7 +1,7 @@
 # Round-2 decode follow-up probes (P6.6)
 
 Falsifier-first probes of the four open items named in
-`docs/research/sycl-a770-round2-decode-candidates-2026-07-25.md`. Each probe was run to
+`docs/research/sycl/sycl-a770-round2-decode-candidates-2026-07-25.md`. Each probe was run to
 resolve a stated question before any source change, per that doc's own local-gate-probe
 plans where one existed. No source change is made by this doc; findings that warrant
 follow-up work are queued as new RALPH tasks, not implemented here.

@@ -125,7 +125,7 @@ Note: to debug the inference graph: you can use [llama-eval-callback](/examples/
 
 ### 4. Optional: Add multimodal encoder implementation
 
-If the new model supports multimodal inputs, you will need to add a new encoder definition in `libmtmd`. You can find more information about llama.cpp's multimodal support in [the docs](../multimodal.md) and in the `tools/mtmd` source directory.
+If the new model supports multimodal inputs, you will need to add a new encoder definition in `libmtmd`. You can find more information about llama.cpp's multimodal support in [the docs](../features/multimodal.md) and in the `tools/mtmd` source directory.
 
 1. In the conversion script, make sure you add a subclass that extends `MmprojModel` or another class that inherits from the same base class.
 2. Add the encoder definition in `clip.cpp`.

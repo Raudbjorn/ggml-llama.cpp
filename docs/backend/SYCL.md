@@ -129,7 +129,7 @@ SYCL backend supports Intel GPU Family:
 - Intel Built-in Arc GPU
 - Intel iGPU in Core CPU (11th Generation Core CPU and newer, refer to [oneAPI supported GPU](https://www.intel.com/content/www/us/en/developer/articles/system-requirements/intel-oneapi-base-toolkit-system-requirements.html#inpage-nav-1-1)).
 
-On older Intel GPUs, you may try the [Vulkan](../build.md#vulkan) backend (the OpenCL backend is not part of this fork), although the performance is not optimal, and some GPUs may not have any GPGPU capabilities.
+On older Intel GPUs, you may try the [Vulkan](../build/build.md#vulkan) backend (the OpenCL backend is not part of this fork), although the performance is not optimal, and some GPUs may not have any GPGPU capabilities.
 
 #### Verified devices
 
@@ -168,7 +168,7 @@ You could update your test result in it directly.
 ## Docker
 
 This fork ships no Dockerfiles: the upstream `.devops/` directory, including the Intel/SYCL
-image, is not in this tree (see [Docker](../docker.md)). Build from source.
+image, is not in this tree (see [Docker](../build/docker.md)). Build from source.
 
 ## Quick Development WOW
 
@@ -350,7 +350,7 @@ cmake --build build --config Release -j -v
 Fork notes: `GGML_SYCL_TARGET=INTEL` is the only accepted target. Leaving
 `GGML_SYCL_DEVICE_ARCH` empty gives the default JIT build; `-DGGML_SYCL_DEVICE_ARCH=acm-g10`
 builds AOT for the A770 and took about 45 minutes clean on the fork's host
-([build and runtime pins](../research/sycl-build-runtime-pins.md)). Keep host `CFLAGS`/`CXXFLAGS`
+([build and runtime pins](../research/software-stack/sycl-build-runtime-pins.md)). Keep host `CFLAGS`/`CXXFLAGS`
 out of the build (see [Known Issues](#known-issues)).
 
 It is possible to come across some precision issues when running tests that stem from using faster
@@ -361,7 +361,7 @@ as `-cl-fp32-correctly-rounded-divide-sqrt`
 
 #### Retrieve and prepare model
 
-You can refer to the general [*Obtaining and quantizing models*](../models.md) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_0.gguf?download=true) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
+You can refer to the general [*Obtaining and quantizing models*](../user/models.md) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_0.gguf?download=true) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
 
 ##### Check device
 
@@ -471,7 +471,7 @@ Or
 use 1 SYCL GPUs: [0] with Max compute units:512
 ```
 
-User can use the device management in [docs/multi-gpu.md](../multi-gpu.md), like parameter `--device SYCL0,SYCL1` to assign one or more devices.
+User can use the device management in [docs/user/multi-gpu.md](../user/multi-gpu.md), like parameter `--device SYCL0,SYCL1` to assign one or more devices.
 
 ## Windows
 
@@ -677,7 +677,7 @@ Once it is completed, final results will be in **build/Release/bin**
 
 #### Retrieve and prepare model
 
-You can refer to the general [*Obtaining and quantizing models*](../models.md) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/blob/main/llama-2-7b.Q4_0.gguf) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
+You can refer to the general [*Obtaining and quantizing models*](../user/models.md) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/blob/main/llama-2-7b.Q4_0.gguf) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
 
 ##### Check device
 
@@ -787,7 +787,7 @@ Or
 use 1 SYCL GPUs: [0] with Max compute units:512
 ```
 
-User can use the device management in [docs/multi-gpu.md](../multi-gpu.md), like parameter `--device SYCL0,SYCL1` to assign one or more devices.
+User can use the device management in [docs/user/multi-gpu.md](../user/multi-gpu.md), like parameter `--device SYCL0,SYCL1` to assign one or more devices.
 
 ## Environment Variable
 
@@ -833,7 +833,7 @@ User can use the device management in [docs/multi-gpu.md](../multi-gpu.md), like
 | GGML_SYCL_USE_LEVEL_ZERO_API | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO_API=ON at build time. SYCL backend always runs on Level Zero running time even if it's set as OFF (The SYCL api will be usage for memory allocation).|
 | GGML_SYCL_ENABLE_DNN | 0 or 1 (default)| Use oneDNN for the GEMM paths; 0 uses oneMKL. Inert in builds with `GGML_SYCL_DNNL=0`, which always use oneMKL. |
 | GGML_SYCL_FA_ONEDNN | 1 (default) or 0 | Enable the oneDNN fused SDPA (flash-attention) path on supported GPUs. Set to 0 to always use the native SYCL flash-attention kernel. Only effective in builds with `GGML_SYCL_DNNL=1`; checked after the MKL and XMX routes, and head dim 64 is excluded on DG2. |
-| GGML_SYCL_FA_LARGE_GRF | 0 (default) or 1 | Request the 256-entry register file for the flash-attention tile kernels on launches with more than one query row (prefill). At the default 128 GRF the FA tile kernels spill 8-15 KB per thread on DG2 (IGC 2.41 shader dumps). Measured on the A770 (paired campaigns, `docs/research/sycl-fa-large-grf-2026-09-30.md`): pp512 +2.4 % +- 1.1 (d=256) to +10.0 % +- 0.9 (d=128) at short context, decode flat (a tile-and-vec mode was measured and dropped: decode loss at depth). A 256-GRF launch plans with half the work-groups per Xe-core unless `GGML_SYCL_MAX_WG_PER_CU` is set explicitly. The 256-GRF instantiations exist only for the tile kernels and only in builds configured with `-DGGML_SYCL_FA_LARGE_GRF=ON` (default OFF); other builds warn and ignore the variable. The request applies on Xe-HPG (DG2), Xe-HPC and Xe2 devices and is ignored with one warning per device elsewhere; the value must be exactly 0 or 1, anything else warns and is ignored. |
+| GGML_SYCL_FA_LARGE_GRF | 0 (default) or 1 | Request the 256-entry register file for the flash-attention tile kernels on launches with more than one query row (prefill). At the default 128 GRF the FA tile kernels spill 8-15 KB per thread on DG2 (IGC 2.41 shader dumps). Measured on the A770 (paired campaigns, `docs/research/sycl/sycl-fa-large-grf-2026-09-30.md`): pp512 +2.4 % +- 1.1 (d=256) to +10.0 % +- 0.9 (d=128) at short context, decode flat (a tile-and-vec mode was measured and dropped: decode loss at depth). A 256-GRF launch plans with half the work-groups per Xe-core unless `GGML_SYCL_MAX_WG_PER_CU` is set explicitly. The 256-GRF instantiations exist only for the tile kernels and only in builds configured with `-DGGML_SYCL_FA_LARGE_GRF=ON` (default OFF); other builds warn and ignore the variable. The request applies on Xe-HPG (DG2), Xe-HPC and Xe2 devices and is ignored with one warning per device elsewhere; the value must be exactly 0 or 1, anything else warns and is ignored. |
 | GGML_SYCL_FA_ONEDNN_MAX_KV | 0 (default, disabled) or positive integer | By default (0), all sequences are handled by the oneDNN fused SDPA path, regardless of KV length; a positive value caps that length, past which sequences fall back to the native kernel. If GPU driver watchdog resets (DEVICE_LOST) occur during long-context inference, set this near the context depth where they start, e.g. 24576. |
 | GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | GGML_SYCL_ENABLE_MKL_FA | 1 (default) or 0 | Enable oneMKL GEMM flash attention for XMX-accelerated prompt processing with non-turbo K/V. Activates when all conditions are met: mask present, no sinks/ALiBi/softcap, GQA ratio >= 2, head dim a multiple of 64 in [64, 512] with matching K/V head size, `Q->ne[1] >= 32` and `K->ne[1] >= 1024`. Set to 0 to force the TILE/VEC kernel for A/B testing. Example minimum command: `llama-cli -m model.gguf -fa on -ngl 99 --cache-type-k q8_0 --cache-type-v q8_0 --batch-size 1024 -p "your prompt"` |
@@ -876,7 +876,7 @@ User can use the device management in [docs/multi-gpu.md](../multi-gpu.md), like
 
 For flash attention (`-fa on`) with a quantized KV cache on Arc, use `q8_0`
 (`--cache-type-k q8_0 --cache-type-v q8_0`): it is near-lossless and runs at
-mainline parity (`docs/research/standard-sycl-upstream-ab-2026-07-11.md`). Both `GGML_SYCL_F16=ON` and `OFF` builds work; `F16=ON` gives
+mainline parity (`docs/research/sycl/standard-sycl-upstream-ab-2026-07-11.md`). Both `GGML_SYCL_F16=ON` and `OFF` builds work; `F16=ON` gives
 faster prompt processing. TurboQuant KV cache types (`turbo2`/`turbo3`/`turbo4`)
 run on the SYCL flash-attention VEC path; Arc validation and optimization
 currently cover `-fa on` only. The non-FA graph handles block-quantized V via a
@@ -954,9 +954,9 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
   the Arc under `level_zero:gpu`:
   - 2026-07, i915: oneAPI 2026.0 (icx/icpx), Intel Graphics Compiler (IGC) 2.36.3,
     intel-compute-runtime 26.22.38646, level-zero-loader 1.28.6
-    (`docs/research/sycl-a770-p5-performance-campaign-2026-07-19.md`).
+    (`docs/research/sycl/sycl-a770-p5-performance-campaign-2026-07-19.md`).
   - 2026-09, xe on kernel 7.3-rc: oneAPI 2026.1.4, IGC 2.41.5, intel-compute-runtime
-    26.35.39758, level-zero-loader 1.32.0 (`docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`);
+    26.35.39758, level-zero-loader 1.32.0 (`docs/research/software-stack/xe-kmd-bcs-copy-engine-2026-09-30.md`);
     see the xe blitter issue below.
 
 - IGC internal compiler error on `joint_matrix` (XMX). Bleeding-edge IGC (e.g. the 2.38.x
@@ -990,7 +990,7 @@ followed by `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY` from `ggml_backend_sycl_set_t
 (the VM is banned after the reset, so every later `VM_BIND` fails). Measured on kernel
 7.3-rc1 and 7.3-rc5 with intel-compute-runtime 26.35.39758: 12 failures in 15 long-context
 runs with the blitter, 0 in 10 without it. Mechanism, from device coredumps, xe tracepoints
-and NEO allocation logs (`docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`): on xe every
+and NEO allocation logs (`docs/research/software-stack/xe-kmd-bcs-copy-engine-2026-09-30.md`): on xe every
 userptr bind of the mmap'd model pages fails with `EPERM` (read-only file mapping, NEO asks
 for write access); NEO answers each failure with an unused-allocation eviction sweep, and
 that sweep unbinds the blitter's KMD-submitted command buffer while its job is still
@@ -1026,7 +1026,7 @@ Defaults and workarounds:
   runtime is fixed.
 - `NEOReadDebugKeys=1 DirectSubmissionOverrideBlitterSupport=1` keeps the blitter and
   passed one full run, but decode dropped from 14.5 to 8.7 t/s on the random-token bench.
-- The runtime fix: `docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch`
+- The runtime fix: `docs/research/software-stack/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch`
   against intel/compute-runtime master makes NEO retry the userptr bind read-only on `EPERM`
   instead of running the eviction sweep. With it the blitter path ran clean with zero failed
   binds (and prefill +33 %, since the staging fallback copies disappear too). NEO master as

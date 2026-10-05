@@ -39,5 +39,5 @@ release tag must pass `-DLLAMA_BUILD_IS_DEV=OFF` to produce a clean version stri
 
 ## How releases reach users
 This fork publishes no GitHub releases, pre-built binaries, or packages. Users
-clone the repository and build from source (see [build.md](build.md)). The
-pre-built packages listed in [install.md](install.md) are upstream builds.
+clone the repository and build from source (see [build.md](../build/build.md)). The
+pre-built packages listed in [install.md](../build/install.md) are upstream builds.

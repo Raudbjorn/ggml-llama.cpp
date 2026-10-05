@@ -26,9 +26,9 @@ This runbook does not restore removed backends, run destructive GPU probes, esta
 Read these before editing:
 
 - [`AGENTS.md`](../../AGENTS.md): current repository policy, supported backend set, TurboQuant architecture, build commands, and verification rules.
-- [`docs/build.md`](../build.md): current build options.
+- [`docs/build/build.md`](../build/build.md): current build options.
 - [`docs/backend/SYCL.md`](../backend/SYCL.md): SYCL toolchain and runtime details.
-- [`TURBOQUANT_UPSTREAM_MERGE.md`](../../TURBOQUANT_UPSTREAM_MERGE.md): historical merge notes only. It describes an older fork shape and is not current backend policy.
+- [`docs/development/turboquant-upstream-merge-notes.md`](turboquant-upstream-merge-notes.md): historical merge notes only. It describes an older fork shape and is not current backend policy.
 
 When these disagree, current code and `AGENTS.md` win. Never copy stale line numbers or old conflict choices without re-reading the current files.
 
@@ -120,6 +120,21 @@ Treat `scripts/`, `vendor/CMakeLists.txt`, and the server proxy policy as fork-o
 The list is a floor, not a substitute for comparing the current fork against the merge base. New fork-owned files added after this guide must be inventoried before each merge.
 
 `.github/` and `ci/` are deleted from the fork (owner decision, recorded in merge `181a4a8fb` of PR #55), and so is `CONTRIBUTING.md` (owner decision, 2026-10-05; its security-reporting paragraph moved to the README). Upstream snapshots still carry all three, so any of them the merge brings back is a defect.
+
+`docs/` uses the fork's own layout (2026-10-05). Upstream's flat docs live under `docs/build/`, `docs/user/`, `docs/features/` and `docs/development/`. The fork-only docs are:
+
+- `docs/turboquant/` and `docs/research/`;
+- `docs/backend/MOE-CACHE.md`, `docs/SDK.md`;
+- `docs/development/upstream-merge.md` and `docs/development/turboquant-upstream-merge-notes.md`;
+- the indexes `docs/README.md` and `docs/research/README.md`.
+
+`docs/ops.md` and `docs/ops/` keep upstream's paths because `scripts/create_ops_docs.py` and `examples/sycl/update-ops-doc.sh` write there.
+
+What the merge should do with these docs is expected git behavior and has not yet been seen on a real merge here:
+
+- Rename detection should carry an upstream edit of a moved doc to its new path.
+- Upstream files added to a wholly moved directory (`docs/multimodal/`, `docs/android/`) should follow it.
+- A new top-level upstream doc lands at upstream's path and needs moving by hand.
 
 ## Phase 1: establish immutable inputs
 
@@ -367,6 +382,7 @@ If the harness exposes conflicts as `conflict://N`, resolve one ID per write. Ne
 | `common/arg.cpp` and `common/common.h` | Union declarations and options. Reject duplicate flags, orphaned structs, and flags whose implementation was removed. |
 | Tests | Preserve upstream coverage and fork gates. Remove duplicate cases and ensure every loop/block has one owner. |
 | UI source | Prefer upstream barrel imports and component APIs. Remove duplicated props/imports introduced by unioning old and new forms. |
+| `docs/` | Keep the fork layout. Move new upstream docs into the matching folder, list them in `docs/README.md`, and drop docs for deleted backends. |
 
 ### ABI and API checks during resolution
 

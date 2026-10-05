@@ -1,14 +1,14 @@
 # Function Calling
 
-[chat.h](../common/chat.h) (https://github.com/ggml-org/llama.cpp/pull/9639) adds support for [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) and is used in:
+[chat.h](../../common/chat.h) (https://github.com/ggml-org/llama.cpp/pull/9639) adds support for [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) and is used in:
 - `llama-server` (Jinja templates are on by default; `--no-jinja` disables them and tool calling)
 
 ## Auto-parser & specialized handlers
 
 Tool calls are parsed from the model's own format, derived from its chat template:
 
-- The [auto-parser](autoparser.md) diffs template renders to find the tool call markers and builds a PEG parser plus a lazy grammar for them.
-- Formats it cannot derive have specialized handlers in [common/parsers/](../common/parsers/) (e.g. GPT-OSS, Functionary v3.2, Ministral 3, Kimi K2/K3, Gemma 4, DeepSeek V3.2/V4, Qwen3-Coder).
+- The [auto-parser](../development/autoparser.md) diffs template renders to find the tool call markers and builds a PEG parser plus a lazy grammar for them.
+- Formats it cannot derive have specialized handlers in [common/parsers/](../../common/parsers/) (e.g. GPT-OSS, Functionary v3.2, Ministral 3, Kimi K2/K3, Gemma 4, DeepSeek V3.2/V4, Qwen3-Coder).
 - There is no generic fallback: a template that does not render tool calls gets no tool calling.
   - Use `--chat-template-file` to override the template when appropriate (see examples below)
 
@@ -20,7 +20,7 @@ To see how a given template is handled (detected markers, generated parser and g
 ./build/bin/test-chat-auto-parser models/templates/<template>.jinja
 ```
 
-The per-template handler table that used to be here listed format handlers (`Generic`, `Hermes 2 Pro`, `Llama 3.x`, ...) that no longer exist; [autoparser.md](autoparser.md#tested-templates) lists the templates covered by `tests/test-chat.cpp`.
+The per-template handler table that used to be here listed format handlers (`Generic`, `Hermes 2 Pro`, `Llama 3.x`, ...) that no longer exist; [autoparser.md](../development/autoparser.md#tested-templates) lists the templates covered by `tests/test-chat.cpp`.
 
 # Usage - need tool-aware Jinja template
 
@@ -62,10 +62,10 @@ llama-server --jinja -fa on -hf bartowski/c4ai-command-r7b-12-2024-GGUF:Q6_K_L \
     --chat-template-file models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja
 ```
 
-To get the official template from original HuggingFace repos, you can use [scripts/get_chat_template.py](../scripts/get_chat_template.py) (see examples invocations in [models/templates/README.md](../models/templates/README.md))
+To get the official template from original HuggingFace repos, you can use [scripts/get_chat_template.py](../../scripts/get_chat_template.py) (see examples invocations in [models/templates/README.md](../../models/templates/README.md))
 
 > [!TIP]
-> If there is no official `tool_use` Jinja template, write your own (e.g. we provide a custom [llama-cpp-deepseek-r1.jinja](../models/templates/llama-cpp-deepseek-r1.jinja) for DeepSeek R1 distills). The built-in `--chat-template chatml` fallback does not render tools, so it does not enable tool calling.
+> If there is no official `tool_use` Jinja template, write your own (e.g. we provide a custom [llama-cpp-deepseek-r1.jinja](../../models/templates/llama-cpp-deepseek-r1.jinja) for DeepSeek R1 distills). The built-in `--chat-template chatml` fallback does not render tools, so it does not enable tool calling.
 
 > [!CAUTION]
 > Beware of extreme KV quantizations (e.g. `-ctk q4_0`), they can substantially degrade the model's tool calling performance.

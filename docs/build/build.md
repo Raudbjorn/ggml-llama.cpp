@@ -2,7 +2,7 @@
 
 This fork ships five backends: **CPU, BLAS, SYCL, Vulkan, and OpenVINO**. CUDA, HIP/ROCm, Metal, OpenCL, CANN, MUSA, WebGPU, RPC, Hexagon, ET, ZenDNN, IBM zDNN, and VirtGPU are upstream-only -- see [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) if you need them. The TurboQuant+ codec stack (`turbo2`/`turbo3`/`turbo4`/`TQ3_1S`/`TQ4_1S`) requires either SYCL or Vulkan to be built in for GPU acceleration.
 
-The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](../include/llama.h).
+The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](../../include/llama.h).
 
 The project also includes many example programs and tools using the `llama` library. The examples range from simple, minimal code snippets to sophisticated sub-projects such as an OpenAI-compatible HTTP server.
 
@@ -119,11 +119,11 @@ SYCL is a higher-level programming model to improve programming productivity on 
 
 llama.cpp based on SYCL is used to **support Intel GPU** (Data Center Max series, Flex series, Arc series, Built-in GPU and iGPU).
 
-For detailed info, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
+For detailed info, please refer to [llama.cpp for SYCL](../backend/SYCL.md).
 
 ### Arc A770 build used by this fork
 
-The fork's canonical target is the Intel Arc A770. `GGML_SYCL_TARGET` accepts only `INTEL`. With the oneAPI environment loaded (`source /opt/intel/oneapi/setvars.sh`, or the explicit block in [CLAUDE.md](../CLAUDE.md) on hosts where `setvars.sh` exports nothing):
+The fork's canonical target is the Intel Arc A770. `GGML_SYCL_TARGET` accepts only `INTEL`. With the oneAPI environment loaded (`source /opt/intel/oneapi/setvars.sh`, or the explicit block in [CLAUDE.md](../../CLAUDE.md) on hosts where `setvars.sh` exports nothing):
 
 ```bash
 cmake -S . -B build-sycl -G Ninja \
@@ -315,7 +315,7 @@ To read documentation for how to build on Android, [click here](./android.md)
 
 [OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware (CPUs, GPUs, and NPUs).
 
-For build instructions and usage examples, refer to [OPENVINO.md](backend/OPENVINO.md).
+For build instructions and usage examples, refer to [OPENVINO.md](../backend/OPENVINO.md).
 
 ---
 

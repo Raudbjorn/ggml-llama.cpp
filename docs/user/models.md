@@ -16,7 +16,7 @@ You can use the same CLI invocation to download from other sites, by pointing th
 After downloading a model, use the CLI tools to run it locally - see below.
 
 `llama.cpp` requires the model to be stored in the [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) file format. Models in other data formats can be converted to GGUF using the `convert_*.py` Python scripts in this repo.
-To learn more about model quantization, [read this documentation](../tools/quantize/README.md)
+To learn more about model quantization, [read this documentation](../../tools/quantize/README.md)
 
 The Hugging Face platform provides a variety of online tools for converting, quantizing and hosting models with `llama.cpp`:
 

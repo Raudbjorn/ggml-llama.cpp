@@ -176,7 +176,7 @@ Fork also adds `scripts/turbo-quality-gate.sh`, but script defaults wrong for th
 
 1. Full multi-model fork-vs-upstream matrix
    - runner: `scripts/bench-a770-fork-unique.py`
-   - output dir: `docs/research/a770-fork-unique-2026-07-09/`
+   - output dir: `docs/research/sycl/a770-fork-unique-2026-07-09/`
    - running during this write
 
 2. InnerQ FA path

@@ -18,27 +18,27 @@ The unified auto-parser uses a pure differential, compositional approach (inspir
 
 ## Data Structures
 
-All structs are defined in [common/chat-auto-parser.h](../common/chat-auto-parser.h).
+All structs are defined in [common/chat-auto-parser.h](../../common/chat-auto-parser.h).
 
 ### Top-Level: `autoparser` (main analyzer and generator)
 
-[common/chat-auto-parser.h:381-409](../common/chat-auto-parser.h#L381-L409) - top-level analysis result aggregating `jinja_caps`, `reasoning`, `content`, and `tools` sub-analyses, plus `user_start`/`assistant_start` message markers, `preserved_tokens` (union of all non-empty markers) and `additional_stops` (literal stop strings).
+[common/chat-auto-parser.h:381-409](../../common/chat-auto-parser.h#L381-L409) - top-level analysis result aggregating `jinja_caps`, `reasoning`, `content`, and `tools` sub-analyses, plus `user_start`/`assistant_start` message markers, `preserved_tokens` (union of all non-empty markers) and `additional_stops` (literal stop strings).
 
 ### `analyze_reasoning`
 
-[common/chat-auto-parser.h:256-277](../common/chat-auto-parser.h#L256-L277) - reasoning analysis result: `mode` enum, `start` marker (e.g. `<think>`), and `end` marker (e.g. `</think>`).
+[common/chat-auto-parser.h:256-277](../../common/chat-auto-parser.h#L256-L277) - reasoning analysis result: `mode` enum, `start` marker (e.g. `<think>`), and `end` marker (e.g. `</think>`).
 
 ### `analyze_content`
 
-[common/chat-auto-parser.h:283-298](../common/chat-auto-parser.h#L283-L298) - content analysis result: `mode` enum, `start`/`end` markers, and `requires_nonnull_content` flag.
+[common/chat-auto-parser.h:283-298](../../common/chat-auto-parser.h#L283-L298) - content analysis result: `mode` enum, `start`/`end` markers, and `requires_nonnull_content` flag.
 
 ### `analyze_tools` and its sub-structs
 
-- [common/chat-auto-parser.h:174-192](../common/chat-auto-parser.h#L174-L192) - `tool_format_analysis`: `mode` enum, `section_start/end`, `per_call_start/end`, JSON field names (`function_field`, `name_field`, `args_field`, `id_field`, `gen_id_field`), `parameter_order`, and format flags (`fun_name_is_key`, `tools_array_wrapped`, `openai_wrapper_trigger`)
-- [common/chat-auto-parser.h:194-199](../common/chat-auto-parser.h#L194-L199) - `tool_function_analysis`: `name_prefix`, `name_suffix`, `args_separator`, `close` markers around function names
-- [common/chat-auto-parser.h:201-210](../common/chat-auto-parser.h#L201-L210) - `tool_arguments_analysis`: `start/end` container markers, `name_prefix/suffix`, `value_prefix/suffix`, `separator`, `tolerate_intertag_whitespace`
-- [common/chat-auto-parser.h:212-217](../common/chat-auto-parser.h#L212-L217) - `tool_id_analysis`: `pos` enum, `prefix`/`suffix` markers around call ID values
-- [common/chat-auto-parser.h:304-375](../common/chat-auto-parser.h#L304-L375) - `analyze_tools`: aggregates the four sub-structs above
+- [common/chat-auto-parser.h:174-192](../../common/chat-auto-parser.h#L174-L192) - `tool_format_analysis`: `mode` enum, `section_start/end`, `per_call_start/end`, JSON field names (`function_field`, `name_field`, `args_field`, `id_field`, `gen_id_field`), `parameter_order`, and format flags (`fun_name_is_key`, `tools_array_wrapped`, `openai_wrapper_trigger`)
+- [common/chat-auto-parser.h:194-199](../../common/chat-auto-parser.h#L194-L199) - `tool_function_analysis`: `name_prefix`, `name_suffix`, `args_separator`, `close` markers around function names
+- [common/chat-auto-parser.h:201-210](../../common/chat-auto-parser.h#L201-L210) - `tool_arguments_analysis`: `start/end` container markers, `name_prefix/suffix`, `value_prefix/suffix`, `separator`, `tolerate_intertag_whitespace`
+- [common/chat-auto-parser.h:212-217](../../common/chat-auto-parser.h#L212-L217) - `tool_id_analysis`: `pos` enum, `prefix`/`suffix` markers around call ID values
+- [common/chat-auto-parser.h:304-375](../../common/chat-auto-parser.h#L304-L375) - `analyze_tools`: aggregates the four sub-structs above
 
 ### Enums
 
@@ -242,19 +242,19 @@ common_chat_params (prompt, parser, grammar, triggers, preserved_tokens)
 
 ## Entry Point
 
-The auto-parser is invoked in [common/chat.cpp:1332-1366](../common/chat.cpp#L1332-L1366) in `common_chat_templates_apply_jinja`. Templates that need a dedicated handler are matched first by source substrings in `common_chat_try_specialized_template()` ([common/chat.cpp:1091-1224](../common/chat.cpp#L1091-L1224)); the handlers live in [common/parsers/](../common/parsers/) (Ministral/Magistral Large 3, GPT-OSS, Muse Glimmer, Functionary v3.2, Kimi K2 Thinking, Kimi K3, Ling 3.0, Cohere2 MoE, LFM2/LFM2.5, GigaChatV3, MiniMax-M3, DeepSeek V3.2/V4, Gemma 4, MiniCPM5, Qwen3-Coder). The auto-parser handles everything else via `autoparser::analyze_template` + `peg_generator::generate_parser`.
+The auto-parser is invoked in [common/chat.cpp:1332-1366](../../common/chat.cpp#L1332-L1366) in `common_chat_templates_apply_jinja`. Templates that need a dedicated handler are matched first by source substrings in `common_chat_try_specialized_template()` ([common/chat.cpp:1091-1224](../../common/chat.cpp#L1091-L1224)); the handlers live in [common/parsers/](../../common/parsers/) (Ministral/Magistral Large 3, GPT-OSS, Muse Glimmer, Functionary v3.2, Kimi K2 Thinking, Kimi K3, Ling 3.0, Cohere2 MoE, LFM2/LFM2.5, GigaChatV3, MiniMax-M3, DeepSeek V3.2/V4, Gemma 4, MiniCPM5, Qwen3-Coder). The auto-parser handles everything else via `autoparser::analyze_template` + `peg_generator::generate_parser`.
 
 ## Algorithm Details
 
 ### Core Mechanism: Differential Comparison
 
-All analysis phases use the same factorized comparison function declared in [common/chat-auto-parser-helpers.h:69](../common/chat-auto-parser-helpers.h#L69):
+All analysis phases use the same factorized comparison function declared in [common/chat-auto-parser-helpers.h:69](../../common/chat-auto-parser-helpers.h#L69):
 
 ```cpp
 compare_variants(tmpl, params_A, params_modifier)
 ```
 
-This creates variant B by applying a modifier lambda to a copy of `params_A`, renders both through the template, and computes a `diff_split` ([common/chat-auto-parser.h:30-39](../common/chat-auto-parser.h#L30-L39)):
+This creates variant B by applying a modifier lambda to a copy of `params_A`, renders both through the template, and computes a `diff_split` ([common/chat-auto-parser.h:30-39](../../common/chat-auto-parser.h#L30-L39)):
 
 - `prefix` — common prefix between A and B
 - `suffix` — common suffix between A and B
@@ -472,7 +472,7 @@ reasoning + optional(content(until(trigger_marker))) + tool_calls + end()
 
 - Shows detailed analysis steps, pattern extraction results, and generated parser structure
 
-**PEG Test Builder**: Fluent API for creating test cases - see [tests/test-chat.cpp:1465-1589](../tests/test-chat.cpp#L1465-L1589). Example usage:
+**PEG Test Builder**: Fluent API for creating test cases - see [tests/test-chat.cpp:1465-1589](../../tests/test-chat.cpp#L1465-L1589). Example usage:
 
 ```cpp
 auto tst = peg_tester("models/templates/Template.jinja");

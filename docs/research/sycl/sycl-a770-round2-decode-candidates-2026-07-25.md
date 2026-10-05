@@ -195,7 +195,7 @@ paired A/B results for all four.
 
 ### Angle A - separate scale planes. Built, won, and still not the default.
 
-P5.11 (`docs/research/sycl-a770-p5-performance-campaign-2026-07-19.md:296-323`) is the brief's
+P5.11 (`docs/research/sycl/sycl-a770-p5-performance-campaign-2026-07-19.md:296-323`) is the brief's
 own hypothesis, already implemented as the "quants-first" layout: a 136-byte D=128 row holding
 128 signed quant values followed by four fp16 scales, replacing four interleaved 34-byte
 `block_q8_0` records.
@@ -280,7 +280,7 @@ SCAFFOLD), env `GGML_SYCL_FA_XMX`, router gate `fattn.cpp:494-501`, tiles TM=8/T
 sub-group 8, D in {128, 256}.
 
 Measured on A770 with llama31-8b
-(`docs/research/2026-07-09-a770-benchmark-results-incremental.md:118-155`):
+(`docs/research/sycl/2026-07-09-a770-benchmark-results-incremental.md:118-155`):
 
 | case | prompt tok/s | gen tok/s | gen vs baseline |
 |---|---:|---:|---:|
@@ -512,7 +512,7 @@ occupancy, not by load-message count.
 
 Nothing in this round executed on the A770. The gates below are the operator's.
 
-**Build.** Pinned recipe from `docs/research/sycl-build-runtime-pins.md`: `icx`/`icpx` 2026.0,
+**Build.** Pinned recipe from `docs/research/software-stack/sycl-build-runtime-pins.md`: `icx`/`icpx` 2026.0,
 `-DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DGGML_SYCL_F16=ON
 -DGGML_SYCL_SUPPORT_LEVEL_ZERO=ON`, `GGML_SYCL_DEVICE_ARCH` empty (JIT), Release, Ninja.
 

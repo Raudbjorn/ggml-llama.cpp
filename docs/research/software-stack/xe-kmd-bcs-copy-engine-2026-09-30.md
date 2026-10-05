@@ -234,7 +234,7 @@ before command buffer reuse" (2026-09-23); the eviction sweep files are unchange
 master still fails the same way: 16 681 `EPERM` userptr binds, each running the sweep, stall
 after two rows.
 
-`docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch` (11 lines in
+`docs/research/software-stack/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch` (11 lines in
 `Drm::bindBufferObject` plus a debug key): when a userptr bind fails with `EPERM` and the
 buffer object is not already read-only, retry it with `DRM_XE_VM_BIND_FLAG_READONLY` before
 running `evictUnusedAllocations()`. A read-only host range is only ever a copy source for
@@ -264,7 +264,7 @@ default stays until a release carries it, and the production unit keeps
 
 The IGC shader-dump side result (FA kernels spilling at 128 GRF) and the
 `GGML_SYCL_FA_LARGE_GRF` knob it led to are a separate change:
-`docs/research/sycl-fa-large-grf-2026-09-30.md` on branch `sycl-fa-large-grf`.
+`docs/research/sycl/sycl-fa-large-grf-2026-09-30.md` on branch `sycl-fa-large-grf`.
 
 ## Not claimed
 
