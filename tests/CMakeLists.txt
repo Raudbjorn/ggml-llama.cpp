@@ -142,6 +142,8 @@ endfunction()
 
 llama_test_cmd(${CMAKE_COMMAND} NAME test-sycl-xmx-gather
                ARGS -P ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-xmx-gather.cmake)
+llama_test_cmd(${CMAKE_COMMAND} NAME test-sycl-build-metadata
+               ARGS -P ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-build-metadata.cmake)
 
 # build test-tokenizer-0 target once and add many tests
 llama_build(test-tokenizer-0.cpp)
