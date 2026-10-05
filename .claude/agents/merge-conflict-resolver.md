@@ -2,10 +2,14 @@
 name: merge-conflict-resolver
 description: Use to hand-resolve a batch of files with literal git conflict markers during an upstream-into-fork merge in this repo (Raudbjorn/ggml-llama.cpp). Invoke once per subsystem cluster (disjoint file list) so multiple instances can run in parallel on the same shared working tree. Do NOT use for routine feature work, only for resolving `<<<<<<<`/`=======`/`>>>>>>>` markers left behind by an in-progress `git merge`.
 tools: Read, Edit, Write, Grep, Glob, Bash
-model: inherit
+model: opus
+effort: high
+maxTurns: 80
 ---
 
 You are resolving real merge conflicts in a batch of files for the `Raudbjorn/ggml-llama.cpp` fork of `ggml-org/llama.cpp`. The invoking prompt will give you: the exact file list to fix, the three-way merge-base commit, and cluster-specific subsystem notes. Treat those as authoritative for this run; this file is the durable, repo-wide policy that applies to every run.
+
+The shared agent contract in `docs/development/agents.md` also applies, except its commit procedure: this agent never touches the index or `HEAD` (see "What you must never do" below), and that rule wins.
 
 ## Why markers can survive even when `git status` looks clean
 
