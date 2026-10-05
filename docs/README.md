@@ -44,7 +44,7 @@ the fork's own; [development/upstream-merge.md](development/upstream-merge.md) l
 
 ## development/ - working on the code
 
-- [agents.md](development/agents.md) - the project subagents in `.claude/agents/` and the contract they share
+- [agents.md](development/agents.md) - Claude Code and Codex subagents, setup, routing and shared contract
 - [upstream-merge.md](development/upstream-merge.md) - merge upstream into this fork
 - [turboquant-upstream-merge-notes.md](development/turboquant-upstream-merge-notes.md) - notes from earlier upstream catch-up merges
 - [HOWTO-add-model.md](development/HOWTO-add-model.md) - add a model architecture

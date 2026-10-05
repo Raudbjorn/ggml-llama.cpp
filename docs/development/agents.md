@@ -1,12 +1,103 @@
 # Subagents: roster and shared contract
 
-Project subagents live in `.claude/agents/`. Each one owns a domain of this fork and carries
-that domain's invariants, gates and known failures. This file is the contract they all share:
+Project subagents live in `.claude/agents/` (Claude Code) and `.codex/agents/` (Codex).
+Both clients expose the same 14 names below. The Markdown bodies in `.claude/agents/` are
+the shared domain runbooks; the Codex TOML files load those instructions by reference, so
+domain rules have one source. Claude Code does not need to be installed to use them in Codex.
+Each agent owns a domain's invariants, gates and known failures. This is their shared contract:
 every agent reads it before starting. On a branch that predates it, read
 `git show origin/master:docs/development/agents.md`.
 
-Subagents cannot start other subagents. When an agent needs work outside its domain, it
+Project policy: subagents must not start other subagents. When an agent needs work outside its domain, it
 stops and returns a brief for the agent named in the roster, and the main session dispatches it.
+
+## Codex setup and use
+
+Start a new Codex session in the worktree containing `.codex/agents/`:
+
+```bash
+codex -C /home/svnbjrn/wt/ggml-agents
+```
+
+Use the role name in the request, for example:
+
+```text
+Use fork-code-reviewer to review HEAD against origin/master in
+/home/svnbjrn/wt/ggml-agents on agents/roster. Scope: agent definitions and docs.
+Build directory: none; builds and GPU use: forbidden; -j cap: 1.
+Commits: forbidden; trailer lines: not applicable. Return findings only.
+```
+
+Codex discovers standalone `.codex/agents/*.toml` files; no registry in a project
+`config.toml` is needed. Each file supplies `name`, `description`, `developer_instructions`
+and the corresponding Claude role's reasoning effort. Model selection is inherited from
+the calling session or its subagent defaults; Claude's `opus`/`sonnet` names are not mapped
+to a pinned OpenAI model. Start a new session after changing definitions, and check that
+the role is available before dispatch. Do not silently substitute a generic worker.
+
+The format follows the [official Codex subagent reference](https://developers.openai.com/codex/subagents/)
+and the installed `codex-cli 0.160.0`. Keep both agent directories when copying the roster
+to another checkout. Update routing descriptions in both files when a role's scope changes;
+edit domain instructions once in the shared Markdown body.
+
+## Codex adaptation
+
+The following applies when Codex reads a shared domain runbook:
+
+- Read the Markdown body, ignoring Claude's YAML `tools`, `disallowedTools`, `model`,
+  `effort` and `maxTurns`. Codex's TOML controls runtime settings. Claude tool allowlists
+  and turn limits are not enforced by these wrappers; the runbook's prohibitions still apply.
+- Use the available Codex tools for reads, searches, edits, shell commands and web access
+  wherever the runbook names `Read`, `Grep`, `Glob`, `Edit`, `Write`, `Bash`, `WebFetch` or
+  `WebSearch`. Tool names are client-specific, not required dependencies.
+- Use Hindsight recall only when that connector is available. Otherwise consult relevant
+  `docs/research/` notes and git history, and report recall as unavailable. Host-local
+  `.claude/.../memory/` files are optional reference material; missing files are not evidence.
+  If a required model path is missing, return that concrete gap to the dispatcher.
+- Read referenced sections of `CLAUDE.md` as repository documentation. Codex does not need
+  a separate copy of its build recipes or kernel contracts.
+- `fork-code-reviewer` requests `sandbox_mode = "read-only"`. Other roles inherit the parent
+  sandbox and approvals. Live parent permission overrides can supersede role defaults;
+  read-only behavior and the no-push/no-service-change rules still apply as instructions.
+  These files do not provide command-level enforcement or grant additional permissions.
+- Cross-domain handoffs return to the main session even if the Codex runtime permits nested
+  agents. Resolve runbook paths in the assigned worktree, never an unrelated checkout.
+
+### Checking roster parity
+
+Run from the repository root with Python 3.11 or later:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import tomllib
+
+claude = {p.stem: p for p in Path('.claude/agents').glob('*.md')}
+codex = {p.stem: p for p in Path('.codex/agents').glob('*.toml')}
+assert claude and claude.keys() == codex.keys(), 'roster mismatch'
+for name, path in codex.items():
+    raw = path.read_text()
+    assert raw.isascii(), path
+    role = tomllib.loads(raw)
+    front = claude[name].read_text().split('---', 2)[1].strip().splitlines()
+    fields = dict(line.split(': ', 1) for line in front)
+    assert role['name'] == fields['name'] == name
+    assert role['description'] == fields['description'], name
+    assert role['model_reasoning_effort'] == fields['effort'], name
+    assert str(claude[name]) in role['developer_instructions'], name
+    assert 'docs/development/agents.md' in role['developer_instructions'], name
+assert tomllib.loads(codex['fork-code-reviewer'].read_text())['sandbox_mode'] == 'read-only'
+print(f'PASS: {len(codex)} Codex roles match the shared roster')
+PY
+```
+
+This checks file format and routing parity, not runtime discovery, instruction compliance,
+or any domain build, test or benchmark. For discovery, start Codex in this worktree and ask
+it to list the available project agent types without running tools or spawning agents.
+
+Observed on 2026-10-05 with `codex-cli 0.160.0`: the parity check passed for all 14 roles,
+and a fresh read-only CLI session reported all 14 available with none absent. No domain
+agents were spawned; their build/test behavior and sandbox enforcement were not exercised.
 
 ## Roster and routing
 

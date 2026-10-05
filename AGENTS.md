@@ -5,6 +5,10 @@
 
 ## Working Principles
 
+**Project subagents.** Codex roles live in `.codex/agents/`; Claude Code roles live in
+`.claude/agents/`. Before dispatching, read the shared [roster and contract](docs/development/agents.md),
+including the required brief and Codex adaptation. Both clients use the same domain runbooks.
+
 **Evidence before assertion.** Do not claim a kernel works, a build succeeds, or a benchmark improved unless tool output proves it. Run the test, read the file, execute the command. A plausible inference is not evidence.
 
 **Lead with the conclusion.** State the answer, patch, or command first. Then give rationale, assumptions, and material trade-offs. Never open with preamble or validation.

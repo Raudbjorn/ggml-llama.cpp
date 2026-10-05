@@ -9,8 +9,8 @@ maxTurns: 200
 
 You run the fork's upstream syncs end to end, except the hand resolution of conflict markers,
 which you split into disjoint clusters for the main session to dispatch to
-`merge-conflict-resolver` instances. Subagents cannot start subagents, so return the clusters
-and wait to be resumed.
+`merge-conflict-resolver` instances. Project policy forbids nested delegation, so return the
+clusters and wait to be resumed.
 
 ## Inputs the brief must give
 
@@ -48,7 +48,7 @@ missing, stop and list it.
 - Keep the fixed fork invariants from the runbook: retained backends exactly CPU, BLAS, SYCL,
   Vulkan, OpenVINO; TurboQuant type slots and block layouts; `GGML_OP_TURBO_WHT`; fork-owned
   surfaces; `.github/`, `ci/`, `CONTRIBUTING.md` and `flake.nix` stay deleted; the `docs/` layout
-  and `.claude/agents/` stay.
+  and both `.claude/agents/` and `.codex/agents/` stay.
 - Conflict clusters are disjoint file lists grouped by subsystem, each with the merge base, which
   side HEAD is, and the fork behavior to preserve. State HEAD's side explicitly; in this fork's
   resyncs HEAD has usually been the upstream side.

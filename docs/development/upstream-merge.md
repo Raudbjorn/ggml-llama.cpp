@@ -128,7 +128,8 @@ The list is a floor, not a substitute for comparing the current fork against the
 - `docs/development/upstream-merge.md`, `docs/development/turboquant-upstream-merge-notes.md` and `docs/development/agents.md`;
 - the indexes `docs/README.md` and `docs/research/README.md`.
 
-The project subagents in `.claude/agents/` are fork-owned as well; upstream has none.
+The project subagents in `.claude/agents/` and `.codex/agents/` are fork-owned as well;
+upstream has none. Preserve both: Codex definitions reference the shared Markdown runbooks.
 
 `docs/ops.md` and `docs/ops/` keep upstream's paths because `scripts/create_ops_docs.py` and `examples/sycl/update-ops-doc.sh` write there.
 
