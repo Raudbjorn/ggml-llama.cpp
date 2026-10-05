@@ -1,8 +1,17 @@
 # Pending reboot: keep the desktop off the Arc A770
 
-Status, 2026-10-05: three host configuration files are installed but **not active yet**. They
-take effect at the next reboot. KWin and SDDM's Xorg were both started on 2026-10-03, before the
-files existed, and still hold the card.
+Status, 2026-10-05: three host configuration files are installed but **not active yet** for the
+running desktop. KWin and SDDM's Xorg were both started on 2026-10-03, before the files existed.
+They keep their old state, and still hold the card, until they exit. The reboot is simply the
+point where both restart together.
+
+Some parts can take effect earlier:
+
+- The user manager has already loaded the KWin drop-in, so a KWin restart picks up the new
+  environment at once.
+- Any new Xorg start reads the Xorg file.
+- udev applies the rule on the next event for the Radeon. The `desktop-*` links already exist
+  (created 2026-10-05 21:01).
 
 After that reboot, run the check in "Post-reboot check", then update or delete this file.
 
@@ -37,7 +46,7 @@ are disconnected. The only connected output is on the Radeon 610M (`0000:0f:00.0
 Why that matters:
 
 1. **`ccs_mode` cannot be changed.** xe rejects a write to
-   `/sys/class/drm/card0/device/tile0/gt0/ccs_mode` with `EBUSY` while any DRM file is open on the
+   `/sys/bus/pci/devices/0000:03:00.0/tile0/gt0/ccs_mode` with `EBUSY` while any DRM file is open on the
    device. That includes writing the value it already holds, and the rejection is logged at debug
    level only (`xe_gt_ccs_mode.c`, `ccs_mode_store()`). With the desktop holding the card, the only
    ways to change the mode were writing it at boot before SDDM starts, or stopping the display
@@ -72,7 +81,10 @@ not affected.
 # Keep KWin off the Arc A770 (compute only)
 Environment=KWIN_DRM_DEVICES=/dev/dri/desktop-card
 Environment=KWIN_RENDER_NODES=/dev/dri/desktop-render
-Environment=VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
+# Not VK_DRIVER_FILES: kwin_wayland has cap_sys_nice=ep, so it runs with AT_SECURE=1 and
+# the Vulkan loader reads all of its variables through secure_getenv() and ignores them.
+# KWin reads this one itself.
+Environment=KWIN_DISABLE_VULKAN=1
 ```
 
 Each variable closes one of KWin's three ways onto the card (read from KWin master source and
@@ -82,14 +94,31 @@ checked against the installed `libkwin.so.6`, 6.7.91):
 | --- | --- | --- |
 | Display backend (`backends/drm/drm_backend.cpp`) | Adds every card whose udev seat is the session's seat; a card with no outputs is not excluded | `KWIN_DRM_DEVICES`: open only the listed cards. Symlinks are resolved, so `desktop-card` works |
 | Render-device manager (`core/gpumanager.cpp`) | Opens every render node udev lists, with no seat filter | `KWIN_RENDER_NODES`: open only the listed render nodes |
-| Vulkan (`core/renderdevice.cpp`) | The Vulkan loader loads every installed driver; the Intel one opens `renderD128` while listing devices | `VK_DRIVER_FILES`: load the Radeon driver only |
+| Vulkan (`core/renderdevice.cpp`) | KWin creates one Vulkan instance per render device, even for the Radeon alone. Each instance loads every installed driver, and the Intel one opens `renderD128` while listing devices | `KWIN_DISABLE_VULKAN=1`: no Vulkan instance |
+
+The Vulkan row first used `VK_DRIVER_FILES` (the Radeon driver only). That cannot work for KWin:
+
+- `kwin_wayland` carries the file capability `cap_sys_nice=ep`, so the kernel starts it with
+  `AT_SECURE=1` (read from the live process's auxv).
+- In that mode, the Vulkan loader (1.4.363) reads `VK_DRIVER_FILES`, `VK_ICD_FILENAMES` and the
+  `VK_LOADER_DRIVERS_SELECT` / `_DISABLE` filters through `secure_getenv()`, which returns NULL
+  (`loader.c:3621`, `loader_environment.c:250`).
+- Probe: a copy of `vulkaninfo` given the same capability, with `VK_DRIVER_FILES` set to the
+  Radeon driver, still listed the A770 through the Intel driver. The same copy without the
+  capability listed only RADV.
+- KWin reads its own `KWIN_*` variables with `qEnvironmentVariable()`, a plain `getenv()`, so all
+  three of those variables are honoured.
+
+What KWin uses Vulkan for (master source, inferred, not tested): copies between GPUs
+(`multigpuswapchain.cpp`) and dmabuf format filtering, both with EGL fallbacks. With one display
+GPU, nothing should be lost.
 
 Why a drop-in and not `/etc/environment`:
 
 - `/etc/environment` has a note from 2026-07-29 saying not to set `KWIN_DRM_DEVICES` there,
   because card numbers are unstable and by-path names contain `:`. The udev names avoid both
   problems.
-- `VK_DRIVER_FILES` must not be global, or every Vulkan app in the session would lose the Arc.
+- The variables would then reach every process in the session, not just KWin and Xwayland.
 
 ## Change 2: SDDM's greeter Xorg
 
@@ -122,12 +151,30 @@ EndSection
 
 These are expected results, not observed ones; nothing here has been seen yet.
 
-1. **With no compute process running, nothing holds the A770.**
-   `/sys/kernel/debug/dri/0/clients` lists no client.
-2. **`ccs_mode` can be changed at runtime without logging out.** Stop the compute services, then
-   `echo 2 | sudo tee /sys/class/drm/card0/device/tile0/gt0/ccs_mode`. The write should succeed,
-   with `Setting compute mode to 2` in the kernel log, followed by a GT reset. Before this change
-   the same write returned `EBUSY`.
+Card and render-node numbers can change between boots, so every A770 path below uses its PCI
+address, `0000:03:00.0`:
+
+- sysfs: `/sys/bus/pci/devices/0000:03:00.0/...`
+- debugfs: `/sys/kernel/debug/dri/0000:03:00.0/`
+- device nodes: `/dev/dri/by-path/pci-0000:03:00.0-{card,render}`
+
+1. **With no compute process and no session app on the Arc, nothing holds the A770.**
+   `/sys/kernel/debug/dri/0000:03:00.0/clients` lists no client. A session app that opened the
+   Arc's render node (see "What it does not do") stays listed until it exits. Stopping the compute
+   services does not close its file.
+2. **`ccs_mode` can be changed at runtime without logging out.**
+   - First, stop the compute services and confirm the client list above is empty. Any remaining
+     client, including a session app, makes the write fail with `EBUSY`.
+   - Then:
+     ```bash
+     echo 2 | sudo tee /sys/bus/pci/devices/0000:03:00.0/tile0/gt0/ccs_mode
+     ```
+     The write should succeed, logging `Setting compute mode to 2` and then a GT reset. Before
+     this change the same write returned `EBUSY`.
+   - Then restore the production mode with
+     `echo 1 | sudo tee /sys/bus/pci/devices/0000:03:00.0/tile0/gt0/ccs_mode` before restarting the
+     compute services. The mode persists until the next write or reboot, and no workload has been
+     measured in mode 2.
    - Whether mode 2 or 4 helps is a separate open question (#92). Mode N splits the 4 compute
      slices across N engines; it adds none.
    - Intel's guidance is that a single process does best with mode 1. The case worth measuring is
@@ -149,9 +196,13 @@ about 1 MiB of VRAM and a few thousand engine cycles.
 
 ## What it does not do
 
-- Other Vulkan apps in the session can still open `renderD128`, because the Intel Vulkan driver
-  opens every render node it can when listing devices. `DRI_PRIME` only reorders devices; it does
-  not hide any. Browsers already use the Radeon.
+- Other Vulkan apps in the session can still open the Arc's render node, because the Intel Vulkan
+  driver opens every render node it can when listing devices. `DRI_PRIME` only reorders devices;
+  it does not hide any. Browsers already use the Radeon.
+  - Such an app holds the node until it exits, and while it does, `ccs_mode` writes fail with
+    `EBUSY`. Find it with the client list in "Post-reboot check" and close it before a write.
+  - A per-app `VK_DRIVER_FILES` works for ordinary apps. It does not work for any binary with file
+    capabilities or setuid, for the same reason it fails for KWin (see Change 1).
 - It does not set `ccs_mode`. No boot-time writer is installed; `xe-a770-tune.service` still sets
   timeouts only.
 - At greeter start, Xorg still opens and closes `card0` once to probe it (the "Platform probe ...
@@ -163,14 +214,19 @@ about 1 MiB of VRAM and a few thousand engine cycles.
 
 ## Post-reboot check
 
-Run these with `sudo`; without root the compositor is invisible.
+Run these with `sudo`; without root the compositor is invisible. Every device is named by PCI
+address, so the checks stay valid even if the card numbers change at boot.
 
 ```bash
-grep -E 'modeset\(G0\)' /var/log/Xorg.0.log      # expect: no output
-sudo cat /sys/kernel/debug/dri/0/clients          # expect: header line only
-sudo fuser -v /dev/dri/card0 /dev/dri/renderD128  # expect: no holders
-systemctl --user show plasma-kwin_wayland.service -p Environment   # the three variables
-ls -l /dev/dri/desktop-card /dev/dri/desktop-render                # card1 / renderD129
+ARC=0000:03:00.0 RADEON=0000:0f:00.0
+grep -E 'modeset\(G0\)' /var/log/Xorg.0.log                       # expect: no output
+sudo cat /sys/kernel/debug/dri/$ARC/clients                        # expect: header line only
+sudo fuser -v /dev/dri/by-path/pci-$ARC-card /dev/dri/by-path/pci-$ARC-render   # expect: no holders
+systemctl --user show plasma-kwin_wayland.service -p Environment   # expect: the three variables
+for n in card render; do                                           # expect: two "ok" lines
+  [ "$(readlink -f /dev/dri/desktop-$n)" = "$(readlink -f /dev/dri/by-path/pci-$RADEON-$n)" ] \
+    && echo "desktop-$n ok" || echo "desktop-$n MISMATCH"
+done
 ```
 
 Reading a failed check:
@@ -179,6 +235,9 @@ Reading a failed check:
   `/var/log/Xorg.0.log` for `Using config directory` and for parse errors.
 - `kwin_wayland` is in the client list: the drop-in did not reach KWin. Check that the unit lists
   the drop-in (`DropInPaths`) and that both `desktop-*` links exist.
+  - If the drop-in is in effect and only render-node clients remain (`dev` 128 or higher in the
+    list), `KWIN_DISABLE_VULKAN` was not honoured. Check the live process with
+    `sudo sh -c 'tr "\0" "\n" < /proc/$(pgrep -x kwin_wayland)/environ' | grep KWIN_`.
 - `systemd-logind` with DRM master is in the client list: KWin still took `card0` through logind,
   which means `KWIN_DRM_DEVICES` was not in effect.
 - A process from the session other than KWin or Xorg: that is an app opening the render node (see
@@ -191,9 +250,12 @@ From a text console (Ctrl+Alt+F3):
 - No greeter: delete `/etc/X11/xorg.conf.d/10-display-gpu-only.conf`, then
   `sudo systemctl restart sddm`.
 - Black screen after login: delete
-  `~/.config/systemd/user/plasma-kwin_wayland.service.d/10-desktop-gpu.conf`, then
-  `sudo systemctl restart sddm`. The likely cause is a missing or wrong `desktop-card` link, which
-  leaves KWin with no GPU.
+  `~/.config/systemd/user/plasma-kwin_wayland.service.d/10-desktop-gpu.conf`, then run
+  `systemctl --user daemon-reload` as that user, then `sudo systemctl restart sddm`.
+  - The reload is needed because logging in on the text console keeps the user's systemd manager
+    alive across the SDDM restart. That manager still has the deleted drop-in cached, and would
+    start KWin with it again.
+  - The likely cause is a missing or wrong `desktop-card` link, which leaves KWin with no GPU.
 - The udev rule only adds links and is safe to leave in place.
 
 ## Stale host configuration noticed, not changed
@@ -211,11 +273,24 @@ From a text console (Ctrl+Alt+F3):
 - Before state: live probes on 2026-10-05. Sources: kernel client list, `/proc/<pid>/fdinfo`, `fuser`
   as root, `/var/log/Xorg.0.log`, `udevadm info`.
 - KWin behaviour: KWin master source (`drm_backend.cpp`, `gpumanager.cpp`, `renderdevice.cpp`,
-  `utils/udev.cpp`), and the variable names checked in the installed `libkwin.so.6`.
+  `utils/udev.cpp`, `multigpuswapchain.cpp`, `eglbackend.cpp`), and the variable names
+  (`KWIN_DRM_DEVICES`, `KWIN_RENDER_NODES`, `KWIN_DISABLE_VULKAN`) checked in the installed
+  `libkwin.so.6`.
+- `VK_DRIVER_FILES` ignored by KWin, checked 2026-10-05:
+  - The live `kwin_wayland` has `AT_SECURE=1` in its auxv.
+  - The installed `libvulkan.so.1` (1.4.363) imports `secure_getenv`.
+  - Vulkan-Loader v1.4.363 source reads the driver variables through it.
+  - The `vulkaninfo` copy with `cap_sys_nice=ep` listed the A770 despite `VK_DRIVER_FILES`; the
+    copy without the capability did not. Both copies were removed afterwards.
 - Xorg config syntax: xserver 21.1.24 parser (`Flags.c`, `Device.c`, `scan.c`). Trailing `#`
   comments are accepted inside sections.
 - `ccs_mode` behaviour: `drivers/gpu/drm/xe/xe_gt_ccs_mode.c` in mainline, plus a live probe. A
   text write returned `EBUSY` and a binary write `EINVAL`, and the value stayed 1.
 - Installed files checked on 2026-10-05: `udevadm verify` passed, both links resolve to
   `0000:0f:00.0`, and after `daemon-reload` the user unit lists the drop-in and all three variables.
+  The drop-in was changed the same evening from `VK_DRIVER_FILES` to `KWIN_DISABLE_VULKAN=1`, and
+  the reload was repeated.
+- PCI-stable paths: `/sys/bus/pci/devices/0000:03:00.0/tile0/gt0/ccs_mode` reads 1, and
+  `/sys/kernel/debug/dri/0000:03:00.0/clients` exists. `fuser` on the `by-path` links reports the
+  same holders as on `card0` / `renderD128`.
 - After state: not observed. That is the point of this file.
