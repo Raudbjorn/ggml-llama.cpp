@@ -4,8 +4,9 @@
 types on `Raudbjorn-fork` build-port (`GGML_SYCL_F16=ON`, oneAPI 2026.0
 icpx), `--chunks 0 --no-warmup` init-only oracle with `llama_kv_cache:
 size` and `common_memory_breakdown_print` as the OOM/FIT signals.
-Enriched CSV: `sweep-logs/llama31-8b-cap/sweep_enriched.csv`. Raw probe
-logs: same dir.
+Enriched CSV: `sweep-logs/llama31-8b-cap/sweep_enriched.csv` (copy in this
+directory: [sweep_enriched.csv](sweep_enriched.csv)). Raw probe logs: same
+`sweep-logs/` dir (not committed).
 
 ## Final capacity table (single-stream, n_par=1)
 

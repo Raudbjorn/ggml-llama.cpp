@@ -4,8 +4,9 @@
 `Raudbjorn-fork` build-port (`GGML_SYCL_F16=ON`, oneAPI 2026.0 icpx),
 `--chunks 0 --no-warmup` init-only oracle with `llama_kv_cache: size`
 and `common_memory_breakdown_print` as the OOM/FIT signals. Final merged
-CSV: `/mnt/mrgr/llama-cpp-sycl-turbo/sweep-logs/mistral-7b-cap/sweep_final.csv`.
-Raw probe logs: same dir.
+CSV: `/mnt/mrgr/llama-cpp-sycl-turbo/sweep-logs/mistral-7b-cap/sweep_final.csv`
+(copy in this directory: [sweep_final.csv](sweep_final.csv)).
+Raw probe logs: same `sweep-logs/` dir (not committed).
 
 ## Final capacity table (single-stream, n_par=1)
 
