@@ -123,10 +123,12 @@ The list is a floor, not a substitute for comparing the current fork against the
 
 `docs/` uses the fork's own layout (2026-10-05). Upstream's flat docs live under `docs/build/`, `docs/user/`, `docs/features/` and `docs/development/`. The fork-only docs are:
 
-- `docs/turboquant/` and `docs/research/`;
+- `docs/turboquant/`, `docs/research/` and `docs/plans/`;
 - `docs/backend/MOE-CACHE.md`, `docs/SDK.md`;
-- `docs/development/upstream-merge.md` and `docs/development/turboquant-upstream-merge-notes.md`;
+- `docs/development/upstream-merge.md`, `docs/development/turboquant-upstream-merge-notes.md` and `docs/development/agents.md`;
 - the indexes `docs/README.md` and `docs/research/README.md`.
+
+The project subagents in `.claude/agents/` are fork-owned as well; upstream has none.
 
 `docs/ops.md` and `docs/ops/` keep upstream's paths because `scripts/create_ops_docs.py` and `examples/sycl/update-ops-doc.sh` write there.
 
