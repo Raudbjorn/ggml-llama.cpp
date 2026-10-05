@@ -31,6 +31,8 @@ has been argued from mechanism and never measured this way.
 - **R03.3** (event-driven) WHEN the floor is known, the <analysis> shall compute the maximum throughput available at that floor, independent of dot-product quality.
 - **R03.4** (unwanted) IF a proposed optimisation cannot reach its target on the floor arithmetic alone, THEN the <analysis> shall record the avenue as arithmetically unavailable rather than as an open problem.
 - **R03.5** (state-driven) WHILE the stub build is compiled, the <harness> shall skip all output-correctness assertions.
+- **R03.6** (unwanted) IF the loaded K/V values and their staging become dead once the arithmetic is removed, THEN the <stub> shall be rejected as a floor, because the compiler is free to delete the loads and the timing understates memory cost.
+- **R03.7** (event-driven) WHEN the stub build is produced, the <harness> shall verify from the generated device code, or through an observable dependency that forces the loads, that the memory operations survived.
 
 ## Acceptance
 

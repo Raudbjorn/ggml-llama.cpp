@@ -37,9 +37,12 @@ measured and reverted on its own.
 - **R09.4** (unwanted) IF padded verify is enabled, THEN the <acceptor> shall emit no token for a padded row.
 - **R09.5** (event-driven) WHEN padded verify is disabled, the <target batch> shall be exactly the draft length, preserving current behaviour.
 - **R09.6** (unwanted) IF the fixed width exceeds the batch or microbatch capacity, THEN the <padded verify> shall fall back to the unpadded path and log the reason.
-- **R09.7** (ubiquitous) The <fixed width> shall default to a power of two at or above the maximum draft depth.
+- **R09.7** (ubiquitous) The <fixed width> shall default to a power of two at or above `n_max + 1`, because a verify batch carries the previously sampled token plus the draft rows and `common_sampler_sample_and_accept_n` asserts `idxs.size() == draft.size() + 1`. A width of `n_max` is one row short whenever `n_max` is itself a power of two.
+- **R09.8** (optional feature) WHERE padded verify is enabled, the <target graph> shall record a build-or-reuse counter, incrementing only on a rebuild, so R09.3 can be measured.
 
 ## Acceptance
 
 Identical tokens with and without padding over the oracle corpus. Graph rebuild
-count per 100 steps before and after, measured from the P04 profile.
+count per 100 steps before and after, from the counter R09.8 adds. P04's profile
+does not supply this: it instruments the drafter's catch-up and draft-step
+phases, not the target graph this plan changes.

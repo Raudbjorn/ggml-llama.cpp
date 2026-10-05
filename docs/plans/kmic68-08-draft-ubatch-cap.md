@@ -39,5 +39,11 @@ rather than measuring it after the fact.
 ## Acceptance
 
 Same draft tokens and same acceptance rate with and without the cap, from the P04
-log. `llama-bench` depth sweep before and after showing no decode regression and a
-smaller draft compute buffer, A770, named driver, P01's `-n 512`.
+log. A770, named driver, P01's `-n 512`.
+
+The run must go through an executable that actually constructs `ctx_dft`.
+`tools/llama-bench` has no draft-model or speculative path, so a depth sweep with
+it creates only the target context: it cannot exercise the cap, compare draft
+tokens, or report a draft compute buffer, and would return identical numbers
+whether or not P08 works. Use the server speculative harness, and record the
+draft context's compute buffer from the fit breakdown rather than from `llama-bench`.

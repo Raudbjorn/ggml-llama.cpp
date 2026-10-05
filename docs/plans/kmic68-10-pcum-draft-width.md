@@ -19,8 +19,8 @@ cache.
 
 ## In this fork
 
-- `common/speculative.cpp:2363`, the non-chained per-token stop
-  `cur_p->data[0].p < params.p_min`.
+- `common/speculative.cpp:2362-2367`, the non-chained per-token stop
+  `cur_p->data[0].p < params.p_min`, which `continue`s before `result.push_back`.
 - `common/speculative.cpp:2221`, the chained per-token stop `p < params.p_min`,
   over the packed `[id, prob]` rows that the in-graph decode emits at `:2210-2216`.
 
@@ -28,7 +28,9 @@ Both paths already carry a per-token confidence stop, so this is an additional
 stop condition rather than a new mechanism. Note that the chained path fuses the
 *decode* into one graph but still runs a host-side *selection* loop at
 `:2213-2229`, so chain mode is in scope. In both paths the crossing token is
-discarded: the stop `break`s before `result.push_back(id)`.
+discarded: the stop `break`s before `result.push_back(id)`. The cumulative check
+belongs beside the `p_min` test, not at `:2403-2406`, which is the separate
+`draft_add` failure path.
 
 ## Requirements
 

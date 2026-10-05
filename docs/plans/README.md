@@ -1,7 +1,10 @@
 # Plan set: adopt Kmic-68/llama.cpp findings
 
-Source of findings: `Kmic-68/llama.cpp`, branch `p100-optimizations`, merge base
-`f46bc30cb6a7f68a67e34a00061e20a4ad1eff43`. Its CUDA kernel work (`fattn-gemm`,
+Source of findings: `Kmic-68/llama.cpp`, branch `p100-optimizations` at tip
+`ae35056eba07a52dc85c91b035170013d5e46220`, read against this fork at merge base
+`f46bc30cb6a7f68a67e34a00061e20a4ad1eff43`. The tip is the revision the findings,
+thresholds and code excerpts were taken from and is what an audit needs; the
+merge base is only for diffing. Its CUDA kernel work (`fattn-gemm`,
 `gemm-fold`, `fattn-q4p`, `mmvq`, `gdn-chunked`) is Pascal SASS and is out of
 scope; these plans cover the `common/` layer and the two findings that bear on
 our SYCL build directly.
@@ -60,7 +63,8 @@ and P12 last.
 ## Regression floor
 
 `test-qwen4exp-mtp` (75 assertions CPU on the final source, 50 with
-`--q8-kv`; 76 and 51 on Arc A770) and `scripts/test_bench_spec.py` (25 tests) pass
+`--q8-kv`; 76 and 51 on Arc A770) and the whole of `scripts/test_bench_spec.py`
+(26 tests at `001d906a6`) pass
 before and after every plan that touches `common/` or the FA kernels. The counts
 are from `docs/research/qwen4exp-mtp-correctness-2026-10-04.md:351-352`; a lower
 count than that is a regression. Plans that change output tokens (P05, P06,

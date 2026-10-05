@@ -22,7 +22,7 @@ The server harness is not affected: `scripts/perf/bench_spec.py` uses
 ## In this fork
 
 - `AGENTS.md:196` and `AGENTS.md:200`, the two `llama-bench` invocations.
-- `scripts/perf/bench_spec.py:326`, `n_predict` default, for contrast.
+- `scripts/perf/bench_spec.py:306`, `n_predict` default, for contrast.
 
 ## Requirements
 
