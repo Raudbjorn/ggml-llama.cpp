@@ -41,8 +41,9 @@ to another checkout. Update routing descriptions in both files when a role's sco
 edit domain instructions once in the shared Markdown body.
 
 These roles belong to the full development tree. `scripts/prune-to-lib.sh` removes both agent
-directories from the generated `lib` branch because it also removes their contract, skills and
-other required development inputs. Dispatch SDK maintenance from a full checkout instead.
+directories and root `AGENTS.md`/`CLAUDE.md` from the generated `lib` branch because it also
+removes their contract, skills and other required development inputs. Dispatch SDK maintenance
+from a full checkout instead.
 
 ## Codex adaptation
 

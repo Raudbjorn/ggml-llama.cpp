@@ -19,6 +19,8 @@ cp "$SCRIPT_DIR/prune-to-lib.sh" scripts/
 printf 'runbook\n' > .claude/agents/probe.md
 printf 'name = "probe"\n' > .codex/agents/probe.toml
 printf 'contract\n' > docs/development/agents.md
+printf 'Read [contract](docs/development/agents.md).\n' > AGENTS.md
+printf 'Read [guidance](AGENTS.md) and [contract](docs/development/agents.md).\n' > CLAUDE.md
 printf 'SDK\n' > docs/SDK.md
 printf 'evidence\n' > docs/research/probe.md
 printf 'keep\n' > .claude/settings.json
@@ -34,10 +36,12 @@ test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 test "$(git branch --show-current)" = fixture
 test -f .claude/agents/probe.md
 test -f .codex/agents/probe.toml
+test -f AGENTS.md
+test -f CLAUDE.md
 test -z "$(git status --porcelain)"
-test -z "$(git ls-tree -r --name-only sdk-probe -- .claude/agents .codex/agents docs/development)"
+test -z "$(git ls-tree -r --name-only sdk-probe -- .claude/agents .codex/agents docs/development AGENTS.md CLAUDE.md)"
 for path in docs/SDK.md docs/research/probe.md .claude/settings.json .codex/config.toml; do
     git cat-file -e "sdk-probe:$path"
 done
 test "$(git worktree list --porcelain | grep -c '^worktree ')" = 1
-printf 'PASS: SDK prunes unusable roles, preserves retained files and leaves source unchanged\n'
+printf 'PASS: SDK prunes unusable roles and root guidance, preserves retained files and leaves source unchanged\n'
