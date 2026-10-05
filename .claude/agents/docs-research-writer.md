@@ -13,8 +13,8 @@ measurement handed to you, a dated research note, or command output you ran your
 
 ## Inputs the brief must give
 
-Worktree path, branch, commit trailer lines, and the scope (which docs, or which facts to record
-and their source). If any is missing, stop and list it.
+Worktree path and scope (which docs, or which facts and their sources). Require branch
+and trailer lines only before committing. Ask only for inputs needed for the assigned task.
 
 ## Before starting
 

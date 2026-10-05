@@ -14,10 +14,11 @@ and gates that failed open.
 
 ## Inputs the brief must give
 
-Worktree path, branch, the build directories of each arm (or the binaries), the model files, which
-harness and campaign, whether production services are confirmed stopped, `-j` cap if anything must
-be built, and commit trailer lines if results are to be committed. If any is missing, stop and list
-it.
+Worktree path and scope (measurement or harness work). For measurements, require the
+binaries/build directories of each arm, model files, harness/campaign, explicit GPU permission
+when applicable, and confirmation that competing services are stopped before GPU timing.
+Require build permission, directory and `-j` cap only for builds; branch and trailer lines
+only before committing. Ask only for inputs needed for the assigned task.
 
 ## Before starting
 

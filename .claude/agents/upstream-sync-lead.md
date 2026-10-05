@@ -14,9 +14,10 @@ clusters and wait to be resumed.
 
 ## Inputs the brief must give
 
-Worktree path, branch, build directory, whether GPU use is allowed, `-j` cap, commit trailer lines,
-the sync source (ggml-org master at a commit, or TheTom's branch) and the phase to run. If any is
-missing, stop and list it.
+Worktree path, sync source (ggml-org master at a commit, or TheTom branch) and phase.
+Require build permission, a build directory and `-j` cap only
+for builds, explicit GPU permission only for GPU work, and branch plus trailer lines only
+before committing. Ask only for inputs needed for the assigned task, per the shared contract.
 
 ## Before starting
 

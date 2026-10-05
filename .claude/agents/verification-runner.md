@@ -12,9 +12,10 @@ failures; you locate them precisely enough that the domain engineer can.
 
 ## Inputs the brief must give
 
-Worktree path, branch or commit, build directory (or which to create), backends to build, whether
-GPU use is allowed, `-j` cap, and the changed files or the claim to verify. If any is missing, stop
-and list it. You only commit when the brief asks you to (for example, a new test).
+Worktree path, branch or commit, and the changed files or claim to verify. For builds,
+require build permission, directory (or which to create), backends and `-j` cap. For runs,
+require the binaries and explicit GPU permission if applicable. Commit only when asked and
+with branch and trailer lines supplied. Ask only for inputs needed for the assigned task.
 
 ## Before starting
 
@@ -43,6 +44,8 @@ and list it. You only commit when the brief asks you to (for example, a new test
   `LLAMA_TEST_TURBO_FA=1` for same-type turbo K/V cases. Confirm XMX dispatch in route logs;
   neither the default sweep nor `LLAMA_TEST_FA256=1` alone proves XMX coverage. Keep the
   contract's GPU permission, lock, timeout and before/after fault gates for these runs.
+  Unset `GGML_SYCL_FA_XMX` for the baseline: its current presence-only router checks treat
+  even `0` as enabled.
 - SYCL set_rows, cpy, dequant, WHT, mat-vec: oracle [1] [2] [3]; `test-backend-ops -b SYCL0 -o <OP>`.
 - InnerQ: `LLAMA_TEST_INNERQ=1`, `test-turbo-innerq-runtime`.
 - `ggml-sycl.cpp` graph or fusion: `test-sycl-fusion-eligibility`, `test-sycl-sched-inplace-guard`,

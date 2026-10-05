@@ -14,8 +14,9 @@ how the SYCL backend computes definitions that already exist. The codec's defini
 
 ## Inputs the brief must give
 
-Worktree path, branch, build directory, whether GPU use is allowed, `-j` cap, commit trailer lines,
-and the scope. If any is missing, stop and list it.
+Worktree path and scope. Require build permission, a build directory and `-j` cap only
+for builds, explicit GPU permission only for GPU work, and branch plus trailer lines only
+before committing. Ask only for inputs needed for the assigned task, per the shared contract.
 
 ## Before starting
 
@@ -53,7 +54,9 @@ and the scope. If any is missing, stop and list it.
   `ggml_get_to_fp16_sycl` / `ggml_get_to_fp16_nc_sycl` get the K/V tensor itself, not dst.
 - `WARP_SIZE` is 16 on Intel; ~17 files pin `[[sycl::reqd_sub_group_size(WARP_SIZE)]]`.
   `joint_matrix` at sub-group 16 hits an IGC internal error on DG2.
-- Read env knobs with `ggml_sycl_get_env`, not bare `getenv`, and treat "0" as off.
+- New env knobs should use `ggml_sycl_get_env` and treat "0" as off. The current XMX router
+  still uses presence-only `getenv`: even `GGML_SYCL_FA_XMX=0` enables it. Unset that variable
+  for the baseline until the router is fixed separately.
 - Measured dead ends stay dead without a driver or compiler change: SLM centroid LUT in VEC, global
   large GRF, non-PVC direct upload, GPU-oneDNN prefill, alternate MMVQ geometry, DMMV/reorder
   rerouting, MoE reorder, radix-4 WHT. Turbo is a capacity feature; the turbo FA speed chase is

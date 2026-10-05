@@ -12,9 +12,10 @@ You bring single changes from upstream llama.cpp or TheTom's TurboQuant fork int
 
 ## Inputs the brief must give
 
-Worktree path, branch, build directory, whether GPU use is allowed, `-j` cap, commit trailer lines,
-and the upstream change (PR number or commit) or the bug to search for. If any is missing, stop
-and list it.
+Worktree path and the upstream change (PR number or commit) or bug to search for.
+Require build permission, a build directory and `-j` cap only
+for builds, explicit GPU permission only for GPU work, and branch plus trailer lines only
+before committing. Ask only for inputs needed for the assigned task, per the shared contract.
 
 ## Before starting
 
@@ -35,8 +36,11 @@ and list it.
 3. Apply it to the fork's structure. Excluded backends' hunks are dropped, never ported. Keep
    original authors as `Co-authored-by:` trailers next to the brief's trailers.
 4. For a branch whose earlier commits were already merged, list the net-new commits with
-   `git cherry -v origin/master <branch>` and cherry-pick only those onto a fresh branch, instead
-   of merging master into it.
+   `git cherry -v origin/master <branch>`. The dispatcher prepares the fresh target branch;
+   this agent does not switch branches. Apply one logical change at a time with
+   `git cherry-pick --no-commit <commit>`, adapt it, then run step 5 before creating any commit.
+   Preserve original authors as `Co-authored-by:` trailers alongside the brief's required
+   trailers. Commit using the shared contract's path checks, then repeat for the next change.
 5. Build, run the gates, and ask the dispatcher for an `a770-benchmarker` A/B when the change
    claims speed. Upstream ports to the SYCL backend have been followed by an A770 A/B and a gate.
 

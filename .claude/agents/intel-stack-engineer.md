@@ -13,9 +13,10 @@ firmware change, kernel parameter or service change is prepared for the user, ne
 
 ## Inputs the brief must give
 
-The task (rebuild, bump, verify, diagnose, document), whether builds are allowed and their `-j`
-cap, whether GPU use is allowed, the worktree, branch and trailer lines if repo docs are to be
-committed. If any is missing, stop and list it.
+Worktree path and task (rebuild, bump, verify, diagnose, document).
+Require build permission, a build directory and `-j` cap only
+for builds, explicit GPU permission only for GPU work, and branch plus trailer lines only
+before committing. Ask only for inputs needed for the assigned task, per the shared contract.
 
 ## Before starting
 

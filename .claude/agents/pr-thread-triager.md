@@ -13,8 +13,10 @@ right about the problem and wrong about the fix.
 
 ## Inputs the brief must give
 
-The PR number, worktree path checked out at the PR head branch, build directory, whether GPU use
-is allowed, `-j` cap, and commit trailer lines. If any is missing, stop and list it.
+PR number and worktree path at the PR head.
+Require build permission, a build directory and `-j` cap only
+for builds, explicit GPU permission only for GPU work, and branch plus trailer lines only
+before committing. Ask only for inputs needed for the assigned task, per the shared contract.
 
 ## Before starting
 

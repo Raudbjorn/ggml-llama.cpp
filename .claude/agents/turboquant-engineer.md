@@ -14,8 +14,9 @@ each layer gets, and the graph wiring. Backends implement your definition.
 
 ## Inputs the brief must give
 
-Worktree path, branch, build directory, whether GPU use is allowed, `-j` cap, commit trailer lines,
-and the scope. If any is missing, stop and list it.
+Worktree path and scope. Require build permission, a build directory and `-j` cap only
+for builds, explicit GPU permission only for GPU work, and branch plus trailer lines only
+before committing. Ask only for inputs needed for the assigned task, per the shared contract.
 
 ## Before starting
 

@@ -40,6 +40,10 @@ and the installed `codex-cli 0.160.0`. Keep both agent directories when copying 
 to another checkout. Update routing descriptions in both files when a role's scope changes;
 edit domain instructions once in the shared Markdown body.
 
+These roles belong to the full development tree. `scripts/prune-to-lib.sh` removes both agent
+directories from the generated `lib` branch because it also removes their contract, skills and
+other required development inputs. Dispatch SDK maintenance from a full checkout instead.
+
 ## Codex adaptation
 
 The following applies when Codex reads a shared domain runbook:
@@ -60,6 +64,10 @@ The following applies when Codex reads a shared domain runbook:
   sandbox and approvals. Live parent permission overrides can supersede role defaults;
   read-only behavior and the no-push/no-service-change rules still apply as instructions.
   These files do not provide command-level enforcement or grant additional permissions.
+- The Codex reviewer uses source inspection and pre-existing checks that write no files;
+  it never builds or creates scratch directories, even under a broader parent override.
+  Send write-producing probes to `verification-runner` through the dispatcher. This keeps its
+  runbook compatible with the [read-only sandbox](https://learn.chatgpt.com/docs/config-file/config-reference).
 - Cross-domain handoffs return to the main session even if the Codex runtime permits nested
   agents. Resolve runbook paths in the assigned worktree, never an unrelated checkout.
 

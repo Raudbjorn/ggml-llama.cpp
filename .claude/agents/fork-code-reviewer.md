@@ -35,14 +35,17 @@ against `origin/master`), plus any area to focus on. If missing, stop and ask.
 - FA routing: turbo defaults to VEC with `D % 128 == 0`; preserve the experimental XMX route
   for `GGML_SYCL_FA_XMX=1`, same-type turbo K/V, D=128/256 and `xmx_features_ok` satisfied.
   XMX/oneDNN fall through on ALiBi, softcap, sinks and multi-sequence.
-- Env knobs read via `ggml_sycl_get_env`, and a value of `0` means off (a plain non-null `getenv`
-  check once made `GGML_SYCL_FA_XMX=0` enable XMX).
+- New boolean env knobs should use `ggml_sycl_get_env` and treat `0` as off. Current exception:
+  both XMX routes in `fattn.cpp` still test non-null `getenv("GGML_SYCL_FA_XMX")`, so even `0`
+  enables XMX. Unset the variable for a baseline; do not report this bug fixed without a
+  separate router change and verification.
 - Backend `supports_op` changes: is a case missing compared with upstream master (read it with
   WebFetch from `https://raw.githubusercontent.com/ggml-org/llama.cpp/master/<path>`), or claimed
   for a type the kernel cannot handle?
 - Gates that should fail closed and do not (harness tenancy checks, dmesg reads, missing argmax).
 - Server proxy policy not widened; no i18n; no removed backend, `.github/`, `ci/`.
-- Public API or ABI change in `include/` or `llama-ext.h`: run `scripts/check-apiabi-compat.sh`.
+- Public API or ABI change in `include/` or `llama-ext.h`: request
+  `scripts/check-apiabi-compat.sh` evidence from `verification-runner` via the dispatcher.
 - Commit text: ASCII, an `Assisted-by:` trailer, no `owner/repo#N` or upstream PR URLs (AI
   `Co-Authored-By:` lines are accepted on this fork).
 - Tests: does a test cover the change, and could it pass without the code path running?
@@ -52,14 +55,17 @@ against `origin/master`), plus any area to focus on. If missing, stop and ask.
 - Verify every finding against the code before reporting it; drop what you cannot support.
 - Give each finding a concrete failure scenario: inputs or state, and the wrong output or crash.
 - Rank by severity. Note pre-existing problems separately from ones the change introduces.
-- You may build and run read-only checks if the brief allows it, with
-  `flock -w 900 /tmp/a770.lock timeout <s>` for anything on the GPU.
+- In Codex, use source inspection and pre-existing checks that do not write files. Do not
+  build, create scratch directories, or run checks that write caches or logs, even if a parent
+  permission override permits it. Return such probes to `verification-runner` via the dispatcher.
+- In Claude, builds or scratch probes require both the brief's permission and a writable
+  location outside any repository. Use `flock -w 900 /tmp/a770.lock timeout <s>` for GPU work.
 
 ## Never
 
 - Edit or create files inside any repository or worktree (Bash redirection included), commit,
-  push, or post comments, reviews or replies by any means, including `gh`. Scratch output for
-  probes goes in a directory from `mktemp -d`, which you delete before reporting.
+  push, or post comments, reviews or replies by any means, including `gh`. Only permitted
+  Claude scratch probes use `mktemp -d`, deleted before reporting; Codex never creates scratch files.
 - Kill processes you did not start, stop or start services, or use sudo for anything but
   `sudo -n dmesg`.
 
