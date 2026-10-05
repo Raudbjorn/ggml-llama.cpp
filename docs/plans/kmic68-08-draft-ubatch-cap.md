@@ -1,0 +1,43 @@
+# P08 - Draft-context ubatch cap
+
+**Kind:** port
+**Depends on:** none
+
+## Purpose
+
+At long context the draft context's compute buffer is dominated by the KQ mask,
+whose size is `n_kv * n_ubatch * sizeof(f16)`. The target needs a wide ubatch
+because that is what buys prefill throughput, but the draft is a single layer that
+simply loops over more chunks, so its ubatch can be capped independently.
+
+Kmic-68 quote their worst case as 1024 MiB at `262144 x 2048`. Our depths are
+smaller, but the mechanism is the same, and it is the same buffer whose 11 MiB
+growth PR #90 T24 spent a day accounting for. This plan reduces it by design
+rather than measuring it after the fact.
+
+## Source
+
+- Kmic-68 `common/speculative.cpp`, the `n_ubatch` clamp in
+  `common_base_params_to_speculative`.
+
+## In this fork
+
+- `common/common.h:497`, `n_ubatch` on the common params; the speculative params
+  struct has no per-draft equivalent today.
+- `src/llama-context.cpp:1035-1053`, `sched_reserve`, which now reserves the
+  draft catch-up shape after `15f318275`.
+
+## Requirements
+
+- **R08.1** (optional feature) WHERE a speculative draft ubatch is configured, the <params conversion> shall cap the draft context's `n_ubatch` at that value independently of the target's.
+- **R08.2** (ubiquitous) The <draft context> shall have `n_batch` at least equal to its `n_ubatch`.
+- **R08.3** (event-driven) WHEN the draft ubatch is capped, the <draft context> shall decode the same draft tokens to the same result, chunked over more `llama_decode` calls rather than fewer, larger ones.
+- **R08.4** (unwanted) IF the configured draft ubatch exceeds the target's, THEN the <params conversion> shall leave the target's value unchanged.
+- **R08.5** (event-driven) WHEN the draft ubatch cap is active, the <fit path> shall report the reduced draft compute buffer.
+- **R08.6** (unwanted) IF the cap would force a draft microbatch below 32, THEN the <params conversion> shall clamp at 32, since that is the BLAS floor the CPU backend needs.
+
+## Acceptance
+
+Same draft tokens and same acceptance rate with and without the cap, from the P04
+log. `llama-bench` depth sweep before and after showing no decode regression and a
+smaller draft compute buffer, A770, named driver, P01's `-n 512`.

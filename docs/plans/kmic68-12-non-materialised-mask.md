@@ -1,0 +1,47 @@
+# P12 - Non-materialised causal mask
+
+**Kind:** port
+**Depends on:** P08, which shrinks the same `n_ubatch` dimension
+
+## Purpose
+
+`build_attn_inp_kq_mask` allocates an f16 tensor of `n_kv x n_tokens` and
+`fill_mask` writes all of it. For a single sequence in position order, query *t*
+sees exactly the first `L0 + t` cells, so a list of prefix lengths carries the
+same information. Kmic-68 report this as freeing the room to run `-ub 2048` with
+vision enabled, bit-exact.
+
+At our depths the tensor is tens of MiB, not their 1 GiB, but it is the same
+tensor whose differing width produced the 8 KiB allocation-plan variance that
+PR #90 T36 declined to bound: a decode's smaller mask moves an 8 KiB tensor into
+a different hole, and best fit is not monotonic in tensor sizes.
+
+Replacing the tensor removes the variance by construction rather than documenting
+it.
+
+## Source
+
+- Kmic-68 `p100-docs/FINDINGS.md`, *Do not materialise the causal mask*.
+
+## In this fork
+
+- `src/llama-graph.cpp:30-42` `build_attn_inp_kq_mask`, the allocation.
+- `src/llama-graph.cpp:3007-3008` the call site, and `:458-463` `fill_mask`.
+- `common/speculative.cpp:2210-2216`, the chained path that reads packed logits
+  and depends on mask widths staying stable.
+
+## Requirements
+
+- **R12.1** (optional feature) WHERE a decode batch carries a single sequence in position order, the <mask builder> shall represent causality as a per-query prefix length instead of an `n_kv x n_tokens` tensor.
+- **R12.2** (event-driven) WHEN the prefix-length representation is in use, the <FA kernel> shall derive each query's visible cell count from it rather than from a mask tensor.
+- **R12.3** (ubiquitous) The <representation> shall yield bit-identical attention output to the materialised mask for every query position.
+- **R12.4** (unwanted) IF a batch carries multiple sequences, or non-contiguous positions, or sliding-window attention, THEN the <mask builder> shall allocate the full tensor as it does today.
+- **R12.5** (event-driven) WHEN the reservation sizes a compute buffer, the <planner> shall size against the prefix-length representation's memory.
+- **R12.6** (unwanted) IF the prefix representation would exceed the materialised mask's own size at the current depth, THEN the <builder> shall materialise the tensor instead.
+- **R12.7** (event-driven) WHEN this plan lands, the <PR #90 T36 residual> shall be updated to record that the 8 KiB variance is bounded by construction.
+
+## Acceptance
+
+Bit-exact logit comparison at depths 4096 and 16384 against the materialised mask,
+plus a compute-buffer size before and after. The turbo oracle suite passes with no
+regression in nmse or cosine.
