@@ -33,6 +33,8 @@ rather than measuring it after the fact.
 - **R08.2** (ubiquitous) The <draft context> shall have `n_batch` at least equal to its `n_ubatch`.
 - **R08.3** (event-driven) WHEN the draft ubatch is capped, the <draft context> shall decode the same draft tokens to the same result, chunked over more `llama_decode` calls rather than fewer, larger ones.
 - **R08.4** (unwanted) IF the configured draft ubatch exceeds the target's, THEN the <params conversion> shall leave the target's value unchanged.
+- **R08.4a** (ubiquitous) The <effective draft ubatch> shall be at least `n_rs_seq + 2`, because `llama-context.cpp:390-402` raises `n_batch` and `n_ubatch` to that floor with only a warning, so a cap below it is silently undone at context creation.
+- **R08.4b** (unwanted) IF the fit path reports a draft compute buffer, THEN it shall use the same normalised value as the runtime context, because `common.cpp:1308` sets the fit context's `n_rs_seq` to zero and would otherwise report a buffer smaller than the runtime reserves.
 - **R08.5** (event-driven) WHEN the draft ubatch cap is active, the <fit path> shall report the reduced draft compute buffer.
 - **R08.6** (unwanted) IF the cap would force a draft microbatch below 32, THEN the <params conversion> shall clamp at 32, since that is the BLAS floor the CPU backend needs.
 

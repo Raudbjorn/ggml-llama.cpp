@@ -6,7 +6,7 @@
 ## Purpose
 
 `build_attn_inp_kq_mask` allocates an f16 tensor of `n_kv x n_tokens` and
-`fill_mask` writes all of it. Kmic-68 report that for a single sequence in
+`fill_mask` writes all of it. Kmic-68 reports that for a single sequence in
 position order, query *t* sees exactly the first `L0 + t` cells, so a list of
 prefix lengths carries the same information, freeing room to run `-ub 2048` with
 vision enabled, bit-exact.
@@ -44,6 +44,8 @@ it.
 - **R12.1** (optional feature) WHERE a decode batch carries a single sequence in position order, `cparams.causal_attn` is true and `hparams.use_alibi` is false, the <mask builder> shall represent causality as a per-query prefix length instead of an `n_kv x n_tokens` tensor.
 - **R12.0a** (optional feature) WHERE the prefix representation is selected, the <mask builder> shall first establish that every visible KV cell occupies a contiguous index range `[0, L)` in position order for this sequence, as `set_input_kq_mask_impl` at `:2258-2281` assumes of nothing; otherwise the full tensor shall be allocated.
 - **R12.0b** (optional feature) WHERE `cparams.flash_attn` is false, the <mask builder> shall allocate the full tensor, because the non-FA path at `src/llama-graph.cpp:2809-2844` routes through `ggml_soft_max_ext` with a complete mask and consumes no prefix lengths.
+- **R12.0c** (optional feature) WHERE the scheduled backend has no prefix support, the <mask builder> shall allocate the full tensor. The mask is built in backend-independent graph code while `GGML_OP_FLASH_ATTN_EXT` is implemented by CPU, Vulkan, OpenVINO and SYCL here, so a representation chosen from model and batch properties alone would reach backends that cannot consume it.
+- **R12.0d** (event-driven) WHEN the graph is reused, the <reuse predicate> shall re-establish R12.0a and the eligibility conditions, because `llm_graph_input_attn_kv::can_reuse` at `src/llama-graph.cpp:496-508` today checks only tensor dimensions through `can_reuse_kq_mask`, and a same-shaped graph would be reused after deletion, reuse or shifting had broken the compact layout.
 - **R12.2** (event-driven) WHEN the prefix-length representation is in use, the <FA kernel> shall derive each query's visible cell count from it rather than from a mask tensor.
 - **R12.3** (ubiquitous) The <representation> shall yield bit-identical attention output to the materialised mask for every query position.
 - **R12.4** (unwanted) IF a batch carries multiple sequences, or non-contiguous positions, or sliding-window attention, THEN the <mask builder> shall allocate the full tensor as it does today.

@@ -39,6 +39,7 @@ measured and reverted on its own.
 - **R09.6** (unwanted) IF the fixed width exceeds the batch or microbatch capacity, THEN the <padded verify> shall fall back to the unpadded path and log the reason.
 - **R09.7** (ubiquitous) The <fixed width> shall default to a power of two at or above `n_max + 1`, because a verify batch carries the previously sampled token plus the draft rows and `common_sampler_sample_and_accept_n` asserts `idxs.size() == draft.size() + 1`. A width of `n_max` is one row short whenever `n_max` is itself a power of two.
 - **R09.8** (optional feature) WHERE padded verify is enabled, the <target graph> shall record a build-or-reuse counter, incrementing only on a rebuild, so R09.3 can be measured.
+- **R09.9** (unwanted) IF padded rows reach a speculative implementation, THEN the <implementation> shall ignore them explicitly, because the server passes `batch.view` unchanged to `common_speculative_process` at `tools/server/server-context.cpp:4130-4133` and each implementation mirrors that batch into the draft context. Masking them from target outputs and target KV is not enough: their tokens and positions would otherwise enter draft KV or recurrent state and change later drafts.
 
 ## Acceptance
 

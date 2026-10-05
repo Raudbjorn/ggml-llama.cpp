@@ -9,7 +9,7 @@ merge base is only for diffing. Its CUDA kernel work (`fattn-gemm`,
 scope; these plans cover the `common/` layer and the two findings that bear on
 our SYCL build directly.
 
-Kmic-68s `p100-docs/FINDINGS.md` records eleven ways its own measurements misled
+Kmic-68's `p100-docs/FINDINGS.md` records eleven ways its own measurements misled
 it. Every default in these plans is therefore measured on the A770 rather than
 copied from its thresholds.
 

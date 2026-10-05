@@ -32,6 +32,7 @@ This is pure instrumentation. It changes no output and no performance when unset
 - **R04.3** (unwanted) IF `LLAMA_SPEC_PROFILE` is set, THEN the <drafter> shall synchronise the draft context before reading each phase timestamp.
 - **R04.4** (ubiquitous) The <log format> shall remain parseable when the optional fields are absent, so a consumer written before this plan still reads it.
 - **R04.4a** (event-driven) WHEN a server slot is reused by a new request, the <request identifier> shall differ from the previous request on that slot, so two requests beginning at the same position produce distinguishable records.
+- **R04.4b** (event-driven) WHEN a checkpoint rollback replays accepted tokens, the <cycle record> shall use the server's replay-adjusted accepted count, because `post_decode` sets `spec_is_replay` and returns before `common_speculative_accept`, the server passes `accepted.size() - 1` on replay, and a record finalised only in the MTP `accept` callback would otherwise disagree with `slot.stats.n_draft_accepted`.
 - **R04.5** (event-driven) WHEN neither `LLAMA_SPEC_LOG` nor `LLAMA_SPEC_PROFILE` is set, the <drafter> shall not synchronise and shall not branch inside the decode loop.
 
 ## Acceptance
