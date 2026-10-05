@@ -9,6 +9,9 @@ quality gate.
 The branch is produced by `scripts/prune-to-lib.sh` from `master`. Never commit
 to it by hand - changes belong on `master`, then regenerate.
 
+Project agent definitions in `.claude/agents/` and `.codex/agents/` are pruned with the
+development docs and skills they require. Use the full development checkout for those roles.
+
 ## What LLAMA_DOWNLOAD=OFF means
 
 SDK builds default to providing models as local GGUF files. With

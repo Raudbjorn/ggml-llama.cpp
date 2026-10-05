@@ -68,6 +68,9 @@ PRUNE_PATHS=(
     models
     requirements
     skills
+    # Agent runbooks depend on development docs and skills removed from the SDK.
+    .claude/agents
+    .codex/agents
     bench-a770
     benches
     sweep-logs
