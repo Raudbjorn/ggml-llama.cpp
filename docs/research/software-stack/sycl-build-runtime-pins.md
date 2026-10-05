@@ -1,6 +1,7 @@
 # Canonical SYCL build and runtime pins
 
-Last verified: 2026-07-11 on `vinbonesjr`.
+Runtime identities last verified: 2026-07-11 on `vinbonesjr`.
+Build-policy documentation updated: 2026-10-05; runtime identities below were not reverified.
 
 This is the source of truth for identifying the Arc-focused fork source,
 locally built binaries, and the dormant systemd service. Do not infer
@@ -119,9 +120,7 @@ and exit marker in `RALPH_PROGRESS.md`. The observed clean-build ceiling is
 approximately 45 minutes. Do not reuse a JIT directory for AOT or present an
 AOT artifact as the default product build.
 
-AOT for `acm-g10` compiles the XMX gather GEMMs (`fused-gemm.cpp`, fork PR #67)
-out automatically. IGC 2.41.5 crashes on them for DG2, and DG2 never selects
-them at runtime. CMake prints the reason at configure time, and the startup log
-shows `GGML_SYCL_XMX_GATHER_TYPES: XMX gather GEMMs disabled by compile flag`.
-`GGML_SYCL_XMX_GATHER=OFF` forces the same for any build. See
-`docs/backend/SYCL.md`, "XMX gather GEMMs and DG2 AOT builds".
+For XMX gather build policy, nested SYCL builds, and effective feature provenance,
+see [the SYCL build guide](../../backend/SYCL.md#xmx-gather-gemms-and-dg2-aot-builds).
+Record the effective build metadata as well as the requested option: AUTO selection
+can differ by AOT target, and an old BOOL cache value of ON remains an explicit ON.

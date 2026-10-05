@@ -86,13 +86,9 @@ Hard rules:
 - **`GGML_SYCL_DNN=ON` is only a request.** The effective `GGML_SYCL_DNNL` compile definition and
   the runtime `GGML_SYCL_DNNL:` line are authoritative; a CPU-only oneDNN package yields
   `GGML_SYCL_DNNL=0` and disables the oneDNN FA/GEMM paths entirely.
-- Fork-added CMake knobs: `GGML_SYCL_DEVICE_CODE_SPLIT` (default ON, `-fsycl-device-code-split=per_kernel`),
-  build provenance JSON written when `GGML_SYCL_DEVICE_ARCH` is set. `GGML_SYCL_XMX_GATHER` (default ON)
-  builds the PR #67 XMX gather GEMMs but compiles them out automatically whenever `GGML_SYCL_DEVICE_ARCH`
-  names a DG2 device, because AOT for `acm-g10` crashes IGC 2.41.5 on them and the A770's runtime gate
-  never selects them. An `acm-g10` AOT build therefore prints "XMX gather GEMMs disabled by compile flag"
-  at startup; that is expected (docs/backend/SYCL.md, "XMX gather GEMMs and DG2 AOT builds"). `GGML_SYCL_FA_ALL_QUANTS` is a
-  compile define (not a CMake option) that widens FA type coverage.
+- Fork-added CMake knobs: `GGML_SYCL_DEVICE_CODE_SPLIT` (default ON),
+  `GGML_SYCL_XMX_GATHER` (AUTO/ON/OFF), and build provenance are documented in
+  `docs/backend/SYCL.md`. `GGML_SYCL_FA_ALL_QUANTS` is a compile define, not a CMake option.
 - Vulkan/CPU-only builds are the quick way to smoke-test non-SYCL changes (`cmake -B build && cmake --build build -j`).
 
 ## Tests

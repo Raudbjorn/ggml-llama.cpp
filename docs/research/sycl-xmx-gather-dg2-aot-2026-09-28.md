@@ -2,10 +2,12 @@
 
 Why `GGML_SYCL_XMX_GATHER` exists, what it does, and the evidence behind it. The user-facing
 description is in `docs/backend/SYCL.md`, "XMX gather GEMMs and DG2 AOT builds". This note
-records the investigation.
+records the investigation and its 2026-10-05 review correction.
 
 Evidence labels: **measured** means tool output on this host; **source** means read from code;
-**reported** means the Arch packager's run, not repeated here.
+**reported** means a packager or reviewer run, attributed below and not repeated here.
+Historical measurements retain their original date and toolchain; they are not fresh
+validation of the revised build policy.
 
 ## The problem
 
@@ -36,63 +38,162 @@ a shared object with `-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spi
 | without `-DGGML_SYCL_NO_XMX_GATHER` | rc 0 | **rc 1**: `[acm-g10] IGC: Internal Compiler Error: Floating point exception`, `gen compiler command failed with exit code 245` |
 | with `-DGGML_SYCL_NO_XMX_GATHER` | rc 0 | rc 0 |
 
-## The fix
+## Original implementation and evidence (2026-09-28)
 
-- CMake option `GGML_SYCL_XMX_GATHER` (default ON), in `ggml/src/ggml-sycl/CMakeLists.txt`.
-  When it is ON and the lower-cased `GGML_SYCL_DEVICE_ARCH` has a list entry starting with
-  `acm`, `dg2`, `xe-hpg` or `12.55`-`12.57`, the kernels are compiled out and CMake prints why.
-  OFF always compiles them out. Compiling out defines `GGML_SYCL_NO_XMX_GATHER` privately for
-  `ggml-sycl`.
-- `fused-gemm.cpp`: under `GGML_SYCL_NO_XMX_GATHER` the whole kernel body is excluded, and
-  `ggml_sycl_fused_dequant_gemm_f16_device_ok()`, `ggml_sycl_fused_dequant_gemm_f16()` and
-  `ggml_sycl_grouped_dequant_gemm_f16()` return false.
-- `ggml-sycl.cpp`: the startup info block prints
-  `GGML_SYCL_XMX_GATHER_TYPES: XMX gather GEMMs disabled by compile flag` in that build.
+The first revision used an ON/OFF option and a DG2-name deny-list. It compiled out
+all gather kernels for the entire target list if any entry matched `acm`, `dg2`,
+`xe-hpg`, or IP `12.55`-`12.57`. That implementation was incomplete: unsupported
+non-DG2 targets and alternate spellings escaped it, explicit ON was overridden,
+and mixed-target packages lost kernels even on supported devices.
 
-Configure-only check of the detection (measured, `fused-gemm.cpp` entry in `compile_commands.json`):
+Exactly seven configure-only cases were recorded. "Kernels included" below means
+the `fused-gemm.cpp` compile command lacked `GGML_SYCL_NO_XMX_GATHER`; it does not
+mean that an AOT device link or a kernel execution passed.
 
-| `GGML_SYCL_DEVICE_ARCH` | result |
+| `GGML_SYCL_DEVICE_ARCH` | original configure result |
 |---|---|
-| (empty, JIT) | kernels built |
+| (empty, JIT) | kernels included |
 | `acm-g10` | compiled out, message printed |
-| `bmg-g21` | kernels built |
+| `bmg-g21` | kernels included |
 | `acm-g10,bmg-g21` | compiled out, message printed |
 | `12.55.8` | compiled out, message printed |
 | `ACM-G11` | compiled out, message printed |
-| `xe2-hpg` | kernels built |
+| `xe2-hpg` | kernels included |
 
-A default JIT build (`~/build-pr-28414`, targets `ggml-sycl llama-server
-test-sycl-turbo-correctness`) completed with rc 0, and its `compile_commands.json` has no
-`GGML_SYCL_NO_XMX_GATHER` (measured).
+The original commit message and PR body claimed ten combinations. This artifact
+supports only these seven; the additional `dg2` and two explicit-OFF cases were
+not recorded and are not treated as measured evidence. A default JIT build of
+`ggml-sycl`, `llama-server`, and `test-sycl-turbo-correctness` was reported to
+complete with rc 0. Its private directory name did not establish a reproducible
+source identity, so that build is not validation of the current revision.
 
-## Choices
+## Review evidence (reported, 2026-10-02)
 
-1. **Detect in CMake, not by preprocessor or compiler architecture macros.** One set of sources
-   is compiled once for all AOT targets, so per-target specialization inside the file
-   (`sycl_ext_oneapi_device_architecture`) would be the only finer-grained option. It was not
-   used: it adds device-code branches to kernels that DG2 can never run, and it has not been
-   tried with this compiler.
-2. **The whole target list loses the kernels when any entry is DG2.** This is simple and safe.
-   The cost falls only on mixed lists such as `acm-g10,bmg-g21`, which are documented as such.
-3. **Keep the packager's macro name** (`GGML_SYCL_NO_XMX_GATHER`), so the existing PKGBUILD flag
-   stays harmless until it is removed, and the local patch simply stops applying.
-4. **Also stub `..._device_ok()`**, which the packager's patch left live. A build without the
-   kernels should not report the device as able to run them.
-5. **Match only verified DG2 spellings.** `acm*`, `dg2*` and `xe-hpg` are the ocloc names for
-   DG2. The IP versions are `12.55`-`12.57`; `12.55.8` is the A770 as `sycl-ls` reports it.
-   Flex/ATS-M product names were deliberately left out, because it was not checked which names
-   ocloc uses for them. Anyone targeting those uses `GGML_SYCL_XMX_GATHER=OFF`.
-6. **No sub-group-8 variant.** The only sub-group-8 `joint_matrix` data on the A770 is the fork's
-   XMX flash-attention kernel, which measured 4-7x slower than the vector FA kernel. A GEMM
-   variant would be new kernel work with no evidence it pays off. Not pursued.
+The reviewer linked unstubbed `fused-gemm.cpp` from PR #76 head `40c9b932e593`
+using the single-file method above. No crash or miscompile was reported in the
+stub implementation; the problem was target selection.
 
-## Not verified here
+| AOT targets | reported unstubbed device-link result |
+|---|---|
+| `mtl-h`, `arl-h` | rc 1; 18 IGC floating-point-exception ICEs |
+| `tgl`, `adl-p` | rc 10; cooperative-matrix extension disabled, 18 diagnostics |
+| `ats-m150`, `ats-m75` | rc 1; 18 ICEs |
+| `xe_hpg`, `0x56A0`, `dg1:acm-g10`, `xe` | rc 1 or rc 10; individual codes not supplied |
+| `acm-g11`, `acm-g12` | rc 1; 18 ICEs |
+| `bmg-g21`, `xe2-hpg`, `pvc`, `lnl-m` | rc 0 |
 
-- A full AOT build of the whole tree with this branch. The packager's full `acm-g10` AOT build of
-  `4e7400c3a` with the equivalent stub patch passed the correctness gate, printed the expected
-  version, and ran Ornith correctly (reported). This branch compiles out a superset of what that
-  patch did (the pack kernels and helpers too). Only the single-file AOT link above was run here.
-- The runtime behavior of a JIT build on the A770 after this change. The kernels are still
-  present in JIT builds, and the only source change there is the `#ifndef` wrapper and the log
-  line, so the correctness gate was not rerun.
-- Other DG2 variants (`acm-g11`, `acm-g12`): matched by the detection, not compiled here.
+The stubbed variant linked with rc 0 for `acm-g10`, `mtl-h`, and `tgl`.
+The reviewer also queried `ocloc ids`: `ats-m150` is IP 12.55.8 (like `acm-g10`),
+and `ats-m75` is IP 12.56.5 (like `acm-g11`). Leaving those aliases out was a
+policy error, not evidence that they were safe. The earlier "acm-g11/acm-g12 not
+compiled" statement applies only to the original investigation; the reviewer
+subsequently linked them and observed failures.
+
+A reported live A770 matrix-capability query lacked the required SG16 8x16x16
+fp16 shape. This corrects the older
+[performance note](sycl/ornith-a770-perf-research-2026-09-27.md): its passing
+operator probes and dense 0.99x comparison exercised library fallback, not the
+fused XMX gather implementation. They establish neither fused-kernel correctness
+nor fused-kernel speed on the A770.
+
+## Revised policy (2026-10-05)
+
+`GGML_SYCL_XMX_GATHER` is AUTO/ON/OFF. AUTO uses a conservative AOT allow-list;
+ON is an explicit opt-in and is not silently changed to OFF. OFF compiles out
+the gather kernels. The canonical policy, separate-build inspection paths, and
+provenance fields are documented in
+[the SYCL guide](../backend/SYCL.md#xmx-gather-gemms-and-dg2-aot-builds).
+
+This changes which device images are emitted. A successful AOT link alone does
+not establish correct execution, and the runtime matrix-shape gate remains
+necessary. No SG8 GEMM implementation is introduced.
+
+## Follow-up validation (measured, 2026-10-05)
+
+The review worktree was rebased onto fork master before these checks. These
+results apply to the revised policy and kernel guards, not the original deny-list.
+Toolchain: icpx 2026.1.1 (20260724), IGC package `1:2.41.10-1`,
+compute-runtime-git `22.43.24558.r13063.gbe85a8d685-1`, and
+level-zero-loader-git `1.34.0.r2.gae3db48-1`. The GPU check ran on the A770 with
+**xe**, without timing measurements.
+
+Thirteen actual CMake configurations checked both `build-metadata.json` fields
+and the `fused-gemm.cpp` command's compile-out macro. Each row passed:
+
+| requested | device arch | effective gather targets |
+|---|---|---|
+| AUTO | empty (JIT) | JIT |
+| AUTO | `acm-g10` | OFF |
+| AUTO | `mtl-h` | OFF |
+| AUTO | `tgl` | OFF |
+| AUTO | `ats-m150` | OFF |
+| AUTO | `xe_hpg` | OFF |
+| AUTO | `0x56A0` | OFF |
+| AUTO | `dg1:acm-g10` | OFF |
+| AUTO | `bmg-g21` | `bmg-g21` |
+| AUTO | `acm-g10,bmg-g21` | `bmg-g21` |
+| ON | `acm-g10` | `acm-g10` |
+| OFF | empty (JIT) | OFF |
+| OFF | `bmg-g21` | OFF |
+
+The explicit ON row checks selection only; it does not claim that unsupported
+`acm-g10` gather kernels now link. The persistent CMake policy test also checks
+normalization, unknown targets, mixed lists, and invalid modes.
+
+The enabled JIT `fused-gemm.cpp` object compiled. The compile-out test compiled,
+linked, and called the three public fallback entry points, all returning false.
+The policy and fallback CTests passed 2/2:
+
+```bash
+cmake --build BUILD --target test-sycl-xmx-gather-stubs
+ctest --test-dir BUILD -R '^test-sycl-xmx-gather(-stubs)?$' --output-on-failure
+```
+
+Fresh partial AOT device links of the enabled gather object succeeded for all
+four admitted target names: `bmg-g21`, `xe2-hpg`, `pvc`, and `lnl-m` (each rc 0).
+These used `icpx -fsycl -fsycl-targets=spir64_gen -fsycl-device-code-split=per_kernel
+-Xsycl-target-backend=spir64_gen "-device TARGET" -fsycl-link OBJECT -o OUTPUT`.
+
+The mixed `acm-g10,bmg-g21` configure generated a gather image restricted to
+`bmg-g21`. Linking its extracted host object and prelinked device object with
+the full backend target list succeeded. Passing the device object directly to
+the host linker preserves that restriction instead of recompiling its kernels
+for every backend target. A standalone registration probe found nine named
+gather kernels. It created no device queue and ran no GPU compute; registration
+is evidence of retained images, not execution on Battlemage.
+
+Stubbed partial AOT links also succeeded freshly for `acm-g10`, `mtl-h`, and
+`tgl` (each rc 0). These are single-file device links, not full backend AOT builds.
+The durable mixed-build CTest suite passed 3/3 for both shared and ELF static
+configurations. The static test links through an archive member referenced by
+the public capability function and verifies that all nine named kernels remain
+registered. Additional configures passed for separator-only JIT input,
+normalized mixed target names, and migration of a BOOL ON cache to STRING ON;
+an attempted nested policy override was rejected with the outer-option diagnostic.
+In addition,
+outer and nested separate-build configures for AUTO `acm-g10` both reported OFF;
+the outer metadata recorded OFF and the nested `fused-gemm.cpp` compile command
+contained `GGML_SYCL_NO_XMX_GATHER`.
+
+A full JIT build of `ggml-sycl` and `test-sycl-turbo-correctness` passed. The
+A770 default correctness sweep ran with graph replay disabled under a 180-second
+timeout and ended with zero `GATE-FAIL` and zero `XPASS`. This verifies the default
+fallback behavior on that device, not execution of its unsupported gather kernels.
+
+## Not claimed
+
+- The reviewer target table is reported evidence, not independently repeated
+  measurements from this documentation update. Compiler/IGC changes can change
+  link results; aliases and targets outside the table were not tested there.
+- No model, acceptance, throughput, or fused-kernel correctness result follows
+  from configure-only or device-link checks. The default A770 correctness run
+  exercises fallback, not the gather implementation.
+- Historical JIT builds are not validation of the revised CMake policy.
+- No full backend AOT link, Windows build, or supported-target GPU execution
+  was performed in this follow-up. Windows static mixed AUTO builds are
+  explicitly rejected; that is a documented build limitation, not verification
+  of a Windows-specific image-link implementation.
+- A full original-branch AOT build was not recorded. The packager reported a full
+  `acm-g10` AOT build of `4e7400c3a` with its equivalent stub patch, a passing
+  correctness gate, and coherent Ornith output; those results belong to that
+  artifact, not every later revision.
