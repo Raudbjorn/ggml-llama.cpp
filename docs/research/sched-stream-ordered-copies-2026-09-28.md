@@ -36,10 +36,10 @@ Decode t/s did not change beyond noise.
    the generic branch, which master does not have. Its `stream_ordered` branch already contains
    the async upload that 0010 introduces, so for single-GPU (no events) nothing else is needed.
    0010's remaining change affects only the pipeline-parallel event path, which this fork does
-   not run. That path is excluded explicitly: `stream_ordered` also requires that no event
-   exists for the split backend (`sched->events[b][cur_copy] == NULL`), so with
-   `n_copies > 1` the code is exactly as before. (The first push of this PR missed that. Review
-   caught the new branch replacing the event path's blocking fallback.)
+   not run. That path is excluded explicitly: `stream_ordered` requires `n_copies == 1`
+   as well as no event for the split backend. A null event alone is insufficient: parallel
+   schedulers can lack events, for example with `GGML_SYCL_NO_PEER_COPY`. Review caught both
+   the initial event-path change and this eventless parallel case.
 2. **Only backends that declare stream order, currently SYCL only** (the user's choice).
    - A new proc-address hook, `ggml_backend_async_is_stream_ordered`, with its typedef in
      `ggml-backend.h`. The scheduler caches its answer per backend in `ggml_backend_sched_new`.
@@ -101,16 +101,25 @@ Decode t/s did not change beyond noise.
 - **The author's lifetime argument has gaps**, as described in choice 4. This was found while
   reviewing the patch, not from a failure.
 - **The GPU was reserved for another session's Ornith benchmark** during development. The
-  runtime checks below were done only once the user released it.
+  GPU runtime checks were pending at that stage and remain unrecorded here.
 
 ## Verification
 
-(Filled in as runs complete.)
+2026-10-05 review follow-up, after rebasing onto master `a17b8400d`:
+
+- CPU-only `test-sched-stream-ordered` uses real scheduler splits with a CPU-backed
+  destination advertising stream order but returning null events. It checks the selected
+  copy path and output values across repeated graph computations in both scheduler modes.
+- Before the fix, the serial control passed with three async uploads; parallel mode
+  incorrectly made nine async uploads and failed. With `n_copies == 1` required, serial
+  still makes three async uploads and parallel mode makes zero, retaining synchronization.
+- This checks scheduler selection, not delayed device execution or GPU host-source lifetime.
+  GPU correctness, model output comparisons, and timing runs remain pending.
 
 ## Not claimed
 
 - Vulkan and OpenVINO behaviour is unchanged by construction: they do not export the hook. That
   is verified from source only.
-- The pipeline-parallel event path (`n_copies > 1`) is unchanged by construction: the
-  `stream_ordered` condition requires no events. Multi-device SYCL keeps the old syncs, because
-  the hook returns false there. Neither configuration was run.
+- Pipeline-parallel schedulers (`n_copies > 1`) cannot take the stream-ordered branch.
+  The eventless case was exercised with the CPU-backed test above; GPU event behavior was not.
+  Multi-device SYCL keeps the old syncs because the hook returns false there; it was not run.

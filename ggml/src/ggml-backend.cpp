@@ -2377,14 +2377,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
-                // Port of Andrei-Dr local-ai 0018/0020: a copy from a host buffer that is enqueued on
-                // the split backend's own stream (set_tensor_async) runs after every earlier use of
-                // input_cpy on that stream, so it needs no host-side wait. Without events the wait
-                // below is a full synchronize: the host blocks until the device drains, then issues a
-                // blocking copy while the device idles. Only for backends that declare stream order
-                // ("ggml_backend_async_is_stream_ordered") and only without pipeline-parallel events,
-                // whose path stays as it was; GGML_SCHED_COPY_SYNC=1 restores the wait.
-                const bool stream_ordered = sched->stream_ordered[split_backend_id] &&
+                // Stream-ordered uploads need no destination wait in a single-copy scheduler.
+                // Parallel schedulers can lack events too; GGML_SCHED_COPY_SYNC=1 restores the wait.
+                const bool stream_ordered = sched->n_copies == 1 &&
+                    sched->stream_ordered[split_backend_id] &&
                     sched->events[split_backend_id][sched->cur_copy] == NULL &&
                     !ggml_backend_sched_copy_sync_forced() && input->buffer != NULL &&
                     ggml_backend_buffer_is_host(input->buffer) && split_backend->iface.set_tensor_async != NULL;

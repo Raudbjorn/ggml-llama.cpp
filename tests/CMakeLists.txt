@@ -400,6 +400,13 @@ llama_build_and_test(test-moe-cache-fit.cpp)
 # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
 llama_build(test-backend-ops.cpp)
 
+if (TARGET ggml-cpu AND NOT GGML_BACKEND_DL AND NOT LLAMA_USE_SYSTEM_GGML)
+    add_executable(test-sched-stream-ordered test-sched-stream-ordered.cpp)
+    target_link_libraries(test-sched-stream-ordered PRIVATE ggml ggml-cpu)
+    llama_test(test-sched-stream-ordered LABEL "main;backend")
+    set_tests_properties(test-sched-stream-ordered PROPERTIES TIMEOUT 30 ENVIRONMENT "GGML_SCHED_COPY_SYNC=0")
+endif()
+
 llama_build_and_test(test-tiled-mulmat.cpp)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
