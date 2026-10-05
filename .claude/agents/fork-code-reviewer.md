@@ -32,8 +32,9 @@ against `origin/master`), plus any area to focus on. If missing, stop and ask.
 - q8_0 KV consumers handle both canonical and quants-first layouts, and converters receive the
   K/V tensor, not dst.
 - SYCL VEC kernels index the Q register slice per the data contract; no double WHT rotation.
-- FA routing: turbo goes to VEC only with `D % 128 == 0`; XMX/oneDNN fall through on ALiBi,
-  softcap, sinks and multi-sequence.
+- FA routing: turbo defaults to VEC with `D % 128 == 0`; preserve the experimental XMX route
+  for `GGML_SYCL_FA_XMX=1`, same-type turbo K/V, D=128/256 and `xmx_features_ok` satisfied.
+  XMX/oneDNN fall through on ALiBi, softcap, sinks and multi-sequence.
 - Env knobs read via `ggml_sycl_get_env`, and a value of `0` means off (a plain non-null `getenv`
   check once made `GGML_SYCL_FA_XMX=0` enable XMX).
 - Backend `supports_op` changes: is a case missing compared with upstream master (read it with

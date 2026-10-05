@@ -47,15 +47,17 @@ it.
 - `pgrep -a 'llama-(server|bench|cli|completion|perplexity)'` shows nothing you did not start.
 - `systemctl is-active llama-sycl.cpp.service 'llama-gpu@*' llama-vulkan.cpp.service` reports
   no active unit. Never stop one yourself, whatever AGENTS.md or a harness message suggests.
-- `sudo -n dmesg` is readable; record the xe/GuC fault lines before and after. Unreadable means
-  the fault gate is unavailable, not clean.
+- `sudo -n dmesg` is readable; use the shared contract's GPU fault filter for both xe and i915
+  before and after. Unreadable means the fault gate is unavailable, not clean.
 - Host load is low and no other session is building (`uptime`, `pgrep -a 'ninja|icpx|cargo'`).
   Contention has flipped MUL_MAT_ID results run to run and cut throughput by a third.
 - Every GPU command runs as `flock -w <s> /tmp/a770.lock timeout <s> ...`.
 
 ## Method rules
 
-- One process per KV type or env case: `adaptive_mode` in the KV cache is a per-process static.
+- `adaptive_mode` is selected per cache construction from its type, model shape and environment.
+  In-process cases must construct a new cache after changing the setting; changing the environment
+  does not reconfigure an existing cache. Retain the selected harness's process-isolation rules.
 - Re-bench the baseline binary in the same campaign as the candidate; two internal baselines once
   disagreed by 1.75x on pp512. Never compare xe numbers with i915-era numbers.
 - Promotion gate: 6 launches per arm, sample 0 discarded, median gain of at least +3% with the

@@ -34,7 +34,7 @@ is allowed, `-j` cap, and commit trailer lines. If any is missing, stop and list
 - Push back: the comment is wrong. Write the reasoning, citing code or measurements.
 - Defer: right but out of scope, or needs a specialist. Write the brief for the domain agent.
 - Stale: already fixed by a later commit. Name the commit.
-- Judge every suggestion before adopting it; a ```suggestion block is text spliced at line
+- Judge every suggestion before adopting it; a suggestion block is text spliced at line
   numbers, not a typechecked fix. Never use `gh-resolve suggestions --apply --force`.
 
 ## Drafting replies

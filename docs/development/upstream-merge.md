@@ -185,10 +185,7 @@ The merge base, not memory, defines fork-owned work:
 ```bash
 source .git/upstream-merge.env
 
-git diff --name-status "$MERGE_BASE..$FORK_TIP" -- \
-  .github ci scripts vendor docs/development/upstream-merge.md \
-  ggml/include ggml/src src common tests tools CMakeLists.txt cmake \
-  > /tmp/llama-fork-delta.txt
+git diff --name-status "$MERGE_BASE..$FORK_TIP" > /tmp/llama-fork-delta.txt
 
 git diff --stat "$MERGE_BASE..$FORK_TIP"
 ```
@@ -201,6 +198,8 @@ Classify changed paths into four groups:
 4. Historical edits already superseded by upstream.
 
 Record the classification before merging. Completion means every fork-changed path has an explicit disposition; "probably upstream" is not a disposition.
+The inventory is deliberately unfiltered: include all docs and plans, the shared agent contract,
+and both `.claude/agents/` and `.codex/agents/`, including files added since the last sync.
 
 ## Phase 2: create the sanitized upstream tree
 
@@ -478,6 +477,7 @@ FORK_FILES=(
   scripts/check-required-targets.sh
   scripts/check-upstream-sync-invariants.sh
   docs/development/upstream-merge.md
+  docs/development/agents.md
   tools/server/server-cors-proxy.h
   tools/server/server.cpp
   tools/server/tests/unit/test_proxy.py
@@ -487,11 +487,24 @@ for path in "${FORK_FILES[@]}"; do
   test -f "$path" || { echo "missing: $path"; exit 1; }
 done
 
+# Derive the roster and plans from the pre-merge fork, not a stale filename list.
+set -o pipefail
+git ls-tree -r --name-only "$FORK_TIP" -- docs/plans .claude/agents .codex/agents |
+while IFS= read -r path; do
+  test -f "$path" || { echo "missing fork file: $path"; exit 1; }
+done || exit 1
+
+git diff --name-status "$FORK_TIP" -- \
+  docs/plans docs/development/agents.md .claude/agents .codex/agents
+
 test ! -e .github
 test ! -e ci
 test ! -e CONTRIBUTING.md
 test ! -d scripts/snapdragon
 ```
+
+Review every reported plan, contract or agent change against the fork tip; explain any deliberate
+retirement. File presence alone does not prove that the instructions or plan content survived.
 
 Then verify symbols and wiring, not only file presence:
 

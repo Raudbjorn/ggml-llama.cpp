@@ -49,7 +49,8 @@ and the scope. If any is missing, stop and list it.
 - Auto-asymmetric K downgrade exists because turbo K wrecks PPL on high-GQA models (Qwen2.5 7:1
   measured 2887 vs 7.4). Downstream code must accept `K=q8_0, V=turbo*`.
 - Layer-adaptive modes are inert for non-turbo types and must log when requested inertly.
-  `adaptive_mode` is a per-process static, so benchmarks need one process per KV/env case.
+  `adaptive_mode` is selected independently at each cache construction from type, model shape
+  and environment; changing the environment does not reconfigure an existing cache.
 - Turbo is a capacity feature, not a speed feature. Turbo2/3 on MoE diverged or NaNed in past
   runs; InnerQ with trivial scales was a dead end.
 - A codec change must land in the CPU reference first; SYCL and Vulkan follow it. Hand the kernel

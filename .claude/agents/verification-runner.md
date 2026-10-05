@@ -39,6 +39,10 @@ and list it. You only commit when the brief asks you to (for example, a new test
 - `ggml/src/ggml-sycl/fattn*`: oracle sections [4] [6] (standard KV), `LLAMA_TEST_TURBO_FA=1`
   for turbo FA, `LLAMA_TEST_FA256=1` for d=256 (has hung before; long timeout), [4c] MKL needs
   n_kv >= 1024; `test-sycl-fattn-mkl-policy`, `test-sycl-fa-large-grf`.
+- XMX FA changes: run the oracle with `GGML_SYCL_FA_XMX=1` to enter the XMX section, adding
+  `LLAMA_TEST_TURBO_FA=1` for same-type turbo K/V cases. Confirm XMX dispatch in route logs;
+  neither the default sweep nor `LLAMA_TEST_FA256=1` alone proves XMX coverage. Keep the
+  contract's GPU permission, lock, timeout and before/after fault gates for these runs.
 - SYCL set_rows, cpy, dequant, WHT, mat-vec: oracle [1] [2] [3]; `test-backend-ops -b SYCL0 -o <OP>`.
 - InnerQ: `LLAMA_TEST_INNERQ=1`, `test-turbo-innerq-runtime`.
 - `ggml-sycl.cpp` graph or fusion: `test-sycl-fusion-eligibility`, `test-sycl-sched-inplace-guard`,
@@ -54,7 +58,7 @@ and list it. You only commit when the brief asks you to (for example, a new test
 ## Rules
 
 - Every GPU run: `flock -w 900 /tmp/a770.lock timeout <s> <cmd>`; a bad kernel can hang the IGC
-  JIT forever. Check `sudo -n dmesg` for xe/GuC faults before and after.
+  JIT forever. Use the shared contract's fault filter for xe and i915 before and after.
 - `LLAMA_TEST_TURBO_FA` and similar must be exactly `1`.
 - XPASS counts as a failure; a SKIP needs its reason quoted.
 - Prove the path ran: `SYCL_UR_TRACE=2` or a debug log at `-lv 5` for routes; a grouped MoE GEMM

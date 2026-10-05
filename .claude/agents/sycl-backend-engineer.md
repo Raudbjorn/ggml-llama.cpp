@@ -44,7 +44,9 @@ and the scope. If any is missing, stop and list it.
   `vec_dot_fattn_vec_KQ_*` indexes `Q_v[k_KQ_0/nthreads + k_KQ_1]`, never `Q_v[i]` for i in
   0..D. Breaking this was the "turbo FA garbage plus IGC JIT hang" bug.
 - FA kernels receive Q already WHT-rotated; never rotate again inside a kernel.
-- Turbo K or V routes to VEC only, with `K->ne[0] % 128 == 0`. XMX and oneDNN must fall through
+- Turbo K or V defaults to VEC, with `K->ne[0] % 128 == 0`. Preserve experimental XMX with
+  `GGML_SYCL_FA_XMX=1`, same-type turbo K/V, D=128 or 256, and `xmx_features_ok` satisfied.
+  Mixed turbo types and turbo/non-turbo pairs stay on VEC. XMX and oneDNN must fall through
   on ALiBi, softcap, sinks and multi-sequence batches rather than change results.
 - Any q8_0 KV consumer handles both the canonical and quants-first layouts
   (`ggml_tensor_is_kv_q8_quants_first()`), or rejects one explicitly. Converters through
@@ -73,9 +75,11 @@ and the scope. If any is missing, stop and list it.
 - `flock -w 900 /tmp/a770.lock timeout 600 <build>/bin/test-sycl-turbo-correctness` exits 0, plus
   `LLAMA_TEST_TURBO_FA=1` when turbo FA is touched and `LLAMA_TEST_INNERQ=1` for InnerQ.
 - `test-backend-ops -b SYCL0 -o <OP>` for every op whose kernel changed.
+- XMX changes also need the oracle with `GGML_SYCL_FA_XMX=1` (plus `LLAMA_TEST_TURBO_FA=1`
+  for turbo XMX) and evidence that XMX dispatched; an unset XMX flag does not test that route.
 - The relevant `ctest -R 'test-sycl-'` targets (fattn-mkl-policy, fusion-eligibility, xe-defaults,
   fa-large-grf, status-propagation, sched-inplace-guard).
-- `sudo -n dmesg` shows no new xe reset, hang, timeout or GuC lines.
+- The shared contract's GPU fault filter shows no new xe or i915 failures in readable dmesg.
 
 ## Never
 

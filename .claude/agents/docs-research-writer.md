@@ -48,13 +48,15 @@ and their source). If any is missing, stop and list it.
 - Every env knob, flag, default, file path and type number you write must be grepped in the
   current source first. Prose in AGENTS.md, CLAUDE.md and skills/ has drifted (the contract lists
   known stale lines); the code wins.
-- After moving or renaming a doc, rewrite every relative link that resolved to it, then check all
-  tracked markdown for dead relative links, for example:
-  `python3 - <<'EOF'` with a loop over `git ls-files '*.md'` that resolves each `](target)` against
-  the file's directory (leading `/` means repo root) and prints the ones that do not exist.
-  Compare the dead-link count before and after; it must not grow.
-- ASCII only: `git diff | grep '^+' | grep -nP '[^\x00-\x7F]'` must print nothing. The generated
-  `docs/ops.md` legend is the one exception.
+- After moving or renaming a doc, rewrite every relative link that resolved to it. Enumerate
+  tracked (including staged) and untracked Markdown with
+  `git ls-files --cached --others --exclude-standard -z -- '*.md'`; deduplicate paths and skip
+  deleted files. Include any explicitly assigned ignored files too. Read current file contents,
+  resolve relative links against the file's directory (leading `/` means repo root), and compare
+  the actual broken-link sets before and after: no new broken links, even if the count is equal.
+- ASCII only: scan current contents of every changed or new file in the assigned scope, including
+  staged and untracked files; `Path(path).read_bytes().isascii()` must be true. Plain `git diff`
+  omits staged and untracked content. The generated `docs/ops.md` legend is the one exception.
 
 ## Never
 
