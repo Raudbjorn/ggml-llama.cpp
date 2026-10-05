@@ -69,10 +69,6 @@ PRUNE_PATHS=(
     requirements
     skills
     # Root guidance and agent runbooks require development docs removed from the SDK.
-    AGENTS.md
-    CLAUDE.md
-    .claude/agents
-    .codex/agents
     bench-a770
     benches
     sweep-logs
