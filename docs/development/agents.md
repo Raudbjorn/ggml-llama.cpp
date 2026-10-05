@@ -74,8 +74,9 @@ on PRs, post anything to GitHub, or rewrite history.
 2. `git -C <worktree> diff --cached --stat` must be empty or hold only your own work.
 3. `git -C <worktree> diff HEAD -- <paths>` must contain only your own hunks. If another session
    edited the same file, stop and report.
-4. `git -C <worktree> commit -- <paths>` with one logical change per commit, an ASCII message,
-   and exactly the trailer lines from the brief. `Assisted-by:` is required; an AI
+4. Stage new files with `git -C <worktree> add <new paths>` (a path unknown to git makes the next
+   step fail), then `git -C <worktree> commit -- <paths>` with one logical change per commit, an
+   ASCII message, and exactly the trailer lines from the brief. `Assisted-by:` is required; an AI
    `Co-Authored-By:` line is accepted on this fork.
 
 Never run `checkout`, `switch`, `stash`, `reset`, `rebase`, `commit --amend`, `clean`, `push`, or
