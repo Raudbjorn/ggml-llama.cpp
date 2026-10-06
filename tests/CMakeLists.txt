@@ -405,6 +405,12 @@ if (TARGET ggml-cpu AND NOT GGML_BACKEND_DL AND NOT LLAMA_USE_SYSTEM_GGML)
     target_link_libraries(test-sched-stream-ordered PRIVATE ggml ggml-cpu)
     llama_test(test-sched-stream-ordered LABEL "main;backend")
     set_tests_properties(test-sched-stream-ordered PROPERTIES TIMEOUT 30 ENVIRONMENT "GGML_SCHED_COPY_SYNC=0")
+    add_test(NAME test-sched-stream-ordered-default COMMAND ${CMAKE_COMMAND} -E env
+        --unset=GGML_SCHED_COPY_SYNC $<TARGET_FILE:test-sched-stream-ordered> --expect-sync)
+    add_test(NAME test-sched-stream-ordered-sync COMMAND ${CMAKE_COMMAND} -E env
+        GGML_SCHED_COPY_SYNC=1 $<TARGET_FILE:test-sched-stream-ordered> --expect-sync)
+    set_tests_properties(test-sched-stream-ordered-default test-sched-stream-ordered-sync
+        PROPERTIES TIMEOUT 30 LABELS "main;backend")
 endif()
 
 llama_build_and_test(test-tiled-mulmat.cpp)

@@ -123,7 +123,8 @@ struct deferred_device {
     }
 };
 
-static bool run_case(const char * name, bool events, bool parallel, bool host_users, bool dependent, bool failure) {
+static bool run_case(const char * name, bool events, bool parallel, bool host_users, bool dependent, bool failure,
+                     bool expect_stream_ordered = true) {
     deferred_device dev(events);
     ggml_backend_t backends[] = {dev.backend, dev.cpu};
     auto sched = ggml_backend_sched_new(backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, parallel, false);
@@ -158,6 +159,8 @@ static bool run_case(const char * name, bool events, bool parallel, bool host_us
     GGML_ASSERT(ggml_backend_sched_get_n_splits(sched) == (host_output ? 3 : 2));
     dev.syncs = 0;
     bool ok = true;
+    // Disabled copies must not allocate the experimental upload-completion event either.
+    if (!expect_stream_ordered) { ok &= dev.live_events == 0; }
     bool host_split_checked = false;
     // Intercept only the independent host split: it must see the upload complete without
     // draining unrelated device compute, even though all its copied inputs are user inputs.
@@ -183,7 +186,7 @@ static bool run_case(const char * name, bool events, bool parallel, bool host_us
         dev.fail_compute = failure;
         auto status = ggml_backend_sched_graph_compute_async(sched, graph);
         ok &= status == (failure ? GGML_STATUS_FAILED : GGML_STATUS_SUCCESS);
-        if (events && !parallel) {
+        if (expect_stream_ordered && events && !parallel) {
             // Returning success or failure releases host source ownership, but not device work.
             ok &= dev.uploads == 1 && dev.upload_completions == 1 && dev.event_waits == 1;
             ok &= dev.computes == (dependent ? 1 : 0) && dev.syncs == (dependent ? 1 : 0);
@@ -253,7 +256,12 @@ static bool mapped_weights() {
     return ok;
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--expect-sync") == 0) {
+        // Run with an event-capable device so fallback cannot hide accidental opt-in.
+        return run_case("synchronous selection", true, false, false, false, false, false) ? 0 : 1;
+    }
+    if (argc != 1) { return 2; }
     bool ok = true;
     ok &= run_case("async return", true, false, false, false, false);
     ok &= run_case("host user-input split", true, false, true, false, false);

@@ -1750,5 +1750,215 @@
     "combination": "both patterns must match independently, in either order",
     "matching_lines": [],
     "limitation": "Historical kernel_check pattern is preserved; it missed Timedout and reverse-order time out. This retrospective journal scan supplies the broader timeout check."
+  },
+  "opt_in_followup": {
+    "source_parent": "88b2eb958",
+    "source_hashes": {
+      "ggml/src/ggml-backend.cpp": "2f383b38c3529e49c8d0ec001710a7725d7c2280a4a3a047e0e2176501346001",
+      "tests/test-sched-stream-ordered.cpp": "f24e98fd9c15212c0581f5dc4c4481ee6db34293b6de999b6276bac20acafc10",
+      "tests/CMakeLists.txt": "7e82b532fd0972322123f672096595ffea0621ee1dda3d85465bf4fed3e47b62"
+    },
+    "cpu_ctest": "Test project /home/svnbjrn/build-pr84-validation\n    Start 59: test-sched-stream-ordered\n1/3 Test #59: test-sched-stream-ordered ...........   Passed    0.13 sec\n    Start 60: test-sched-stream-ordered-default\n2/3 Test #60: test-sched-stream-ordered-default ...   Passed    0.07 sec\n    Start 61: test-sched-stream-ordered-sync\n3/3 Test #61: test-sched-stream-ordered-sync ......   Passed    0.07 sec\n\n100% tests passed out of 3\n\nLabel Time Summary:\nbackend    =   0.14 sec*proc (2 tests)\nmain       =   0.27 sec*proc (3 tests)\n\nTotal Test time (real) =   0.28 sec\n",
+    "cpu_selection": [
+      {
+        "value": "",
+        "expected_rc": 0,
+        "returncode": 0,
+        "stdout": "synchronous selection: uploads=0, completed=0, computes=1, waits=0, syncs=3: PASS\n",
+        "stderr": ""
+      },
+      {
+        "value": "invalid",
+        "expected_rc": 0,
+        "returncode": 0,
+        "stdout": "synchronous selection: uploads=0, completed=0, computes=1, waits=0, syncs=3: PASS\n",
+        "stderr": ""
+      },
+      {
+        "value": "00",
+        "expected_rc": 0,
+        "returncode": 0,
+        "stdout": "synchronous selection: uploads=0, completed=0, computes=1, waits=0, syncs=3: PASS\n",
+        "stderr": ""
+      },
+      {
+        "value": " 0",
+        "expected_rc": 0,
+        "returncode": 0,
+        "stdout": "synchronous selection: uploads=0, completed=0, computes=1, waits=0, syncs=3: PASS\n",
+        "stderr": ""
+      },
+      {
+        "value": "-1",
+        "expected_rc": 0,
+        "returncode": 0,
+        "stdout": "synchronous selection: uploads=0, completed=0, computes=1, waits=0, syncs=3: PASS\n",
+        "stderr": ""
+      },
+      {
+        "value": "0",
+        "expected_rc": 1,
+        "returncode": 1,
+        "stdout": "synchronous selection: uploads=1, completed=1, computes=1, waits=1, syncs=1: FAIL\n",
+        "stderr": "ggml_backend_sched_free: stream-ordered input copies: 1, host-read flushes: 0 at a host split, 1 at graph end\n"
+      }
+    ],
+    "gpu_runs": [
+      {
+        "name": "gpu-gate",
+        "argv": [
+          "/home/svnbjrn/build-pr84-validation/bin/test-sycl-turbo-correctness"
+        ],
+        "mode": null,
+        "env": {
+          "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+          "SYCL_CACHE_PERSISTENT": "1",
+          "GGML_SYCL_ENABLE_GRAPH": "0"
+        },
+        "started_utc": "2026-10-06T01:01:55Z",
+        "gpu_owners_before": "",
+        "gpu_ownership_checks": 1,
+        "returncode": 0,
+        "elapsed_s": 0.8568815549951978,
+        "copy_counters": [],
+        "stdout_sha256": "0298007cf6aacce2123b26b6f181d50ab260d87a6ee581f9400688b8a1175a22",
+        "stdout_bytes": 8383
+      },
+      {
+        "name": "default",
+        "argv": [
+          "/home/svnbjrn/build-pr84-validation/bin/llama-completion",
+          "-m",
+          "/mnt/mrgr/models/Qwen3-Coder-30B-A3B-Instruct-UD-Q3_K_XL.gguf",
+          "-f",
+          "/home/svnbjrn/pr84-validation-2026-10-06/decode.txt",
+          "-ngl",
+          "99",
+          "--n-cpu-moe",
+          "20",
+          "-c",
+          "4096",
+          "-n",
+          "256",
+          "-b",
+          "512",
+          "-ub",
+          "512",
+          "-t",
+          "12",
+          "-tb",
+          "12",
+          "-fa",
+          "on",
+          "-ctk",
+          "f16",
+          "-ctv",
+          "f16",
+          "--fit",
+          "off",
+          "--temp",
+          "0",
+          "--seed",
+          "1",
+          "--ignore-eos",
+          "-no-cnv",
+          "--no-display-prompt",
+          "--simple-io",
+          "--color",
+          "off",
+          "--log-verbosity",
+          "5"
+        ],
+        "mode": null,
+        "env": {
+          "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+          "SYCL_CACHE_PERSISTENT": "1",
+          "GGML_SYCL_ENABLE_GRAPH": "0"
+        },
+        "started_utc": "2026-10-06T01:01:56Z",
+        "gpu_owners_before": "",
+        "gpu_ownership_checks": 8,
+        "returncode": 0,
+        "elapsed_s": 37.145341479976196,
+        "copy_counters": [],
+        "stdout_sha256": "83aa6d59773f9d6525838ca94e459714416e256eb132faed0f85d0f202a04fdd",
+        "stdout_bytes": 1279
+      },
+      {
+        "name": "optin",
+        "argv": [
+          "/home/svnbjrn/build-pr84-validation/bin/llama-completion",
+          "-m",
+          "/mnt/mrgr/models/Qwen3-Coder-30B-A3B-Instruct-UD-Q3_K_XL.gguf",
+          "-f",
+          "/home/svnbjrn/pr84-validation-2026-10-06/decode.txt",
+          "-ngl",
+          "99",
+          "--n-cpu-moe",
+          "20",
+          "-c",
+          "4096",
+          "-n",
+          "256",
+          "-b",
+          "512",
+          "-ub",
+          "512",
+          "-t",
+          "12",
+          "-tb",
+          "12",
+          "-fa",
+          "on",
+          "-ctk",
+          "f16",
+          "-ctv",
+          "f16",
+          "--fit",
+          "off",
+          "--temp",
+          "0",
+          "--seed",
+          "1",
+          "--ignore-eos",
+          "-no-cnv",
+          "--no-display-prompt",
+          "--simple-io",
+          "--color",
+          "off",
+          "--log-verbosity",
+          "5"
+        ],
+        "mode": "async",
+        "env": {
+          "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+          "SYCL_CACHE_PERSISTENT": "1",
+          "GGML_SYCL_ENABLE_GRAPH": "0",
+          "GGML_SCHED_COPY_SYNC": "0"
+        },
+        "started_utc": "2026-10-06T01:02:33Z",
+        "gpu_owners_before": "",
+        "gpu_ownership_checks": 3,
+        "returncode": 0,
+        "elapsed_s": 11.815639290987747,
+        "copy_counters": [
+          [
+            5377,
+            4864,
+            0
+          ]
+        ],
+        "stdout_sha256": "65d04142352c6cacbe3282383c6053635a9bcd3d587e1cdfb46740adb8f004a4",
+        "stdout_bytes": 1229
+      }
+    ],
+    "gpu_gate_stdout": "== TurboQuant CPU-vs-SYCL correctness ==\nreference: CPU   under test: SYCL0\n\n[1] Walsh-Hadamard rotation (TURBO_WHT)\n  [PASS] WHT g=128 dir=0              nmse=8.267e-15  max_abs=2.384e-07  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] WHT g=128 dir=1              nmse=8.385e-15  max_abs=2.384e-07  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] WHT g=64 dir=0               nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] WHT g=64 dir=1               nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] WHT g=32 dir=0               nmse=8.787e-15  max_abs=2.384e-07  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] WHT g=32 dir=1               nmse=7.907e-15  max_abs=2.384e-07  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] WHT g=128 dir=0 scaled       nmse=8.152e-15  max_abs=4.768e-07  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] WHT g=128 dir=1 scaled       nmse=9.501e-15  max_abs=7.153e-07  cosine=1.000000  |t|/|r|=1.0000\n\n[2] centroid decode (cpy turbo -> f32)\n  [PASS] cpy turbo2_0->f32            nmse=2.229e-08  max_abs=4.652e-04  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] cpy turbo3_0->f32            nmse=5.835e-08  max_abs=9.615e-04  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] cpy turbo4_0->f32            nmse=4.868e-08  max_abs=9.704e-04  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] cpy turbo2_0->f32            nmse=2.911e-08  max_abs=4.652e-04  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] cpy turbo3_0->f32            nmse=5.298e-08  max_abs=9.615e-04  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] cpy turbo4_0->f32            nmse=4.521e-08  max_abs=9.704e-04  cosine=1.000000  |t|/|r|=1.0000\n\n[2a] non-contiguous q8_0 quants-first copy\n  [PASS] cpy q8_0 quants-first view   nmse=5.037e-08  max_abs=8.240e-04  cosine=1.000000  |t|/|r|=1.0000\n\n[2c] Q8_0 layout-aware non-contiguous CPY - GATE\n  [PASS] cpy q8 canonical->quants-first nmse=4.340e-08  max_abs=7.935e-04  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] cpy q8 quants-first->canonical nmse=4.340e-08  max_abs=7.935e-04  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] cpy q8 quants-first->quants-first nmse=4.340e-08  max_abs=7.935e-04  cosine=1.000000  |t|/|r|=1.0000\n\n[2b] SET_ROWS quantize-store (F32 -> turbo write, on-device)\n  [PASS] set_rows turbo2_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] set_rows turbo3_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] set_rows turbo4_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] set_rows turbo2_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] set_rows turbo3_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] set_rows turbo4_0 (quantize) nmse=0.000e+00  max_abs=0.000e+00  cosine=1.000000  |t|/|r|=1.0000\n\n[3] mat-vec dot product (mul_mat, turbo weights)\n  [PASS] mul_mat turbo2_0             nmse=7.546e-08  max_abs=8.599e-03  cosine=1.000000  |t|/|r|=0.9999\n  [PASS] mul_mat turbo3_0             nmse=8.174e-08  max_abs=7.110e-03  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] mul_mat turbo4_0             nmse=8.853e-08  max_abs=8.538e-03  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] mul_mat turbo2_0             nmse=8.780e-08  max_abs=1.283e-02  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] mul_mat turbo3_0             nmse=6.868e-08  max_abs=1.561e-02  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] mul_mat turbo4_0             nmse=9.226e-08  max_abs=1.038e-02  cosine=1.000000  |t|/|r|=1.0000\n\n[3b] non-FA attention (mul_mat/softmax/mul_mat, turbo KV, d=128) - GATE: mirrors build_attn_mha's fixed !v_trans branch (dequant V to F32 before transpose; see doc comment above probe_attn_noflash)\n  [WARN] attn_noflash turbo2_0 d=128  nmse=2.731e-01  max_abs=1.098e-01  cosine=0.858273  |t|/|r|=0.9571\n  [PASS] attn_noflash turbo3_0 d=128  nmse=4.407e-02  max_abs=8.075e-02  cosine=0.978500  |t|/|r|=1.0177\n  [PASS] attn_noflash turbo4_0 d=128  nmse=1.580e-02  max_abs=2.742e-02  cosine=0.992156  |t|/|r|=1.0053\n\n[3c] non-FA attention GQA sweep (d=128) - GATE, llama/mistral 4:1 + qwen3 8:1\n  [WARN] attn_noflash turbo2_0 d=128 GQA 4:1 nmse=2.099e-01  max_abs=1.620e-01  cosine=0.893198  |t|/|r|=0.9810\n  [PASS] attn_noflash turbo3_0 d=128 GQA 4:1 nmse=5.660e-02  max_abs=8.075e-02  cosine=0.971532  |t|/|r|=0.9932\n  [PASS] attn_noflash turbo4_0 d=128 GQA 4:1 nmse=1.562e-02  max_abs=4.731e-02  cosine=0.992187  |t|/|r|=0.9999\n  [WARN] attn_noflash turbo2_0 d=128 GQA 8:1 nmse=2.345e-01  max_abs=1.620e-01  cosine=0.880991  |t|/|r|=0.9842\n  [PASS] attn_noflash turbo3_0 d=128 GQA 8:1 nmse=5.415e-02  max_abs=8.075e-02  cosine=0.972883  |t|/|r|=0.9985\n  [PASS] attn_noflash turbo4_0 d=128 GQA 8:1 nmse=1.591e-02  max_abs=5.222e-02  cosine=0.992170  |t|/|r|=1.0098\n\n[4] flash attention TILE (n_q=8, prefill) - GATE, standard KV across head dims\n  [PASS] flash_attn f16 d=64 [tile nq=8] nmse=2.140e-06  max_abs=9.037e-04  cosine=0.999999  |t|/|r|=1.0000\n  [PASS] flash_attn f16 d=128 [tile nq=8] nmse=2.806e-06  max_abs=1.286e-03  cosine=0.999999  |t|/|r|=0.9999\n  [PASS] flash_attn q8_0 d=64 [tile nq=8] nmse=7.016e-05  max_abs=2.624e-03  cosine=0.999965  |t|/|r|=1.0000\n  [PASS] flash_attn q8_0 quants-first d=128 [tile nq=8] nmse=5.883e-05  max_abs=2.797e-03  cosine=0.999971  |t|/|r|=1.0006\n\n[4b] flash attention TILE GQA sweep (d=128, n_q=8) - GATE, f16 + q8_0 across llama/mistral 4:1 + qwen3 8:1\n  [PASS] flash_attn f16 d=128 [tile nq=8 GQA 4:1] nmse=2.435e-06  max_abs=1.286e-03  cosine=0.999999  |t|/|r|=0.9999\n  [PASS] flash_attn q8_0 quants-first d=128 [tile nq=8 GQA 4:1] nmse=6.725e-05  max_abs=3.014e-03  cosine=0.999967  |t|/|r|=1.0009\n  [PASS] flash_attn f16 d=128 [tile nq=8 GQA 8:1] nmse=6.894e-06  max_abs=1.941e-03  cosine=0.999997  |t|/|r|=1.0000\n  [PASS] flash_attn q8_0 quants-first d=128 [tile nq=8 GQA 8:1] nmse=6.698e-05  max_abs=3.497e-03  cosine=0.999967  |t|/|r|=1.0003\n\n[4c] flash attention MKL prefill (d=128, n_q=64, GQA 4:1, n_kv>=1024) - GATE, f16 + q8_0\n  [PASS] flash_attn f16 d=128 [mkl nq=64 GQA 4:1 nkv=1024] nmse=7.488e-08  max_abs=7.862e-05  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] flash_attn q8_0 d=128 [mkl nq=64 GQA 4:1 nkv=1024] nmse=5.810e-05  max_abs=1.977e-03  cosine=0.999971  |t|/|r|=1.0005\n  [PASS] flash_attn q8_0 quants-first d=128 [mkl nq=64 GQA 4:1 nkv=1024] nmse=5.810e-05  max_abs=1.977e-03  cosine=0.999971  |t|/|r|=1.0005\n  [PASS] flash_attn f16 d=128 [mkl nq=64 GQA 4:1 nkv=2048] nmse=7.867e-08  max_abs=4.789e-05  cosine=1.000000  |t|/|r|=1.0000\n  [PASS] flash_attn q8_0 d=128 [mkl nq=64 GQA 4:1 nkv=2048] nmse=6.280e-05  max_abs=1.217e-03  cosine=0.999969  |t|/|r|=1.0002\n  [PASS] flash_attn q8_0 quants-first d=128 [mkl nq=64 GQA 4:1 nkv=2048] nmse=6.280e-05  max_abs=1.217e-03  cosine=0.999969  |t|/|r|=1.0002\n\n[5] flash attention turbo KV - SKIPPED (set LLAMA_TEST_TURBO_FA=1 to run; gated so a regressed kernel cannot wedge the A770)\n\n[6] flash attention VEC (n_q=1, decode) - GATE, standard KV across head dims [crash-prone: LAST]\n  [PASS] flash_attn f16 d=64 [vec nq=1] nmse=4.833e-06  max_abs=1.216e-03  cosine=0.999998  |t|/|r|=1.0004\n  [PASS] flash_attn f16 d=128 [vec nq=1] nmse=6.558e-06  max_abs=8.735e-04  cosine=0.999997  |t|/|r|=0.9994\n  [PASS] flash_attn q8_0 d=64 [vec nq=1] nmse=1.135e-04  max_abs=2.539e-03  cosine=0.999943  |t|/|r|=0.9993\n  [PASS] flash_attn q8_0 quants-first d=128 [vec nq=1] nmse=8.562e-05  max_abs=2.868e-03  cosine=0.999958  |t|/|r|=1.0014\n\n[6b] flash attention VEC GQA sweep (d=128, n_q=1) - GATE, f16 + q8_0 across llama/mistral 4:1 + qwen3 8:1\n  [PASS] flash_attn f16 d=128 [vec nq=1 GQA 4:1] nmse=2.967e-06  max_abs=1.286e-03  cosine=0.999999  |t|/|r|=0.9998\n  [PASS] flash_attn q8_0 quants-first d=128 [vec nq=1 GQA 4:1] nmse=8.521e-05  max_abs=2.907e-03  cosine=0.999958  |t|/|r|=1.0014\n  [PASS] flash_attn f16 d=128 [vec nq=1 GQA 8:1] nmse=2.806e-06  max_abs=1.286e-03  cosine=0.999999  |t|/|r|=0.9999\n  [PASS] flash_attn q8_0 quants-first d=128 [vec nq=1 GQA 8:1] nmse=8.619e-05  max_abs=3.351e-03  cosine=0.999957  |t|/|r|=1.0005\n\n[7] flash attention d=256 - SKIPPED (set LLAMA_TEST_FA256=1 to opt in; gated, A770 SYCL FA reproducibly hangs at d=256)\n\n[8] InnerQ FA - SKIPPED (set LLAMA_TEST_INNERQ=1 to opt in; default OFF per P3.2 section 5 default-state)\n\n== summary: 0 GATE-FAIL, 0 XPASS (promote to GATE!), 0 xfail (expected-broken), 0 SKIP ==\n",
+    "kernel_journal_scan": {
+      "since": "2026-10-06T01:00:00Z",
+      "predicate": "same independent patterns as kernel_check_followup",
+      "matching_lines": [],
+      "raw_sha256": "84a0c47be7e843d223413ddd4fa4657ecf18aeb5f1572ddf92155a32c99b552a"
+    },
+    "limits": "These model runs verify copy selection, not output equivalence. Historical comparison failure above remains unresolved."
   }
 }

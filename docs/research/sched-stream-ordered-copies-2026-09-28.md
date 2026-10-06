@@ -4,6 +4,11 @@ Development log for porting Andrei-Dr local-ai patches 0018 and 0020 (skip the h
 before a stream-ordered split input copy). It records the choices, the obstacles and the
 evidence.
 
+Current policy: synchronous copies are the default. Only exact
+`GGML_SCHED_COPY_SYNC=0` enables the experiment; the earlier default-on campaign
+below records historical behavior. The failed output comparison remains a gate
+for any future default-on promotion.
+
 Evidence labels: **measured** means tool output on this host; **source** means read from code;
 **author** means Andrei-Dr's numbers on their hardware.
 
@@ -141,8 +146,8 @@ or runtime performance.
 
 ## 2026-10-06 author-requested CPU/GPU campaign
 
-**The tests were executed, but the byte-identical output criterion failed. Do not
-mark the PR ready to merge from this campaign.** The forced-sync baseline also
+**The tests were executed, but the byte-identical output criterion failed. This
+campaign does not justify enabling the path by default.** The forced-sync baseline also
 changes output between repetitions; this does not isolate a regression to the
 new copy path and does not prove that path equivalent.
 
@@ -225,7 +230,8 @@ llama-completion -m MODEL -f PROMPT -ngl 99 --n-cpu-moe 20 -c 4096 -n 256 \
   --temp 0 --seed 1 --ignore-eos -no-cnv --no-display-prompt \
   --simple-io --color off --log-verbosity 5
 # Long prompt: replace -b 512 -ub 512 with -b 16 -ub 16.
-# Baseline: set GGML_SCHED_COPY_SYNC=1; enabled arm leaves it unset.
+# At tested revision 9b231926c: baseline=1, enabled arm unset.
+# With the opt-in follow-up: baseline unset or 1, enabled arm exactly 0.
 ```
 
 ### Alternating decode timing
@@ -252,6 +258,37 @@ Every enabled benchmark recorded 2,709 stream-ordered copies and 2,451 host-spli
 upload-event waits; forced-sync runs recorded none. These timings measure the
 whole selected configuration, not upload-event overhead in isolation.
 
+## 2026-10-06 opt-in follow-up
+
+The review allowed an opt-in fallback while real-model equivalence is unproven.
+`GGML_SCHED_COPY_SYNC` now defaults to synchronization: only the exact string `0`
+selects the experimental path. Unset, empty, and every other string retain the
+existing copy behavior. Extra mutable-upload events are not allocated while the
+experiment is disabled; normal pipeline events are unchanged.
+
+The CPU regression now runs with explicit `0`, unset, and explicit `1`. Its
+synchronous-selection case uses an event-capable destination and asserts zero
+async uploads and zero allocated upload events, so lack of backend support cannot
+hide an accidental default-on path. Additional subprocess checks cover empty,
+invalid, `00`, whitespace, and negative values; forcing `0` while expecting sync
+is a negative control. The seven opt-in lifetime scenarios are retained.
+
+Validation: incremental SYCL build passed; all three CTest registrations passed
+(seven opt-in lifetime cases, unset default, explicit `1`). The extra environment
+checks passed, and explicit `0` correctly failed the sync expectation. On the
+A770, the default GPU gate again returned 0 with zero GATE-FAIL/XPASS. One real
+model run with the variable unset recorded no stream-ordered copies; one with
+explicit `0` recorded 5,377 copies and 4,864 host-split event waits. Both exited 0.
+These are selection checks, not an output-equivalence claim. The broader kernel
+journal predicate found no new GPU faults; the service stayed inactive. The
+JSON's `opt_in_followup` records the tested source hashes, commands, and results.
+
+The complete runtime contract is documented in
+[SYCL.md](../backend/SYCL.md#scheduler-input-copy-synchronization), with usage and
+validation reminders in `AGENTS.md`, `CLAUDE.md`, and the scheduler's code comment.
+This policy change does not fix or waive the earlier nondeterminism, and does not
+claim a speedup.
+
 ## Not claimed
 
 - Vulkan and OpenVINO behaviour is unchanged by construction: they do not export the hook. That
@@ -260,10 +297,10 @@ whole selected configuration, not upload-event overhead in isolation.
   The eventless case was exercised with the CPU-backed test above; GPU event-allocation failure was not.
   Multi-device SYCL keeps the old syncs because the hook returns false there; it was not run.
 - Byte-identical model output and merge readiness are not established. The baseline
-  nondeterminism remains unexplained; no production fix is claimed by this evidence update.
+  nondeterminism remains unexplained; no fix for that nondeterminism is claimed.
 - SYCL graph replay, AOT, multi-GPU, PVC hardware, explicit `--moe-cache on`, and
   injected GPU event failures were not tested. Automatic MoE caching was active
   in the timing runs; no separate cache-correctness claim follows from them.
 - No CPU-only 30B inference, isolated event-overhead profile, or installed-binary
   update was performed. No production dependency or state is added by this
-  documentation-only follow-up.
+  opt-in follow-up.

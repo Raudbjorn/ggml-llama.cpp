@@ -2183,11 +2183,13 @@ static void ggml_backend_sched_prefetch_stage(
     ggml_backend_event_record(sched->prefetch_ready[slot], sched->prefetch_backend);
 }
 
-// GGML_SCHED_COPY_SYNC=1 restores the host sync before every host-to-device split input copy.
+// Keep synchronous copies until real-model output equivalence is established.
+// Only literal GGML_SCHED_COPY_SYNC=0 opts in; unset/empty/other values keep sync.
+// Cached process-wide on first use; see docs/backend/SYCL.md#scheduler-input-copy-synchronization.
 static bool ggml_backend_sched_copy_sync_forced(void) {
     static const bool forced = [] {
         const char * env = getenv("GGML_SCHED_COPY_SYNC");
-        return env != nullptr && atoi(env) != 0;
+        return env == nullptr || strcmp(env, "0") != 0;
     }();
     return forced;
 }
@@ -2725,7 +2727,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
         sched->stream_ordered[b] = is_stream_ordered != NULL && is_stream_ordered(dev) &&
             sched->bufts[b] == ggml_backend_get_default_buffer_type(backends[b]);
 
-        if (sched->n_copies == 1 && sched->stream_ordered[b] &&
+        if (!ggml_backend_sched_copy_sync_forced() && sched->n_copies == 1 && sched->stream_ordered[b] &&
             backends[b]->iface.event_record && dev->iface.event_synchronize && dev->iface.event_free) {
             sched->host_read_events[b] = ggml_backend_event_new(dev);
         }
