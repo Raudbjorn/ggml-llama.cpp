@@ -251,13 +251,16 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         FIXTURES_SETUP generate-models
     )
 
+    # Test recurrent-state rollback across all architectures, using the generated dummy models
     llama_test(
         test-recurrent-state-rollback
         LABEL main
-        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"
+        ARGS --models "${MODEL_DIR}"
     )
+    # abort on graph reallocations that the initial reserve should have covered
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
+        ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1"
     )
 
     llama_test(
@@ -407,6 +410,7 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
+# TODO: run on all dummy models
 llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
 

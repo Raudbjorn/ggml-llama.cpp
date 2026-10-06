@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sycl/sycl.hpp>
+#include <sycl/ext/intel/experimental/grf_size_properties.hpp>
 #include "dpct/helper.hpp"
 #include "common.hpp"
 
@@ -1084,6 +1085,20 @@ static void lauch_kernel(
     const int32_t nb32,
     const int64_t nb33) {
     GGML_UNUSED(local_mem_size);
+
+    const auto rng = sycl::nd_range<3>(
+        static_cast<sycl::range<3>>(group_range * local_range),
+        static_cast<sycl::range<3>>(local_range));
+
+    const auto kernel = [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
+        GGML_UNUSED(item_ct1);
+        fattn_kernel(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
+                     max_bias, m0, m1, n_head_log2, logit_softcap, ne00,
+                     ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11,
+                     ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23,
+                     ne31, ne32, ne33, nb31, nb32, nb33);
+    };
+
     q->submit([&](sycl::handler &cgh) {
         auto kernel = [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
             GGML_UNUSED(item_ct1);
