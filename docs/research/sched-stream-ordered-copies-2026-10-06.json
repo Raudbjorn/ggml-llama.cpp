@@ -1737,5 +1737,18 @@
     "case_insensitive": true,
     "matching_lines_before": 0,
     "matching_lines_after": 0
+  },
+  "kernel_check_followup": {
+    "source": "retained kernel journal, queried after review",
+    "command": "sudo -n journalctl -k --since '2026-10-06 00:38:50 UTC' --until '2026-10-06 00:49:30 UTC' --no-pager -o short-iso-precise",
+    "campaign_first_process_start_utc": "2026-10-06T00:38:57Z",
+    "campaign_last_process_end_utc": "2026-10-06T00:49:26.178446Z",
+    "unfiltered_lines": 27,
+    "unfiltered_sha256": "949a8f537c2183c76cac725967134b1306a855b6997e6911c0df3259a839e349",
+    "driver_pattern": "\\b(?:i915|xe)\\b",
+    "failure_pattern": "reset|hang|hung|timed?[ _-]?out|GuC|wedged|banned|CAT error|\\b(?:page.?)?fault|device.?lost",
+    "combination": "both patterns must match independently, in either order",
+    "matching_lines": [],
+    "limitation": "Historical kernel_check pattern is preserved; it missed Timedout and reverse-order time out. This retrospective journal scan supplies the broader timeout check."
   }
 }

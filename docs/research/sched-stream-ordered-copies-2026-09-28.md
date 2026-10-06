@@ -175,6 +175,15 @@ Raw local logs: `/home/svnbjrn/pr84-validation-2026-10-06`.
   exclusive device lock; the desktop and CPU were not exclusively reserved.
   Each model process had a 1,800-second timeout, the GPU gate 600 seconds.
 
+The original kernel filter missed `Timedout job` and reverse-order
+`Fence expiration time out i915-...`. After review, the retained kernel journal
+was re-read for 00:38:50-00:49:30 UTC, enclosing all 29 processes. Its 27
+unfiltered lines produced zero matches using the independent driver and failure
+patterns from `scripts/perf/bench_spec.py`. Both reported timeout spellings match
+that predicate. The JSON preserves the original executed filter and adds this
+rescan's command, patterns, count, and raw-log hash; unrelated firewall entries
+are not copied into the repository.
+
 ### Correctness results
 
 | Check | Observed result |
