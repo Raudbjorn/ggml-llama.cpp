@@ -1,19 +1,19 @@
-# Pending reboot: keep the desktop off the Arc A770
+# Keep the desktop off the Arc A770 (two reboots observed, 2026-10-06)
 
-Status, 2026-10-05: three host configuration files are installed but **not active yet** for the
-running desktop. KWin and SDDM's Xorg were both started on 2026-10-03, before the files existed.
-They keep their old state, and still hold the card, until they exit. The reboot is simply the
-point where both restart together.
+Status, 2026-10-06 ~02:25: all three changes are installed and active, and the post-reboot check
+passed on the second boot (02:17). Details in "Observed after reboot".
 
-Some parts can take effect earlier:
+- First boot (01:30): Xorg, KWin, logind and Xwayland no longer held the A770, but
+  **`sddm-greeter` still held `renderD128`**, which the original plan missed. Change 3
+  (`71-arc-render-restricted.rules`) was added for it.
+- Second boot (02:17): the Arc's client list was empty, `fuser` found no holders, and a runtime
+  `ccs_mode` write succeeded where it used to return `EBUSY`. `llama-gpu@Ornith-1.5-35B-A3B-uncensored-Q8_0`
+  then started under the new `0660` mode and became the only client.
+- `ccs_mode` was left at **2** at the user's request (production default is 1). The service is
+  stopped. Nothing has been measured in mode 2.
 
-- The user manager has already loaded the KWin drop-in, so a KWin restart picks up the new
-  environment at once.
-- Any new Xorg start reads the Xorg file.
-- udev applies the rule on the next event for the Radeon. The `desktop-*` links already exist
-  (created 2026-10-05 21:01).
-
-After that reboot, run the check in "Post-reboot check", then update or delete this file.
+This file can be deleted once the questions in #92 that depend on it are closed; the host
+configuration it describes does not depend on the file.
 
 ## Why this file exists
 
@@ -38,7 +38,7 @@ are disconnected. The only connected output is on the Radeon 610M (`0000:0f:00.0
 
 | Holder | Node | Why it was open | Work it put on the A770 |
 | --- | --- | --- | --- |
-| `Xorg` (SDDM's X11 greeter, root, stays running on vt2 behind the Wayland session) | `card0` | Xorg's default `AutoAddGPU` made the Arc a "GPU screen": `modeset(G0): using drv /dev/dri/card0` in `/var/log/Xorg.0.log` | 380 KiB VRAM, glamor; `drm-cycles-rcs` 1482, `ccs` 567 |
+| `Xorg` (SDDM's X11 server, root, stays running on vt2 behind the Wayland session; a different process from `sddm-greeter`, see Change 3) | `card0` | Xorg's default `AutoAddGPU` made the Arc a "GPU screen": `modeset(G0): using drv /dev/dri/card0` in `/var/log/Xorg.0.log` | 380 KiB VRAM, glamor; `drm-cycles-rcs` 1482, `ccs` 567 |
 | `systemd-logind` (PID 1 keeps a duplicate in logind's fd store) | `card0`, DRM master | It opened the card for KWin through `TakeDevice()` | none |
 | `kwin_wayland` | `card0` twice (logind's file, plus its own open) and 5 render-node clients on `renderD128` | KWin's display backend adds every card on the seat. Its render-device manager opens every render node. Its Vulkan instance loads the Intel driver (`libvulkan_intel.so`, mapped in the process), which opens `renderD128` while listing devices | 616 KiB VRAM; `rcs` 4207, `ccs` 382 |
 | `Xwayland` | duplicate of KWin's file | Inherited | none |
@@ -147,9 +147,84 @@ EndSection
 - The file applies to every X server on the host: the greeter, any X11 session, and xpra. None of
   them has a use for the Arc as a display device.
 
+## Change 3: keep the SDDM greeter off the Arc
+
+Found after the reboot (see "Observed after reboot"). `sddm-greeter` is the Qt Quick login screen,
+a client of the Xorg from Change 2, running as user `sddm` (`QT_QPA_PLATFORM=xcb`, theme
+Sugar-Candy). It stays alive after login. It keeps fd 40 on `renderD128` with three `rw-s`
+mappings (about 1 MiB, xe buffer objects) next to its three `card1` fds, so it renders on both
+GPUs. Its environment already has `DRI_PRIME=pci-0000_0f_00_0`, which does not stop it. Why Mesa
+opens the Arc node is not traced (suspect: render-node enumeration at context creation).
+
+The render node was `0666` from `/usr/lib/udev/rules.d/50-udev-default.rules:61`. The greeter's
+user `sddm` is in no groups, so restricting the node to group `render` blocks it without touching
+anything on the desktop. `/etc/udev/rules.d/71-arc-render-restricted.rules`:
+
+```
+SUBSYSTEM=="drm", KERNELS=="0000:03:00.0", KERNEL=="renderD*", GROUP="render", MODE="0660"
+```
+
+- Applied 2026-10-06 01:58 with `udevadm trigger --action=change --subsystem-match=drm
+  --sysname-match=renderD128`. `renderD128` is now `crw-rw---- root render`; `renderD129` (Radeon)
+  stays `0666`.
+- Checked: `udevadm verify` passes. As user `sddm`, `test -r /dev/dri/renderD128` fails; as
+  `svnbjrn` it succeeds.
+- Who keeps access: `render` members `svnbjrn`, `plex`, `xpum`; `llama-gpu@.service` runs as
+  `User=svnbjrn` with `SupplementaryGroups=render video` and sets no `PrivateDevices=` or
+  `DeviceAllow=`; root-run units bypass the mode. Not tested: starting `llama-gpu@...` under the
+  new mode.
+- Not covered: Docker containers given `--device /dev/dri/renderD128` whose process is non-root
+  need a matching `render` GID. Any other user outside `render` loses the Arc, by design.
+- Not changed by this rule: session apps run by `svnbjrn` are in `render` and can still open the
+  Arc (see "What it does not do").
+- Alternative if the rule causes trouble: `GreeterEnvironment=QT_QUICK_BACKEND=software` in
+  `/etc/sddm.conf.d/` stops the greeter doing GL at all, with a possible cosmetic cost in
+  Sugar-Candy. Not applied.
+
+## Observed after reboot (2026-10-06 01:30 boot, checked ~01:50)
+
+- Xorg (PID 2890): `AutoAddGPU off` applied; `grep -c 'modeset(G0)' /var/log/Xorg.0.log` is 0;
+  only `modeset(0): using drv /dev/dri/card1`. Its four DRM fds are all on `card1`. The log still
+  shows `Adding drm device (/dev/dri/card0)` and the `Platform probe` line, the one-off probe the
+  doc predicted.
+- Arc client list (`/sys/kernel/debug/dri/0000:03:00.0/clients`) held a single entry:
+  `sddm-greeter`, tgid 3181, dev 128, uid 890. No `kwin_wayland`, logind, Xorg or Xwayland.
+  `sudo fuser -v` on the Arc `card` and `render` by-path nodes listed only that greeter.
+- `card0` had no holders.
+- Not checked: whether the two `KWIN_*` variables are in KWin's live environment, and the `ccs_mode`
+  write itself (still blocked by the greeter fd at that time).
+- Correction to the plan above: the doc described "Xorg (SDDM's X11 greeter)" as one holder. The
+  Xorg server and `sddm-greeter` are two processes; Change 2 fixed the first, Change 3 targets the
+  second.
+
+### Second boot (2026-10-06 02:17, checked 02:18 to 02:23)
+
+Checked as root through `ssh vinbonesjr`.
+
+- Arc client list: header line only. `fuser -v` on the Arc `card` and `render` by-path nodes: no
+  holders. `sddm-greeter` was not running at all this boot, so this result alone does not show
+  whether rule 71 or the greeter's absence kept it off. The rule's effect is shown separately:
+  `renderD128` is `crw-rw---- root render` from boot, and `sudo -u sddm test -r` reports blocked.
+- `modeset(G0)` count in the Xorg log: 0. `desktop-card` and `desktop-render` both resolve to
+  `0000:0f:00.0`. KWin's live environment has `KWIN_DRM_DEVICES`, `KWIN_RENDER_NODES` and
+  `KWIN_DISABLE_VULKAN=1`. No xe reset, hang or timeout in `dmesg` before the `ccs_mode` writes.
+- `ccs_mode`, runtime write with no client on the card: `echo 2` returned 0 and read back 2. The
+  kernel logged `Setting compute mode to 2`, `reset queued from ccs_mode_store`, `reset started`,
+  `reset done`. `echo 1` did the same. Both took about 12 ms from queue to done. This confirms
+  that a write succeeds from a desktop session once nothing holds the card.
+- `llama-gpu@Ornith-1.5-35B-A3B-uncensored-Q8_0` started at 02:20 as `User=svnbjrn` with
+  `SupplementaryGroups=render video`, in mode 1. `/health` returned 200 after about 40 s, the log
+  reported `model loaded`, and the client list showed `llama-server` (uid 1000, dev 128) as the
+  only client. So the `0660` mode does not stop the service. No xe fault logged.
+- Not done: a completion request (the server wants an API key the session did not have), so
+  inference and tok/s are unverified; IGT `xe_compute@ccs-mode-*`; any run in mode 2; whether the
+  greeter, when it does run, is kept off by rule 71 (the greeter was absent).
+
 ## What should work after the reboot
 
-These are expected results, not observed ones; nothing here has been seen yet.
+These are expected results, not observed ones, except where "Observed after reboot" says
+otherwise. Observed so far: items 1, 2 and 4 (nothing holds the card; a `ccs_mode` write
+succeeds; the card has no holders with nothing running). Not tested: 3, 5 and 6.
 
 Card and render-node numbers can change between boots, so every A770 path below uses its PCI
 address, `0000:03:00.0`:
@@ -242,6 +317,11 @@ Reading a failed check:
   which means `KWIN_DRM_DEVICES` was not in effect.
 - A process from the session other than KWin or Xorg: that is an app opening the render node (see
   "What it does not do"), not a failure of these changes.
+- `sddm-greeter` in the client list after the second reboot: rule 71 did not apply. Check
+  `ls -l /dev/dri/renderD128` (expect `crw-rw---- root render`), that its group is `render`, and
+  `udevadm test /sys/class/drm/renderD128 | grep 71-arc`.
+- Add to the check above: `ls -l /dev/dri/by-path/pci-$ARC-render` shows `0660`, and
+  `sudo -u sddm test -r /dev/dri/renderD128 || echo blocked` prints `blocked`.
 
 ## Rollback
 
@@ -256,7 +336,10 @@ From a text console (Ctrl+Alt+F3):
     alive across the SDDM restart. That manager still has the deleted drop-in cached, and would
     start KWin with it again.
   - The likely cause is a missing or wrong `desktop-card` link, which leaves KWin with no GPU.
-- The udev rule only adds links and is safe to leave in place.
+- The `70-desktop-gpu.rules` udev rule only adds links and is safe to leave in place.
+- Rule 71: delete `/etc/udev/rules.d/71-arc-render-restricted.rules`, then
+  `sudo udevadm trigger --action=change --subsystem-match=drm --sysname-match=renderD128`. The
+  node returns to `0666`. Do this if a non-root service outside `render` loses the Arc.
 
 ## Stale host configuration noticed, not changed
 
@@ -293,4 +376,10 @@ From a text console (Ctrl+Alt+F3):
 - PCI-stable paths: `/sys/bus/pci/devices/0000:03:00.0/tile0/gt0/ccs_mode` reads 1, and
   `/sys/kernel/debug/dri/0000:03:00.0/clients` exists. `fuser` on the `by-path` links reports the
   same holders as on `card0` / `renderD128`.
-- After state: not observed. That is the point of this file.
+- After state, first reboot (2026-10-06): observed, see "Observed after reboot". Sources:
+  `sudo fuser -v`, `/proc/{2890,3181}/fd` and `maps`, `/sys/kernel/debug/dri/0000:03:00.0/clients`,
+  `/var/log/Xorg.0.log`, `ssh vinbonesjr` for root reads.
+- Rule 71: `udevadm verify` and `udevadm test` output seen; the access test used `sudo -u sddm` and
+  `sudo -u svnbjrn` from a root shell, not the service sandbox.
+- After state, second reboot (02:17): observed, see "Second boot". Sources: client list, `fuser`,
+  `ls -l /dev/dri`, `/proc/<kwin>/environ`, `dmesg`, `journalctl -u llama-gpu@...`, `/health`.
