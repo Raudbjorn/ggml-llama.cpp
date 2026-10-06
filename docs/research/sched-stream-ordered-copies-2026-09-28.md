@@ -87,7 +87,7 @@ Decode t/s did not change beyond noise.
      their output still performs its existing backend synchronization. The first revision
      drained the whole backend in the guard, causing a redundant full wait on that path
      and draining final device work before async graph return. That claim of merely moving
-     an existing wait was incorrect. Event waits add work; their runtime cost is unmeasured.
+     an existing wait was incorrect. Event waits add work; their isolated cost is unmeasured. End-to-end timings are recorded below.
 5. **MoE-weight and prefetch inputs.** When the stream-ordered condition holds for these, the
    step-1 wait is skipped as well. This is safe because the SYCL stream is in-order: the routed
    copy into the destination runs after every earlier read of it. The ids readback is not the
@@ -108,7 +108,7 @@ Decode t/s did not change beyond noise.
 - **The author's lifetime argument has gaps**, as described in choice 4. This was found while
   reviewing the patch, not from a failure.
 - **The GPU was reserved for another session's Ornith benchmark** during development. The
-  GPU runtime checks were pending at that stage and remain unrecorded here.
+  GPU runtime checks were pending at that stage; the 2026-10-06 campaign is recorded below.
 
 ## Verification
 
@@ -121,7 +121,7 @@ Decode t/s did not change beyond noise.
   incorrectly made nine async uploads and failed. With `n_copies == 1` required, serial
   still made three async uploads and parallel mode made zero, retaining synchronization.
 - That initial test checked scheduler selection, not delayed device execution or GPU host-source lifetime.
-  GPU correctness, model output comparisons, and timing runs remain pending.
+  GPU correctness, model output comparisons, and timing runs were pending at that revision.
 
 The subsequent lifetime follow-up replaces that immediate-copy mock with a deterministic
 deferred queue. The CPU-only build and CTest pass seven cases: successful async return,
@@ -139,10 +139,122 @@ again. Run it with `ctest --test-dir BUILD -R '^test-sched-stream-ordered$' --ou
 These synthetic checks do not verify SYCL event execution, the PVC driver workaround itself,
 or runtime performance.
 
+## 2026-10-06 author-requested CPU/GPU campaign
+
+**The tests were executed, but the byte-identical output criterion failed. Do not
+mark the PR ready to merge from this campaign.** The forced-sync baseline also
+changes output between repetitions; this does not isolate a regression to the
+new copy path and does not prove that path equivalent.
+
+Tested source: `9b231926c38beff3b5d887facd5b410a1a28725e`, clean before testing.
+This follow-up changes evidence only. Machine-readable commands, prompts, full
+generated outputs, hashes, counters, CPU/GPU gate output, and benchmark records:
+[`sched-stream-ordered-copies-2026-10-06.json`](sched-stream-ordered-copies-2026-10-06.json).
+Raw local logs: `/home/svnbjrn/pr84-validation-2026-10-06`.
+
+### Configuration and isolation
+
+- Fresh Release JIT build with icpx/icx 2026.1.1, SYCL F16 enabled, DNN disabled,
+  compiler launchers and ccache disabled. Built `llama-completion`, `llama-bench`,
+  `llama-tokenize`, `test-sycl-turbo-correctness`, and `test-sched-stream-ordered`
+  with four build jobs; configure and build returned 0.
+- Ryzen 9 7900X3D, one visible Arc A770 on the `xe` driver;
+  kernel `7.3.0-rc5-273-linux73-tkg-bore-rc5-xe`, IGC `2.41.10`, compute-runtime
+  package `22.43.24558.r13063.gbe85a8d685-1`, Level Zero loader
+  `1.34.0.r2.gae3db48-1`. Full version strings are in the JSON.
+- Qwen3-Coder-30B-A3B-Instruct-UD-Q3_K_XL, 13,806,312,608 bytes, SHA256
+  `69cd7578d77dffc0b17e34bad9ef998d08ae0e20ccceef21bad4e7eb3d8c553b`.
+- `ONEAPI_DEVICE_SELECTOR=level_zero:0`, `SYCL_CACHE_PERSISTENT=1`,
+  `GGML_SYCL_ENABLE_GRAPH=0`; inherited `GGML_*`, `LLAMA_ARG_*`, `LLAMA_TEST_*`,
+  `SYCL_*`, and `UR_L0_*` overrides were removed before setting these values.
+  The backend applied its default xe copy-engine workaround.
+- The llama service was inactive initially, was explicitly stopped before
+  timing, and remained inactive afterwards. GPU ownership was checked before
+  each process and every five seconds while it ran: 124 probes across 29
+  successful GPU processes, no foreign owner observed. This is polling, not an
+  exclusive device lock; the desktop and CPU were not exclusively reserved.
+  Each model process had a 1,800-second timeout, the GPU gate 600 seconds.
+
+### Correctness results
+
+| Check | Observed result |
+| --- | --- |
+| Fresh CPU scheduler CTest | Pass; all seven deferred-queue cases |
+| A770 default `test-sycl-turbo-correctness` | rc 0, 0 GATE-FAIL, 0 XPASS |
+| 65-token prompt, 256 generated tokens, three runs per mode | Fail: six distinct output byte hashes |
+| Exactly 2,500 prompt tokens, `-b 16 -ub 16`, 256 generated tokens, three runs per mode | Fail: six distinct output byte hashes |
+| Forced sync, one CPU thread, two short-prompt runs | Two distinct outputs |
+| Forced sync, SYCL fusion and FFN fusion disabled, two short-prompt runs | Two distinct outputs |
+| Forced sync, `--moe-cache off`, two short-prompt runs | Two distinct outputs |
+| Kernel GPU reset/hang/timeout/fault/error/GuC filter | Zero matching lines before and after |
+
+The default GPU gate reported three turbo2 accuracy warnings. Turbo FA, d=256 FA,
+and InnerQ opt-in sections remained disabled; its summary's `0 SKIP` counter does
+not count those disabled sections. CPU testing here means the scheduler's
+CPU-backed regression, not a CPU-only run of the 30B model.
+
+For both prompts, each mode itself produced three distinct outputs. These are
+actual generated-text differences, not timestamps or logging in stdout. All
+12 processes returned 0; the comparison stage returned 1. Neither reducing
+CPU threads nor disabling fusion or the MoE cache made the sync baseline
+repeatable. Earlier temperature-zero nondeterminism is recorded in
+[the checkpoint campaign](speculative/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md),
+but that history is not a root-cause explanation for this failure.
+
+Every enabled short-prompt run recorded 5,377 stream-ordered copies and 4,864
+host-split upload-event waits; every enabled long-prompt run recorded 8,673 and
+7,847 respectively. Graph-end waits were zero for these model graphs. Forced-sync
+runs emitted no stream-ordered counter line. The real model therefore exercises
+the branch; synthetic CPU tests remain the evidence for graph-return lifetime
+handling and failure paths.
+
+Common completion arguments (prompts are embedded in the JSON):
+
+```bash
+llama-completion -m MODEL -f PROMPT -ngl 99 --n-cpu-moe 20 -c 4096 -n 256 \
+  -b 512 -ub 512 -t 12 -tb 12 -fa on -ctk f16 -ctv f16 --fit off \
+  --temp 0 --seed 1 --ignore-eos -no-cnv --no-display-prompt \
+  --simple-io --color off --log-verbosity 5
+# Long prompt: replace -b 512 -ub 512 with -b 16 -ub 16.
+# Baseline: set GGML_SCHED_COPY_SYNC=1; enabled arm leaves it unset.
+```
+
+### Alternating decode timing
+
+Five pairs, enabled then forced-sync, one process per repetition. Each process
+used `llama-bench -p 0 -n 128 -ncmoe 20 -ngl 99 -b 512 -ub 512 -t 12
+-fa 1 -ctk f16 -ctv f16 -r 1 -o json -v` and the model above. Verbose logging
+exposes the branch counters in both arms. The default automatic MoE cache was
+active in these benchmark runs; these are not cache-disabled measurements.
+The benchmark uses a fixed token generator with the same seed for repetition
+zero in every process, rather than sampling from its varying logits.
+
+| Pair | Enabled tok/s | Forced-sync tok/s |
+| --- | ---: | ---: |
+| 1 | 19.218901 | 19.321719 |
+| 2 | 19.466073 | 19.452151 |
+| 3 | 19.212976 | 19.501421 |
+| 4 | 19.410218 | 19.439509 |
+| 5 | 19.539309 | 19.414470 |
+| Mean +/- sample SD | 19.3695 +/- 0.1475 | 19.4259 +/- 0.0663 |
+
+The ratio of means is **-0.29%**. No throughput improvement is demonstrated.
+Every enabled benchmark recorded 2,709 stream-ordered copies and 2,451 host-split
+upload-event waits; forced-sync runs recorded none. These timings measure the
+whole selected configuration, not upload-event overhead in isolation.
+
 ## Not claimed
 
 - Vulkan and OpenVINO behaviour is unchanged by construction: they do not export the hook. That
   is verified from source only.
 - Pipeline-parallel schedulers (`n_copies > 1`) cannot take the stream-ordered branch.
-  The eventless case was exercised with the CPU-backed test above; GPU event behavior was not.
+  The eventless case was exercised with the CPU-backed test above; GPU event-allocation failure was not.
   Multi-device SYCL keeps the old syncs because the hook returns false there; it was not run.
+- Byte-identical model output and merge readiness are not established. The baseline
+  nondeterminism remains unexplained; no production fix is claimed by this evidence update.
+- SYCL graph replay, AOT, multi-GPU, PVC hardware, explicit `--moe-cache on`, and
+  injected GPU event failures were not tested. Automatic MoE caching was active
+  in the timing runs; no separate cache-correctness claim follows from them.
+- No CPU-only 30B inference, isolated event-overhead profile, or installed-binary
+  update was performed. No production dependency or state is added by this
+  documentation-only follow-up.
