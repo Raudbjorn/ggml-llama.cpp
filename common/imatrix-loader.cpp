@@ -154,7 +154,8 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
             return false;
         }
 
-        if (in_sum2->type != GGML_TYPE_F32 || counts->type != GGML_TYPE_F32) {
+        if (in_sum2->type != GGML_TYPE_F32 || counts->type != GGML_TYPE_F32 ||
+            (in_sum && in_sum->type != GGML_TYPE_F32)) {
             LOG_ERR("%s: sums and counts for %s must be F32\n", __func__, name.c_str());
             gguf_free(ctx_gguf);
             ggml_free(ctx);
