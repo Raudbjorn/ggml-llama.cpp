@@ -1143,6 +1143,8 @@ struct common_batch {
     llama_batch_ext_ptr batch;
 
     int32_t n_pos = 1; // positions per embedding entry, GGML_MROPE_SECTIONS for MROPE/IMROPE
+    int32_t n_vocab = 0;
+    llama_seq_id n_seq_max = 0;
 
     common_batch() = default;
     common_batch(struct llama_context * ctx);
@@ -1158,7 +1160,7 @@ struct common_batch {
 
     void clear();
 
-    // returns the batch index
+    // returns the batch index, or -2 for an invalid token and -3 for an invalid sequence
     int32_t add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output);
 
     // same, with the entry shared by all seq_ids (must not be empty)

@@ -2331,6 +2331,8 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
 common_batch::common_batch(llama_context * ctx) : batch(llama_batch_ext_init(ctx)) {
     const auto rope_type = llama_model_rope_type(llama_get_model(ctx));
     n_pos = rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE ? GGML_MROPE_SECTIONS : 1;
+    n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+    n_seq_max = llama_n_seq_max(ctx);
 }
 
 void common_batch::clear() {
@@ -2338,6 +2340,12 @@ void common_batch::clear() {
 }
 
 int32_t common_batch::add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output) {
+    if (seq_id < 0 || seq_id >= n_seq_max) {
+        return -3;
+    }
+    if (id < 0 || id >= n_vocab) {
+        return -2;
+    }
     tokens.push_back({ id, { pos, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 }, {} });
     return size() - 1;
 }
@@ -2346,14 +2354,20 @@ int32_t common_batch::add(llama_token id, llama_pos pos, const std::vector<llama
     GGML_ASSERT(!seq_ids.empty());
 
     const int32_t idx = add(id, pos, seq_ids[0], output);
+    if (idx < 0) {
+        return idx;
+    }
     for (size_t s = 1; s < seq_ids.size(); ++s) {
-        add_seq(idx, seq_ids[s]);
+        if (!add_seq(idx, seq_ids[s])) {
+            remove_last();
+            return -3;
+        }
     }
     return idx;
 }
 
 bool common_batch::add_seq(int32_t idx, llama_seq_id seq_id) {
-    if (idx < 0 || idx >= size()) {
+    if (idx < 0 || idx >= size() || seq_id < 0 || seq_id >= n_seq_max) {
         return false;
     }
     tokens[idx].seq_ids_extra.push_back(seq_id);
@@ -2391,7 +2405,7 @@ bool common_batch::remove_last() {
         return false;
     }
     tokens.pop_back();
-    return llama_batch_ext_remove_last(batch.get());
+    return true;
 }
 
 llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
