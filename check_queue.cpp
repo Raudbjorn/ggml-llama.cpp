@@ -40,7 +40,8 @@ int main() {
 
     for (uint32_t i = 0; i < group_count; ++i) {
         printf("Group %u: flags=%u\n", i, props[i].flags);
-        if (props[i].flags & ZE_COMMAND_QUEUE_GROUP_PROPERTY_FLAG_COPY) {
+        if ((props[i].flags & ZE_COMMAND_QUEUE_GROUP_PROPERTY_FLAG_COPY) &&
+            !(props[i].flags & ZE_COMMAND_QUEUE_GROUP_PROPERTY_FLAG_COMPUTE)) {
             printf("Group %u is Copy Engine\n", i);
         }
     }
