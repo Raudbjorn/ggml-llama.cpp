@@ -31,7 +31,7 @@ files with zero alterations. The package version and runtime library hash
 were unchanged across those checks. The new `050` patch was not reviewed or
 validated against the BCS workload by this session.
 
-[040-gaema-host-ipc-cpu-access.patch](/home/svnbjrn/projects/intel-compute-runtime-git/040-gaema-host-ipc-cpu-access.patch)
+040-gaema-host-ipc-cpu-access.patch (local-only: `/home/svnbjrn/projects/intel-compute-runtime-git/040-gaema-host-ipc-cpu-access.patch`)
 corrects `MemoryManager::importFdHandle()`: host IPC allocations are CPU-mapped,
 so they must not assert the fork's no-CPU-access contract. Only device imports
 retain that marking. The existing `030` patch still keeps the private flag
@@ -46,7 +46,7 @@ of CPU mappings. DG2's ordinary write-back PAT is already classified
 `XE_COH_1WAY`, and same-device imports reuse the original GEM object.
 The fork's B70 motivation does not establish an A770 need. No bit-8 patch,
 P2P topology bypass or ACS override was added. See the
-[source review](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/gaema-xe-review-2026-09-30.md).
+source review (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/gaema-xe-review-2026-09-30.md`).
 
 ## Actual Intel stack used
 
@@ -93,7 +93,7 @@ or external-memory API.
 The final runtime was also rechecked with Intel-only `clinfo`, Level Zero-only
 `sycl-ls`, and `ocloc -device dg2`; all pass. Versions, library/patch hashes,
 test-source hashes and results are in the
-[final runtime record](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/gaema-20260930/final-runtime-verification-inputs.json).
+final runtime record (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/gaema-20260930/final-runtime-verification-inputs.json`).
 Earlier `r13059...-3` IPC logs were preserved separately before rerunning.
 
 This proves the bounded host-import regression is corrected. It does not make
@@ -103,7 +103,7 @@ or establish a fix for the earlier BCS/event-chain failure. Keep
 
 The runnable check, adapted source, exact source diff, before/after logs,
 package versions, build/install logs and archive hashes are retained in
-[the evidence directory](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/gaema-20260930).
+the evidence directory (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/gaema-20260930`).
 Run against the installed runtime:
 
 ```sh
@@ -140,7 +140,7 @@ AOCC 5.2 / AMD Clang 17.0.6 meets this rc5 source's LLVM minimum. Small Zen 4
 C/assembly, objtool, BTF and linker probes passed. Rust availability passes
 with `LIBCLANG_PATH=/opt/aocc/lib`. Those are compatibility checks, not
 performance measurements. No conclusion about AOCC versus GCC speed is
-established. See the [toolchain review](/home/svnbjrn/dev/krnl/AMD-Compiler/kernel-toolchain-review-2026-09-30.md).
+established. See the toolchain review (local-only: `/home/svnbjrn/dev/krnl/AMD-Compiler/kernel-toolchain-review-2026-09-30.md`).
 
 At the user's request, the first separate kernel build was attempted with real AOCC
 tools, integrated assembly, no LTO, `znver4`, Rust and BTF retained, and a
@@ -164,7 +164,7 @@ existing GCC bootable build and rollback entries are preserved.
 | Additional private Xe ABI | None |
 
 Compiler-selected Kconfig differences are recorded in the
-[candidate audit](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/customization.cfg.audit.md).
+candidate audit (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/customization.cfg.audit.md`).
 Clang 17 lacks some attributes available in GCC 16, so the effective
 configurations are not byte-identical. The AOCC trial also used O2 after the
 O3 diagnostics described below; the GCC baseline uses O3. This experiment
@@ -176,14 +176,14 @@ not apply to AOCC. Final BTF and packaged-header acceptance were not reached
 in this first trial; the accepted guide-driven build is recorded below.
 
 The O3 trial exposed a FORTIFY diagnostic in the GUD USB-display driver.
-A [historical bounds-check patch](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/historical-patches/0002-gud-explicit-tv-mode-buffer-bound.mypatch)
+A historical bounds-check patch (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/historical-patches/0002-gud-explicit-tv-mode-buffer-bound.mypatch`)
 rejects a returned length larger than its 256-byte TV-mode buffer before
 deriving the scan count. USB core already promises the requested-length
 bound; no reachable USB overflow was demonstrated. The original translation
 unit fails AOCC O3 and passes AOCC O2; the guarded version passes AOCC O3
 with FORTIFY retained. Clang 23 still diagnoses the guarded control using
 this Clang-17-generated configuration, so this is not a universal LLVM fix.
-The [runnable compile comparison](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/reproduce-gud-fortify.py)
+The runnable compile comparison (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/reproduce-gud-fortify.py`)
 and logs preserve that distinction. The original GUD translation unit also
 passes at O2 with both attempted AOCC controls. The bounds-check patch was
 therefore removed from the active source and patch set; the candidate retains
@@ -214,7 +214,7 @@ identical after canonicalization. The original command still reports both
 stack-frame errors under the vendor environment, while the command with
 both corrective flags passes objtool cleanly. Both object pairs are also
 byte-for-byte identical with and without the vendor script. The
-[vendor-environment control](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/vendor-environment-control.json)
+vendor-environment control (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/vendor-environment-control.json`)
 records the exact commands and relevant environment without dumping unrelated
 session variables.
 
@@ -241,10 +241,10 @@ A narrower tail-merging control still fails the cgroup checks. It makes the
 VMX object pass objtool while retaining the invalid RBX path, demonstrating
 why clean stack/unwind diagnostics alone are insufficient. The full build was
 stopped. No kernel from that failed profile was installed or booted. See the
-[candidate audit](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/customization.cfg.audit.md)
+candidate audit (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/customization.cfg.audit.md`)
 for commands, diagnostics and assembly evidence.
 
-The [compiler pass trace](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/vmx-ept-register-pass-excerpts.txt)
+The compiler pass trace (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/vmx-ept-register-pass-excerpts.txt`)
 locates the bad register copy in greedy register allocation, before AOCC's
 later register-allocation fixup pass. The copy is inserted after
 `INLINEASM_BR`, while its taken target already requires that register.
@@ -255,7 +255,7 @@ wrapping/branch folding passes all six affected translation units. Independent
 assembly review confirms that the EPT pointer assignment now precedes both
 static-key paths, and the four earlier cgroup paths have reachable bodies and
 balanced stack handling. The
-[control results](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/basic-regalloc-o2-results.json)
+control results (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe-aocc/evidence/aocc/basic-regalloc-o2-results.json`)
 are retained. LLVM describes basic allocation as a bug-triage and performance
 baseline option, explicitly not a production register allocator. It was not
 promoted into the native recipe or used to justify installation.
@@ -272,7 +272,7 @@ Candidate-specific DKMS sources/settings were prepared for ZFS, scap and
 v4l2loopback, but compilation was deliberately not started at this stage after
 the kernel failed validation. The private workspace was preserved and global
 DKMS sources/settings were unchanged at this boundary. Later results are in the
-[external-module report](/home/svnbjrn/dev/krnl/aocc-dkms-validation-2026-09-30.md).
+external-module report (local-only: `/home/svnbjrn/dev/krnl/aocc-dkms-validation-2026-09-30.md`).
 
 The disposable VM check now also activates the cgroup2 memory controller,
 places a child process in a group with a 64 MiB limit, writes 8 MiB into tmpfs,
@@ -322,7 +322,7 @@ failures and still miscompiles EPT even though that VMX object passes
 objtool. The evidence supports retaining Zen 4 tuning while using x86-64
 instruction selection for the new AOCC build. It does not establish a
 performance advantage or identify the individual ISA feature involved.
-The [guide assessment](/home/svnbjrn/dev/krnl/AMD-Compiler/kernel-toolchain-review-2026-09-30.md)
+The guide assessment (local-only: `/home/svnbjrn/dev/krnl/AMD-Compiler/kernel-toolchain-review-2026-09-30.md`)
 links the exact commands, object hashes, results and corrections to the
 other guides' build advice. The persistent recipe now applies x86-64
 instruction selection and Zen 4 tuning to C/preprocessing. Rust keeps its
@@ -385,7 +385,7 @@ and [Lua control-flow review](/mnt/nvme1/build/linux-tkg-7.3-rc5-xe-aocc/probes/
 verify the function contracts. With the corrected source, strict SPL passes
 with either tool; strict ZFS produces 315 external-callee errors with the old
 tool and zero with the revised packaged tool. All original checks and
-`--werror` remain enabled. The [module validation record](/home/svnbjrn/dev/krnl/aocc-dkms-validation-2026-09-30.md)
+`--werror` remain enabled. The module validation record (local-only: `/home/svnbjrn/dev/krnl/aocc-dkms-validation-2026-09-30.md`)
 records the final clean module rebuild. ZFS passed 295 C command checks,
 scap 28 (including compatibility probes), and v4l2loopback three. Compiler
 and objtool diagnostics are zero. The existing experimental-Linux configure

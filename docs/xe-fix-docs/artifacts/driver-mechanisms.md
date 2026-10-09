@@ -4,7 +4,7 @@ Source research only. No GPU tests, service changes, package installs, or config
 
 ## What is actually failing
 
-The [local copy trace](/home/svnbjrn/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/copy-path-trace.md) establishes scheduler expert-weight uploads despite `--moe-cache off`. The pending Q6_K copy was 860672 bytes. The latest hangs showed BCS scheduled and CCS unchanged, first in queue finish and then inside memcpy enqueue. Counters establish scheduling, not useful progress or the particular instruction being executed. These observations replace the earlier activation-only interpretation and must not be conflated with the earlier CCS-busy observation.
+The [local copy trace](../evidence/copy-path-trace.md) establishes scheduler expert-weight uploads despite `--moe-cache off`. The pending Q6_K copy was 860672 bytes. The latest hangs showed BCS scheduled and CCS unchanged, first in queue finish and then inside memcpy enqueue. Counters establish scheduling, not useful progress or the particular instruction being executed. These observations replace the earlier activation-only interpretation and must not be conflated with the earlier CCS-busy observation.
 
 ## Stack and important differences
 

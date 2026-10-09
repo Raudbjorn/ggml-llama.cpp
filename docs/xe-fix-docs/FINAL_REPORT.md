@@ -31,8 +31,8 @@ real despite the benchmark mismatch. Four recorded copy-off bench rounds and
 six server requests completed; this finite, heterogeneous sample is not a proof
 that the failure is eliminated or a basis for an independent-trial probability.
 
-Evidence: [campaign and placement audit](/home/svnbjrn/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/README.md),
-[copy trace](/home/svnbjrn/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/copy-path-trace.md),
+Evidence: [campaign and placement audit](evidence/README.md),
+[copy trace](evidence/copy-path-trace.md),
 [bench default](../../tools/llama-bench/llama-bench.cpp) (repository path:
 `tools/llama-bench/llama-bench.cpp`, default `moe_cache = { "auto" }`).
 Neither random-token throughput nor assumed routing locality substitutes for

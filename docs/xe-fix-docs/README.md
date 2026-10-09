@@ -4,7 +4,7 @@
 
 Added September 30 at the user's request:
 
-- [Full final report](FINAL_REPORT.md), preserved byte-for-byte with primary-source citations.
+- [Full final report](FINAL_REPORT.md), with primary-source citations and portable evidence links.
 - [Complete session account](session/codex-session-2026-09-29.md): requests,
   chronology, code audit, GPU coordination, tracer implementation/verification,
   two diagnostic runs, firmware checks, provenance, corrections and open work.
@@ -12,6 +12,7 @@ Added September 30 at the user's request:
 - [Evidence corrections and precedence](session/codex-session-2026-09-29.md#corrections-and-evidence-precedence).
 - [Source manifest](session/source-manifest-2026-09-30.json): 192 files mapped
   to their originals with byte counts and SHA-256; existing identical files reused.
+  These hashes describe the original import, before the PR #101 link corrections.
 - [Original i915 comparison campaign](evidence/baseline-2026-09-27/README.md).
 
 **Historical-content notice:** The earlier index below and some companion

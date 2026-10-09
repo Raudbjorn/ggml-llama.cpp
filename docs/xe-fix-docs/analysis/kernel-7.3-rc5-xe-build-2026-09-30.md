@@ -21,8 +21,8 @@ no identified fix for those failures. Keep `UR_L0_USE_COPY_ENGINE=0` in
 production until hardware testing supports changing that decision.
 
 The authoritative implementation record is the
-[kernel build audit](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/customization.cfg.audit.md),
-with the [Xe source review](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/xe-research.md).
+kernel build audit (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/customization.cfg.audit.md`),
+with the Xe source review (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/xe-research.md`).
 This document connects that build to the [captured workload evidence](../evidence/README.md)
 and the [corrected interactivity analysis](../../research/xe-i915-llama-interactivity-firmware-2026-09-29.md).
 
@@ -59,8 +59,8 @@ retain it while the source worktrees depend on it.
 
 Configuration changes below are compared with the previously audited rc4
 build. The running host's source baseline is rc1. Exact values are recorded in
-the [compiled config](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/config-rc5)
-and [rc4-to-rc5 config diff](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/config-rc4-to-rc5.diff).
+the compiled config (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/config-rc5`)
+and rc4-to-rc5 config diff (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/config-rc4-to-rc5.diff`).
 
 | Change or retained feature | Relevance to the investigation | Limit of the claim |
 | --- | --- | --- |
@@ -98,7 +98,7 @@ to this GPU and failure before claiming an improvement:
 
 The inspected post-rc5 Xe fixes concerned SR-IOV VF BAR handling and were not
 applicable to this consumer DG2 device. No cherry-pick was added for them.
-See the [source review](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/xe-research.md)
+See the source review (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/xe-research.md`)
 for the exact inspected branch tip and the remaining hardware gates.
 
 The candidate DG2 HuC patch was excluded after finding unresolved workqueue
@@ -149,11 +149,11 @@ The kernel release in the rc5 guest was
 `2.4.99-1`, srcversion `9171D09E6CCD01E4098CD66`, and the matching vermagic.
 Installed ZFS userspace remains 2.4.4; this pairing is experimental.
 
-Evidence: [QEMU results](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/qemu-results.txt),
-[installed-image checks](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/installed-image-checks.txt),
-[rollback checks](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/integrity-after.txt),
-[archive hashes](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/artifacts.sha256)
-and [boot-file hashes](/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/installed-boot.sha256).
+Evidence: QEMU results (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/qemu-results.txt`),
+installed-image checks (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/installed-image-checks.txt`),
+rollback checks (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/integrity-after.txt`),
+archive hashes (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/artifacts.sha256`)
+and boot-file hashes (local-only: `/home/svnbjrn/dev/krnl/linux-tkg-7.3-rc5-xe/evidence/installed-boot.sha256`).
 These absolute links refer to the local kernel worktree, not files copied
 into this llama.cpp repository. The build audit records compiler and package
 hook warnings as well; a successful build is not a warning-free-build claim.

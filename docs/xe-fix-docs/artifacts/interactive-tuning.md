@@ -8,7 +8,7 @@ The research README was updated at 17:49-18:05: historical llama-bench tests def
 
 Latest recorded xe/copy-engine-off benchmarks: auto 14.52 tg/s, soft 22.72, off 47.55; at 8k auto 13.70, soft 20.08, off 42.07. These are recorded experiments, not reproduced here. Production-like short real text with off placement gives 32.78 tg/s copy-off versus 32.38 copy-on. There is no matched i915 production-placement comparison. Consequently the established xe decode penalty applies to auto placement; it must not be generalized to production. The blanket claim that random tokens are worst for locality is also unsupported by these results.
 
-Evidence: [latest campaign README](/home/svnbjrn/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/README.md), [copy trace](/home/svnbjrn/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/copy-path-trace.md). Current scheduler's `copy_experts` is in [ggml-backend.cpp](/mnt/mrgr/ggml-llama.cpp/ggml/src/ggml-backend.cpp:2436).
+Evidence: [latest campaign README](../evidence/README.md), [copy trace](../evidence/copy-path-trace.md). Current scheduler's `copy_experts` is in `ggml/src/ggml-backend.cpp:2436` (historical source location).
 
 ## Concrete starting profiles
 
