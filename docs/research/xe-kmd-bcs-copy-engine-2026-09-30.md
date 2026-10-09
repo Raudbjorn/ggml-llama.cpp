@@ -38,12 +38,14 @@ Ornith-1.5-35B-A3B Q4_K_M with `--fit`, so roughly half of the routed experts st
 host-resident and `ggml_backend_sched` uploads the used experts every token
 (`ggml/src/ggml-backend.cpp`, `copy_experts`).
 
-Earlier evidence (09-29, four coredumps, fix ladder, UR trace, tracer runs) and the raw
-outputs of every run cited here are maintainer-local and not part of this tree: the 09-29
-archive under `~/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/` (a copy sits in the
-maintainer's checkout as `docs/xe-fix-docs/`, uncommitted), the new runs under
-`/mnt/nvme1/oneapi-ab/N-xe-x*/`. The numbers, register values and log excerpts quoted in this
-document are the committed record. The instrumented runner (`xn.sh`, scratch script) did:
+Earlier evidence from 09-29 (coredumps, fix ladder, UR trace, tracer runs) is partially
+committed in the [xe investigation archive](../xe-fix-docs/README.md). Its
+[manifest](../xe-fix-docs/session/source-manifest-2026-09-30.json) lists 173 committed
+targets with hashes and 19 omitted artifacts; the source archive was
+`~/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/`.
+The newer X-series raw runs under `/mnt/nvme1/oneapi-ab/N-xe-x*/` remain maintainer-local.
+For those runs, the numbers, register values and log excerpts quoted in this document
+are the committed record. The instrumented runner (`xn.sh`, scratch script) did:
 unit stopped, `perf record -a -k CLOCK_MONOTONIC -e xe:...` (scheduling
 enable/disable/done, userptr invalidate, rebind worker, evict, reset, timedout, CAT error),
 NEO `NEOReadDebugKeys=1 LogAllocationStdout=1 LogAllocationType=1 LogAllocationMemoryPool=1
@@ -264,7 +266,7 @@ default stays until a release carries it, and the production unit keeps
 
 The IGC shader-dump side result (FA kernels spilling at 128 GRF) and the
 `GGML_SYCL_FA_LARGE_GRF` knob it led to are a separate change:
-`docs/research/sycl-fa-large-grf-2026-09-30.md` on branch `sycl-fa-large-grf`.
+`docs/research/sycl/sycl-fa-large-grf-2026-09-30.md`.
 
 ## Not claimed
 

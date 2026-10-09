@@ -31,7 +31,7 @@ rationale and the paper corpus.
   `~/.docs/2026-09-30-to-10-01-arc-a770-xe-kmd-blitter-root-cause-pr88-pr89-session/`
   (README index, timeline, every run with numbers, all review findings and dispositions,
   open items). The committed evidence is `docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`,
-  `docs/research/sycl-fa-large-grf-2026-09-30.md` and
+  `docs/research/sycl/sycl-fa-large-grf-2026-09-30.md` and
   `docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch`. Read the
   session README before touching `xe-kmd.cpp`, the FA GRF code, or the production unit.
 
@@ -371,6 +371,6 @@ and `turbo/turbo-fa-research-artifact.md`).
   points at VEC-vs-TILE routing and per-element dequant cost, not missing dp4a. Any fix must keep
   the CPU oracle green.
 - Open: PR #89 left two post-merge bot threads (`strtol` accepts `" 1"`, `"+1"`, `"01"`);
-  the upstream report to intel/compute-runtime is drafted, not filed; `docs/xe-fix-docs/` and
-  the `repro_*` reproducers in the checkout root are uncommitted strays awaiting the
-  maintainer's call.
+  the upstream report to intel/compute-runtime is drafted, not filed. The partial
+  `docs/xe-fix-docs/` archive and standalone diagnostic sources are committed; consult the
+  archive manifest for omitted artifacts and label owned-memory probes as controls.
