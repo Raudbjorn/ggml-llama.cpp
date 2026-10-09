@@ -3,12 +3,7 @@
 #include "../utils.h"
 
 #include <memory>
-#include <openvino/op/broadcast.hpp>
-#include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
-#include <openvino/op/divide.hpp>
-#include <openvino/op/gather.hpp>
-#include <openvino/op/shape_of.hpp>
 #include <openvino/op/tile.hpp>
 #include <vector>
 
@@ -43,36 +38,8 @@ OutputVector translate_repeat(const NodeContext & context) {
         repeats[axis] = output_dim / input_dim;
     }
 
-    ov::Output<ov::Node> repeats_node = ov::op::v0::Constant::create(ov::element::i64, {repeats.size()}, repeats);
-
-    // In a dynamic model the extent captured on the dynamic axis is stale. REPEAT keeps
-    // src[0]'s dynamic dim, so a factor of 1 there tracks the input at any extent and stays
-    // constant. Any other factor means the template is fixed on that axis (ggml_repeat keeps
-    // no reference to it, only its extent), so divide that extent by the runtime input extent.
-    const int32_t dynamic_dim = context.get_op_dynamic_dim();
-    if (!context.is_static() && dynamic_dim >= 0 && dynamic_dim < 4) {
-        const size_t dynamic_axis = 3 - dynamic_dim;  // OV order reverses ggml order
-        if (repeats[dynamic_axis] != 1) {
-            auto input_extent = std::make_shared<ov::op::v8::Gather>(
-                std::make_shared<ov::op::v3::ShapeOf>(input, ov::element::i64),
-                ov::op::v0::Constant::create(ov::element::i64, {1}, {(int64_t) dynamic_axis}),
-                ov::op::v0::Constant::create(ov::element::i64, {}, {0}));
-            auto factor = std::make_shared<ov::op::v1::Divide>(
-                ov::op::v0::Constant::create(ov::element::i64, {1}, {(int64_t) output_shape[dynamic_axis]}),
-                input_extent);
-
-            ov::OutputVector parts;
-            for (size_t axis = 0; axis < 4; ++axis) {
-                if (axis == dynamic_axis) {
-                    parts.push_back(factor);
-                } else {
-                    parts.push_back(ov::op::v0::Constant::create(ov::element::i64, {1}, {repeats[axis]}));
-                }
-            }
-            repeats_node = std::make_shared<ov::op::v0::Concat>(parts, 0);
-        }
-    }
-
+    // Keep the captured multiplier so a dynamic output grows with its source.
+    auto repeats_node = ov::op::v0::Constant::create(ov::element::i64, {repeats.size()}, repeats);
     ov::Output<ov::Node> res = std::make_shared<ov::op::v0::Tile>(input, repeats_node);
     return rename_outputs_with_suffix({res}, context.get_name());
 }
