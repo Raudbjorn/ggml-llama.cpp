@@ -30,6 +30,10 @@ class ArchiveTests(unittest.TestCase):
         self.assertTrue(alias.is_symlink())
         self.assertEqual(alias.resolve(), (ARCHIVE / "evidence/raw").resolve())
 
+    def test_single_investigation_tree(self):
+        self.assertTrue((ARCHIVE / "artifacts").is_dir())
+        self.assertFalse((ARCHIVE / "evidence/xe-investigation-20260929").exists())
+
     def test_committed_archive_text_is_ascii(self):
         paths = subprocess.check_output(
             ["git", "-C", str(ROOT), "ls-files", "docs/xe-fix-docs"], text=True).splitlines()

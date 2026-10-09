@@ -18,6 +18,8 @@ Added September 30 at the user's request:
   counts and hashes are retained as `source_bytes` and `source_sha256`.
 - `evidence/raw/` is canonical; the nested campaign's `raw` is a relative
   symlink to it. Checkouts without symlink support should use the canonical path.
+- `artifacts/` is the canonical investigation tree; the duplicate
+  `evidence/xe-investigation-20260929/` was removed. The manifest tracks `artifacts/`.
 - Historical tracer wrappers require local paths and unbundled `.so` files;
   they are provenance records, not runnable tools from a fresh checkout.
 - [Original i915 comparison campaign](evidence/baseline-2026-09-27/README.md).
