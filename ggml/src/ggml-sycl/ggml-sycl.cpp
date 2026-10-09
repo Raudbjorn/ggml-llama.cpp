@@ -166,6 +166,12 @@ int g_ggml_sycl_graph_eviction_timeout = 10;
 // 16 wins both deep cells and 32 regresses there, so the hardware ceiling is the
 // right default rather than a clamped fraction of it. Depth 0 is unaffected
 // because parallel_blocks is clamped by ntiles_KQ at shallow depth.
+static bool g_ggml_sycl_max_wg_per_cu_explicit = false;
+
+bool ggml_sycl_max_wg_per_cu_is_explicit() {
+    return g_ggml_sycl_max_wg_per_cu_explicit;
+}
+
 static int ggml_sycl_max_wg_per_cu() {
     static const int value = [] {
         const int fallback = 16;
@@ -177,10 +183,11 @@ static int ggml_sycl_max_wg_per_cu() {
         const long parsed = strtol(env, &end, 10);
         if (end == env || *end != '\0' || parsed < 1 || parsed > 1024) {
             GGML_LOG_WARN(
-                "%s: ignoring invalid GGML_SYCL_MAX_WG_PER_CU=\"%s\", using %d\n",
-                __func__, env, fallback);
+                "ggml_sycl_max_wg_per_cu: ignoring invalid GGML_SYCL_MAX_WG_PER_CU=\"%s\", using %d\n",
+                env, fallback);
             return fallback;
         }
+        g_ggml_sycl_max_wg_per_cu_explicit = true;
         return (int) parsed;
     }();
     return value;
@@ -594,6 +601,8 @@ static void ggml_check_sycl() try {
 #endif
         GGML_LOG_INFO("  GGML_SYCL_FA_FORCE_VEC_STANDARD: %d\n",
             g_ggml_sycl_fa_force_vec_standard);
+        GGML_LOG_INFO("  GGML_SYCL_FA_LARGE_GRF: %d (effective mode; 256-GRF FA variants compiled: %d)\n",
+                      ggml_sycl_fa_large_grf_mode(), (int) ggml_sycl_fa_large_grf_variants());
         GGML_LOG_INFO("  GGML_SYCL_FA_Q8_GQA_TILE: %d\n",
             g_ggml_sycl_fa_q8_gqa_tile);
         GGML_LOG_INFO("  GGML_SYCL_FFN_FUSION: %d\n", ggml_sycl_ffn_fusion_enabled());
@@ -634,7 +643,13 @@ static void ggml_check_sycl() try {
 #endif
 
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_OPT: %d\n", g_ggml_sycl_enable_optimize);
+        GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_REQUESTED: %s\n", GGML_SYCL_XMX_GATHER_REQUESTED);
+        GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_EFFECTIVE: %s\n", GGML_SYCL_XMX_GATHER_EFFECTIVE);
+#ifndef GGML_SYCL_NO_XMX_GATHER
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_TYPES: %d\n", g_ggml_sycl_xmx_gather_types);
+#else
+        GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_TYPES: XMX gather GEMMs disabled by compile flag\n");
+#endif
 
 #if defined(GGML_SYCL_SUPPORT_VMM)
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: %d\n", g_ggml_sycl_enable_vmm);
@@ -6708,7 +6723,7 @@ static void ggml_sycl_profile_ffn_fusion(const ggml_cgraph * cgraph) {
 // Fuses (ffn_gate MUL_MAT, ffn_up MUL_MAT, GLU) into one kernel for
 // single-token dense Q4_K decode. Default ON as of the P6.2 re-campaign
 // against this fixed kernel (PR #38 carries the promotion evidence; the
-// docs/research/ffn-fusion-campaign-2026-07-26/ directory predates the fix
+// docs/research/sycl/ffn-fusion-campaign-2026-07-26/ directory predates the fix
 // and is historical only). Set GGML_SYCL_FFN_FUSION=0 to opt out.
 static bool ggml_sycl_ffn_fusion_enabled() {
     static const bool enabled = ggml_sycl_get_env("GGML_SYCL_FFN_FUSION", 1) != 0;

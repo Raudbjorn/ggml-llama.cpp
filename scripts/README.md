@@ -85,11 +85,46 @@ are required so discarding sample 0 leaves two values for a Student-t interval.
 | `tool_bench.py` | Python benchmark analysis and plotting tool with inline dependency metadata. |
 | `tool_bench.sh` | Shell entry point/wrapper for the benchmark tool workflow. |
 | `server-bench.py` | Measures throughput of a running OpenAI-compatible `llama-server` and writes console summaries and plots. |
-| `perf/bench_spec.py` | A770 SYCL speculative-decoding and KV-type HTTP benchmark harness. Launches `llama-server`, executes fixed prompts, and records request/server evidence. |
+| `perf/bench_spec.py` | A770 SYCL speculative-decoding and KV-type HTTP benchmark harness. Launches `llama-server`, executes fixed prompts, and records request/server evidence. `MODE=ab` runs a paired A/B of two server builds (ABBA launches, sole-tenancy gate, paired 95% CIs). |
 | `perf/prompts.jsonl` | Normal prompt fixture for speculative-decoding comparisons. |
 | `perf/prompts_adversarial.jsonl` | Adversarial prompt fixture for proving the ngram-mod hard-off mechanism. |
 | `perf/FINDINGS.md` | Preserved interpretation and reproduction commands for the speculative-decoding experiments. |
 | `perf/results/` | Generated/specimen output directory for speculative-decoding campaigns. |
+
+### MTP request acceptance
+
+`run-spec-curve.sh` runs adaptive depths 3-7, fixed 3, and fixed 7 in sequence.
+The wrapper always selects acceptance-curve mode. It restores an initially active
+`llama-sycl.cpp.service` on exit, defaults to context 2048, and limits the campaign
+to two hours (`CURVE_TIMEOUT` overrides).
+The server stays in the timeout process group so forced termination also reaches
+it if Python cleanup stalls. Set `SKIP_STOP_SERVICE=1` when service management
+is handled externally.
+
+```bash
+SERVER_BIN=./build-sycl/bin/llama-server MODEL=/path/model.gguf REPEATS=67 \
+  bash scripts/run-spec-curve.sh
+./build-cpu/bin/test-spec-adaptive-curve \
+  --curve-file scripts/perf/results/acceptance_curve_model_adaptive-3-7.jsonl \
+  --fixed-curve-file scripts/perf/results/acceptance_curve_model_fixed-7.jsonl
+```
+
+Use an MTP-capable model and enough prompts times repeats for at least 200
+requests per arm (67 repeats for the supplied three-prompt fixture). Requests
+cycle through the prompt suite once per repeat, so the final window represents
+the suite to within one request per prompt when the suite fits in the window.
+Old traces for all arms are removed before the first launch. Each JSONL row
+contains **request totals**, not verification rounds; the analyzer cannot replay the adaptive controller. It compares token
+acceptance over the last 50 requests: adaptive >= 0.80 and an adaptive-minus-fixed
+7 gap >= 0.20. These are experimental hypotheses, not established A770 thresholds.
+Exit 77 means insufficient data, 1 means invalid input or a failed threshold,
+and 0 means the supplied traces meet both thresholds. CTest always runs synthetic
+analyzer checks; the real-trace check is skipped when files are not supplied.
+
+Traces are published only after response verification, draft-count validation,
+and the xe/i915 kernel-log delta gate pass. Compare files from the same run,
+model, and prompt suite. Sequential launches and repeated prompts do not prove
+a throughput improvement, independent samples, or generalization to other work.
 
 ## Server behavior tests
 

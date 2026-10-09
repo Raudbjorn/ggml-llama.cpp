@@ -140,6 +140,11 @@ function(llama_build_mtmd_tests)
     endif()
 endfunction()
 
+llama_test_cmd(${CMAKE_COMMAND} NAME test-sycl-xmx-gather
+               ARGS -P ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-xmx-gather.cmake)
+llama_test_cmd(${CMAKE_COMMAND} NAME test-sycl-build-metadata
+               ARGS -P ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-build-metadata.cmake)
+
 # build test-tokenizer-0 target once and add many tests
 llama_build(test-tokenizer-0.cpp)
 
@@ -224,6 +229,14 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # llama_build_and_test(test-double-float.cpp) # SLOW
 
     llama_build(test-llama-archs.cpp)
+    llama_build_and_test(test-qwen4exp-mtp.cpp)
+    llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-q8 ARGS --q8-kv)
+    if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
+        llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-sycl-f16 LABEL sycl ARGS --backend SYCL0)
+        llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-sycl-q8 LABEL sycl ARGS --backend SYCL0 --q8-kv)
+        set_tests_properties(test-qwen4exp-mtp-sycl-f16 test-qwen4exp-mtp-sycl-q8
+            PROPERTIES TIMEOUT 180 RESOURCE_LOCK sycl0)
+    endif()
 
     set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
     file(MAKE_DIRECTORY "${MODEL_DIR}")
@@ -368,6 +381,11 @@ if (TARGET cpp-httplib)
 endif()
 
 llama_build_and_test(test-speculative-adaptive.cpp)
+
+# Synthetic checks always run; absent GPU traces are explicitly skipped.
+llama_build_and_test(test-spec-adaptive-curve.cpp)
+set_tests_properties(test-spec-adaptive-curve PROPERTIES SKIP_RETURN_CODE 77)
+llama_test(test-spec-adaptive-curve NAME test-spec-adaptive-curve-self-test ARGS --self-test)
 
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
@@ -552,6 +570,22 @@ if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
     add_test(NAME test-sycl-turbo-correctness COMMAND test-sycl-turbo-correctness)
     set_property(TEST test-sycl-turbo-correctness PROPERTY LABELS sycl)
     set_property(TEST test-sycl-turbo-correctness PROPERTY TIMEOUT 180)
+    # GGML_SYCL_FA_LARGE_GRF: the pure parse and launch decision, no GPU needed.
+    add_executable(test-sycl-fa-large-grf test-sycl-fa-large-grf.cpp)
+    target_link_libraries(test-sycl-fa-large-grf PRIVATE ggml ggml-sycl)
+    target_include_directories(test-sycl-fa-large-grf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
+    add_test(NAME test-sycl-fa-large-grf COMMAND test-sycl-fa-large-grf)
+    set_property(TEST test-sycl-fa-large-grf PROPERTY LABELS sycl)
+    if (GGML_SYCL_FA_LARGE_GRF)
+        # The oracle with the 256-GRF tile variants selected and the FA geometry profile on;
+        # the wrapper requires the selection signal (a TILE prefill launch at grf=256, or the
+        # per-device warning that the architecture has no 256-GRF mode), not just a green sweep.
+        add_test(NAME test-sycl-turbo-correctness-large-grf
+                 COMMAND ${CMAKE_COMMAND} -DORACLE=$<TARGET_FILE:test-sycl-turbo-correctness>
+                         -P ${CMAKE_CURRENT_SOURCE_DIR}/check-sycl-fa-large-grf.cmake)
+        set_property(TEST test-sycl-turbo-correctness-large-grf PROPERTY LABELS sycl)
+        set_property(TEST test-sycl-turbo-correctness-large-grf PROPERTY TIMEOUT 660)
+    endif()
 
     # NOTE: linking only ggml-sycl does NOT bring in ggml/include (that dir is exported PUBLIC
     # by the `ggml`/`ggml-base` targets only, see ggml/src/CMakeLists.txt); a test that links
@@ -606,4 +640,14 @@ if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
         add_test(NAME test-dsv4-async-failure COMMAND test-dsv4-async-failure -m "${MODEL_DIR}/deepseek4-moe.gguf")
         set_tests_properties(test-dsv4-async-failure PROPERTIES LABELS sycl FIXTURES_REQUIRED generate-models)
     endif()
+endif()
+
+if (TARGET test-sycl-xmx-gather-stubs)
+    add_test(NAME test-sycl-xmx-gather-stubs COMMAND test-sycl-xmx-gather-stubs)
+    set_tests_properties(test-sycl-xmx-gather-stubs PROPERTIES LABELS "sycl-build" TIMEOUT 30)
+endif()
+
+if (TARGET test-sycl-xmx-gather-images)
+    add_test(NAME test-sycl-xmx-gather-images COMMAND test-sycl-xmx-gather-images)
+    set_tests_properties(test-sycl-xmx-gather-images PROPERTIES LABELS "sycl-build" TIMEOUT 30)
 endif()

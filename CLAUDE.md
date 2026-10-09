@@ -4,6 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 IMPORTANT: Ensure you've thoroughly reviewed the [AGENTS.md](AGENTS.md) file before beginning any work.
 
+Project roles in `.claude/agents/` and their Codex counterparts in `.codex/agents/` share the
+[subagent roster and contract](docs/development/agents.md). Their Markdown bodies are shared
+domain runbooks; keep the corresponding Codex description in sync when changing routing.
+
 ## What this repo is
 
 Single-maintainer fork of `ggml-org/llama.cpp` carrying the **TurboQuant+** codec stack
@@ -34,7 +38,7 @@ rationale and the paper corpus.
 ## Operating contract
 
 **Precedence when instructions conflict:** current task intent > this file, `AGENTS.md`, and the
-pinned toolchain versions in `docs/research/sycl-build-runtime-pins.md` > scoped file/platform
+pinned toolchain versions in `docs/research/software-stack/sycl-build-runtime-pins.md` > scoped file/platform
 rules > global defaults. At the same level the more recent and more specific instruction wins.
 Project conventions override style and tool defaults; they never override safety or integrity
 rules. When a material conflict cannot be resolved from context or tools, state it plainly and ask
@@ -94,16 +98,9 @@ Hard rules:
 - **`GGML_SYCL_DNN=ON` is only a request.** The effective `GGML_SYCL_DNNL` compile definition and
   the runtime `GGML_SYCL_DNNL:` line are authoritative; a CPU-only oneDNN package yields
   `GGML_SYCL_DNNL=0` and disables the oneDNN FA/GEMM paths entirely.
-- Fork-added CMake knobs: `GGML_SYCL_DEVICE_CODE_SPLIT` (default ON, `-fsycl-device-code-split=per_kernel`)
-  and `GGML_SYCL_FA_LARGE_GRF` (default OFF; compiles the 256-GRF variants of the FA tile
-  kernels so the runtime knob of the same name works; with `GGML_SYCL_DEVICE_ARCH` set every
-  FA tile kernel is AOT-compiled twice and CMake warns). `GGML_SYCL_FA_ALL_QUANTS` is a
-  compile define (not a CMake option) that widens FA type coverage. No CMake file writes a
-  build provenance JSON; the bench harness records `build_commit` in its `product.json`.
-- The production package recipe (`/mnt/mrgr/llama.cpp-sycl-f16-git/PKGBUILD`, fork master,
-  AOT `acm-g10`, `GGML_SYCL_FA_LARGE_GRF=ON` since 2026-10-01) is what the unit
-  `llama-gpu@Ornith-1.5-35B-Q4_K_M.service` runs; `pacman -Q llama.cpp-sycl-f16-git` tells
-  you which commit is live.
+- Fork-added CMake knobs: `GGML_SYCL_DEVICE_CODE_SPLIT` (default ON),
+  `GGML_SYCL_XMX_GATHER` (AUTO/ON/OFF), and build provenance are documented in
+  `docs/backend/SYCL.md`. `GGML_SYCL_FA_ALL_QUANTS` is a compile define, not a CMake option.
 - Vulkan/CPU-only builds are the quick way to smoke-test non-SYCL changes (`cmake -B build && cmake --build build -j`).
 
 ## Tests
@@ -316,9 +313,10 @@ code; a knob that must reject `1junk`-style values parses the raw text itself, a
 
 ## Standing decisions - do not re-litigate without new evidence
 
-Full evidence lives in `docs/research/` (dated artifacts, notably
-`sycl-a770-p5-performance-campaign-2026-07-19.md`, `standard-sycl-baseline-2026-07-11.md`,
-`sycl-build-runtime-pins.md`) and `turbo-fa-research-artifact.md`.
+Full evidence lives in `docs/research/` (dated artifacts sorted by topic, index in
+`docs/research/README.md`; notably `sycl/sycl-a770-p5-performance-campaign-2026-07-19.md`,
+`sycl/standard-sycl-baseline-2026-07-11.md`, `software-stack/sycl-build-runtime-pins.md`
+and `turbo/turbo-fa-research-artifact.md`).
 
 - **Turbo is a CAPACITY feature**, not a speed feature: more context or a bigger model in the same
   VRAM. Parity with f16/q8_0 decode t/s is not the bar, and the turbo FA-speed chase is closed.

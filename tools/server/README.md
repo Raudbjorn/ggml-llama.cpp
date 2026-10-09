@@ -11,11 +11,11 @@ Set of LLM REST APIs and a web UI to interact with llama.cpp.
  * Reranking endpoint (https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
- * Multimodal ([documentation](../../docs/multimodal.md)) / with OpenAI-compatible API support
+ * Multimodal ([documentation](../../docs/features/multimodal.md)) / with OpenAI-compatible API support
  * Monitoring endpoints
  * Schema-constrained JSON response format
  * Prefilling of assistant messages similar to the Claude API
- * [Function calling](../../docs/function-calling.md) / tool use for ~any model
+ * [Function calling](../../docs/features/function-calling.md) / tool use for ~any model
  * Speculative decoding
  * Easy-to-use web UI
 
@@ -349,7 +349,7 @@ It is currently available in the following endpoints:
 - The non-OAI-compatible completions endpoint.
 - The non-OAI-compatible embeddings endpoint.
 
-For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
+For more details, please refer to [multimodal documentation](../../docs/features/multimodal.md)
 
 ### Server tools support
 
@@ -515,6 +515,35 @@ docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggml-org/llama.cpp:se
 
 # or, with CUDA:
 docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
+```
+
+### Production deployment
+
+`llama-server` does not load `.env` files. Supply server configuration through the shell, systemd, or the container runtime.
+
+| Setting | Command-line option | Environment variable |
+| --- | --- | --- |
+| API key | `--api-key` | `LLAMA_API_KEY` |
+| API key file | `--api-key-file` | `LLAMA_ARG_API_KEY_FILE` |
+| Hugging Face token | `--hf-token` | `HF_TOKEN`, then `HUGGING_FACE_HUB_TOKEN` |
+| Model endpoint | None | `MODEL_ENDPOINT`, then `HF_ENDPOINT`, then `https://huggingface.co/` |
+| CORS allowlist | `--cors-origins` | `LLAMA_ARG_CORS_ORIGINS` |
+
+`LLAMA_ARG_API_KEY` and `HUGGINGFACE_HUB_TOKEN` are not accepted by `llama-server`. Unknown `LLAMA_ARG_*` diagnostics require `--warn-unknown-env` (or `LLAMA_ARG_WARN_UNKNOWN_ENV=1`); when no API key resolves, the diagnostic for `LLAMA_ARG_API_KEY` names the supported sources. The server warns about `HUGGINGFACE_HUB_TOKEN` when no supported Hugging Face token resolves.
+
+For non-loopback deployments, require API authentication and configure an explicit CORS origin. Keep `--ui-mcp-proxy`, `--tools`, and `--agent` disabled in untrusted environments. When enabled, `/cors-proxy` blocks non-global numeric, local, and metadata direct targets by default; `--ui-mcp-proxy-allow` adds exact host exceptions. Redirect destinations and DNS answers are not revalidated or pinned. It is not a general-purpose reverse proxy.
+
+Request and deferred-task queues are unbounded, and `llama-server` has no queue-depth 429 policy. Exposed deployments must enforce request-body size, request rate, concurrent in-flight requests, and upstream timeouts at a trusted ingress. This is an acknowledged limitation, not in-process protection.
+
+Example using placeholder values and the SDK deployment port:
+
+```bash
+LLAMA_API_KEY='<replace-with-api-key>' \
+HF_TOKEN='<replace-with-hugging-face-token>' \
+MODEL_ENDPOINT='https://models.example.invalid/' \
+./llama-server --host 0.0.0.0 --port 8033 \
+    --hf-repo '<organization>/<model>:<quantization>' \
+    --cors-origins 'https://app.example.invalid'
 ```
 
 ## Using with CURL
@@ -1455,7 +1484,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
 
-**See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
+**See our [Function calling](../../docs/features/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
 
 *Timings and context usage*
 

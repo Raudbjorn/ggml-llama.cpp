@@ -393,12 +393,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
     common_download_hf_plan plan_spec;
     common_download_opts opts;
 
-    const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
-                                        params.speculative.types.end(),
-                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end() ||
-                                     std::find(params.speculative.types.begin(),
-                                        params.speculative.types.end(),
-                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) != params.speculative.types.end();
+    const bool spec_type_draft_mtp = params.speculative.has_mtp();
 
     const bool spec_type_draft_dflash = std::find(params.speculative.types.begin(),
                                            params.speculative.types.end(),
@@ -953,6 +948,12 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     // parse all CLI args now, so that -hf is available below for remote preset resolution
     parse_cli_args();
 
+    if (ctx_arg.ex == LLAMA_EXAMPLE_SERVER) {
+        if (std::getenv("HUGGINGFACE_HUB_TOKEN") != nullptr && common_models_handler_get_hf_token(params).empty()) {
+            LOG_WRN("HUGGINGFACE_HUB_TOKEN is ignored by llama-server; use HF_TOKEN or --hf-token\n");
+        }
+    }
+
     if (params.moe_cache.mode == COMMON_MOE_CACHE_MODE_ON && !params.no_extra_bufts) {
         LOG_INF("explicit MoE cache mode disables weight repacking\n");
         params.no_extra_bufts = true;
@@ -1049,7 +1050,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         const std::vector<std::string> unknown_env_vars =
             find_unknown_env_vars(ctx_arg.options, common_get_process_environment());
         for (const std::string & name : unknown_env_vars) {
-            LOG_WRN("unknown environment variable: %s\n", name.c_str());
+            if (ctx_arg.ex == LLAMA_EXAMPLE_SERVER && name == "LLAMA_ARG_API_KEY" && params.api_keys.empty()) {
+                LOG_WRN("LLAMA_ARG_API_KEY is ignored; use LLAMA_API_KEY, LLAMA_ARG_API_KEY_FILE, --api-key, or --api-key-file\n");
+            } else {
+                LOG_WRN("unknown environment variable: %s\n", name.c_str());
+            }
         }
     }
 
@@ -2964,7 +2969,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (!llama_supports_gpu_offload()) {
                 fprintf(stderr, "warning: no usable GPU found, --gpu-layers option will be ignored\n");
                 fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
-                fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
+                fprintf(stderr, "warning: consult docs/build/build.md for compilation instructions\n");
             }
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
@@ -4514,7 +4519,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (!llama_supports_gpu_offload()) {
                 fprintf(stderr, "warning: no usable GPU found, --gpu-layers-draft option will be ignored\n");
                 fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
-                fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
+                fprintf(stderr, "warning: consult docs/build/build.md for compilation instructions\n");
             }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_GPU_LAYERS_DRAFT"));
