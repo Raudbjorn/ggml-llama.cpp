@@ -24,7 +24,7 @@ llama_memory_recurrent::llama_memory_recurrent(
                      bool   offload,
                  uint32_t   mem_size,
                  uint32_t   n_seq_max,
-                 uint32_t   n_rs_seq,
+                 uint32_t   n_rs_seq_req,
                      bool   gdn_replay_req,
     const layer_filter_cb & filter) : hparams(model.hparams), n_seq_max(n_seq_max) {
     const int32_t n_layer = hparams.n_layer();
@@ -33,7 +33,7 @@ llama_memory_recurrent::llama_memory_recurrent(
     size = mem_size;
     used = 0;
 
-    this->n_rs_seq = n_rs_seq;
+    this->n_rs_seq = n_rs_seq_req;
     rs_idx.assign(n_seq_max, 0);
 
     // DRC: opt-in via --gdn-replay (threaded through common_params/cparams) or, for quick

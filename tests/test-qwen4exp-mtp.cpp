@@ -10,6 +10,7 @@
 #include "../src/llama-model-saver.h"
 #include "../src/llama-context.h"
 #include "../src/llama-model.h"
+#include "../src/llama-memory-recurrent.h"
 
 #include <algorithm>
 #include <cmath>
@@ -712,6 +713,13 @@ static void test_batch_validation(llama_model * head, const std::filesystem::pat
     fprintf(stderr, "PASS batch validation and narrower draft vocabulary\n");
 }
 
+static void test_empty_recurrent_memory(llama_model * model) {
+    llama_memory_recurrent memory(*model, GGML_TYPE_F32, GGML_TYPE_F32, false, 4, 1, 3,
+                                  [](int32_t) { return false; });
+    require(memory.n_rs_seq == 0, "empty filtered memory disables rollback snapshots on the member");
+    fprintf(stderr, "PASS empty recurrent memory disables rollback snapshots\n");
+}
+
 // A head exported without token_embd.weight and output.weight drafts with the tables of the
 // model it drafts for, reached through llama_context_params::ctx_other.
 static void test_borrowed_tables(const std::string & bare_path, const std::string & doubled_path,
@@ -1158,6 +1166,7 @@ int main(int argc, char ** argv) {
     };
     if (argc == 2 && std::string(argv[1]) == "--ordinary-head-only") {
         test_batch_validation(head.get(), dir);
+        test_empty_recurrent_memory(target.get());
         test_ordinary_context(head.get(), target.get());
         test_ordinary_draft_driver(target.get(), head.get());
         finish();
@@ -1194,6 +1203,7 @@ int main(int argc, char ** argv) {
         return 0;
     }
     test_batch_validation(head.get(), dir);
+    test_empty_recurrent_memory(target.get());
     for (int omitted = 0; omitted < 4; ++omitted) {
         const std::string bad = (dir / "missing.gguf").string();
         write_fixture(bad, true, omitted);
