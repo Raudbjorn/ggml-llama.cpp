@@ -42,6 +42,9 @@
 
 # Build Artifacts
 
+/check_queue
+/repro_l0
+/repro_bcs_reset
 /tags
 /.build/
 /build*
