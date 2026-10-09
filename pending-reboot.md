@@ -165,6 +165,14 @@ anything on the desktop. `/etc/udev/rules.d/71-arc-render-restricted.rules`:
 SUBSYSTEM=="drm", KERNELS=="0000:03:00.0", KERNEL=="renderD*", GROUP="render", MODE="0660"
 ```
 
+This mode-only restriction assumes no ACL grants access separately. Checked 2026-10-09:
+the installed `70-uaccess.rules` tags DRM `card*` nodes only; the Arc render node's
+`udevadm info --query=property` output has no access tags, and `getfacl` shows only the
+owner/group/other entries. Upstream's [render-node access rule](https://github.com/systemd/systemd/blob/main/rules.d/70-uaccess.rules.in)
+is conditional on `GROUP_RENDER_UACCESS`. Recheck tags and ACLs if the packaged rules change;
+`MODE="0660"` alone does not remove an ACL grant. This does not replace the still-missing check
+with a running, active greeter.
+
 - Applied 2026-10-06 01:58 with `udevadm trigger --action=change --subsystem-match=drm
   --sysname-match=renderD128`. `renderD128` is now `crw-rw---- root render`; `renderD129` (Radeon)
   stays `0666`.
@@ -295,6 +303,13 @@ privileged probes; without root the compositor is invisible to `fuser`. `systemc
 must query the desktop user's manager, not root's. Every device is named by PCI address,
 so the checks stay valid even if the card numbers change at boot.
 
+The empty-client expectations below require all Arc compute services and other Arc-using
+apps to be stopped first. Stop the relevant units (for example,
+`sudo systemctl stop llama-gpu@Ornith-1.5-35B-A3B-uncensored-Q8_0`) and close remaining Arc-using
+apps, then run the probes. If compute is intentionally left running, expect its clients in
+both lists; their presence is not a desktop-isolation failure, but it prevents `ccs_mode`
+writes. Restart any services you stopped after the checks.
+
 ```bash
 ARC=0000:03:00.0 RADEON=0000:0f:00.0
 grep -E 'modeset\(G0\)' /var/log/Xorg.0.log                       # expect: no output
@@ -352,7 +367,9 @@ From a text console (Ctrl+Alt+F3):
   - The likely cause is a missing or wrong `desktop-card` link, which leaves KWin with no GPU.
 - The `70-desktop-gpu.rules` udev rule only adds links and is safe to leave in place.
 - Rule 71: delete `/etc/udev/rules.d/71-arc-render-restricted.rules`, then reload the rules and
-  trigger the Arc's current render node. Do this if a non-root service outside `render` loses
+  trigger an `add` event for the Arc's current render node. The installed
+  `50-udev-default.rules` skips its render-node mode assignment on `change` events; `add`
+  reapplies the host's `0666` default. Do this if a non-root service outside `render` loses
   the Arc:
 
   ```bash
@@ -361,7 +378,7 @@ From a text console (Ctrl+Alt+F3):
     ARC_RENDER=$(readlink -e /dev/dri/by-path/pci-0000:03:00.0-render)
     test -c "$ARC_RENDER"
     sudo udevadm control --reload
-    sudo udevadm trigger --settle --action=change --subsystem-match=drm --sysname-match="${ARC_RENDER##*/}"
+    sudo udevadm trigger --settle --action=add --subsystem-match=drm --sysname-match="${ARC_RENDER##*/}"
     ls -l "$ARC_RENDER"  # expect: crw-rw-rw- root render (0666)
   )
   ```
