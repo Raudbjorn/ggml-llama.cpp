@@ -113,7 +113,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - `ggml/src/ggml-sycl/fattn.cpp:871-1017` and `ggml/src/ggml-sycl/ggml-sycl.cpp:7017-8123` - route selection, support, and dispatch preflight.
 - `ggml/src/ggml-sycl/fattn-vec.hpp:155,407-409` and `ggml/src/ggml-sycl/fattn-tile.hpp` - supported consumers.
 - `tests/test-backend-ops.cpp`, `tests/test-sycl-turbo-correctness.cpp`, and `tests/test-qwen4exp-mtp.cpp` - operator, route, transition, and token tests.
-- `docs/research/qwen4exp-mtp-correctness-2026-10-04.md:412-418` - PR #90 note updated only after proof.
+- `docs/research/speculative/qwen4exp-mtp-correctness-2026-10-04.md:410-418` - PR #90 note updated only after proof.
 - `scripts/perf/verify-causal-prefix-mask.py` - planned deep/fallback/reservation comparison.
 
 ## Verification

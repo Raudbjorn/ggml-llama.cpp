@@ -13,9 +13,9 @@ boundary, but separates their costs. `LLAMA_SPEC_LOG` records cycle data
 without forcing a device synchronization. `LLAMA_SPEC_PROFILE` adds explicit
 phase-boundary synchronization so wall times are comparable.
 
-The log is append-only JSONL. A row's `top1_probabilities` covers each emitted
-draft token and also the evaluated candidate that stopped the draft when a
-probability stop fires; `drafted_count` counts only emitted draft tokens.
+The log is append-only JSONL. A row's `top1_probabilities` covers every attempted
+candidate, including any probability-stop candidate and attempts later removed
+from the selected proposal; `drafted_count` counts only final selected tokens.
 Timing rows identify whether they are synchronized.
 
 Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`, changes
@@ -52,9 +52,11 @@ disabled-path contract.
 3. The recording specialization captures attempted token ID, top-1 probability,
    and emitted/stopped state. After every drafter returns, finalize the proposal
    in `common_speculative_draft` only after all `n_min` clears, implementation
-   selection, and common `n_max` resizing. Truncate token records in lockstep
-   with the final result and snapshot immutable `drafted_count=result.size()`.
-   A cleared or unselected attempt keeps diagnostic `attempted_count` but has
+   selection, and common `n_max` resizing. Keep the complete attempted-record
+   stream for `top1_probabilities` and `attempted_count`; truncate only the
+   separate emitted/proposal-aligned records with the final result and snapshot
+   immutable `drafted_count=result.size()`. A cleared or unselected attempt
+   retains all diagnostic attempted records but has
    `selected=false`, `drafted_count=0`, and `accepted_count=0`.
 4. Preserve the immutable selected snapshot and proposal ID across checkpoint
    replay even when `slot.spec_draft` is replaced by accepted tokens plus a
@@ -124,6 +126,9 @@ file, and assigns the measured launch request IDs. Expected evidence:
 - multi-sequence tests give all participants one shared phase identity and never
   sum duplicated shared wall time as exclusive sequence cost;
 - each probability-stop row ends with a non-emitted attempted probability;
+- probability stops followed by `n_min` clearing, `n_max` clamping, or loss of
+  implementation selection retain the entire attempted stream and its final
+  stopped candidate while only the proposal-aligned records change;
 - for each unique profiled phase,
   `abs(cycle_wall_us-draft_wall_us-verify_sample_wall_us)` is no greater than
   its measured `sync_overhead_us`;

@@ -90,15 +90,17 @@ driver, and boot for both launches.
 Prerequisites: stop `llama-sycl.cpp.service`, verify sole tenancy on
 `/dev/dri/renderD128`, name the xe or i915 driver, set
 `ZES_ENABLE_SYSMAN=1`, and apply the post-run fault gate from `AGENTS.md`.
-Run one instrumented process per fixture:
+Run one instrumented process per fixture, selecting the same `none-q8_0` arm
+with `ONLY` (`LAUNCHES` applies only to `MODE=ab`):
 
 ```bash
-ZES_ENABLE_SYSMAN=1 LLAMA_BENCH_MEM_LOG=/tmp/p02-8pct.jsonl LLAMA_BENCH_MEM_INTERVAL_MS=50 MODE=baseline CTX=16384 REPEATS=1 LAUNCHES=1 PROMPTS=/tmp/p02-8pct-prompts.jsonl OUT_TAG=p02-8pct timeout 1800 python3 scripts/perf/bench_spec.py
-ZES_ENABLE_SYSMAN=1 LLAMA_BENCH_MEM_LOG=/tmp/p02-full.jsonl LLAMA_BENCH_MEM_INTERVAL_MS=50 MODE=baseline CTX=16384 REPEATS=1 LAUNCHES=1 PROMPTS=/tmp/p02-full-prompts.jsonl OUT_TAG=p02-full timeout 1800 python3 scripts/perf/bench_spec.py
+ZES_ENABLE_SYSMAN=1 LLAMA_BENCH_MEM_LOG=/tmp/p02-8pct.jsonl LLAMA_BENCH_MEM_INTERVAL_MS=50 MODE=baseline ONLY=none-q8_0 CTX=16384 REPEATS=1 PROMPTS=/tmp/p02-8pct-prompts.jsonl OUT_TAG=p02-8pct timeout 1800 python3 scripts/perf/bench_spec.py
+ZES_ENABLE_SYSMAN=1 LLAMA_BENCH_MEM_LOG=/tmp/p02-full.jsonl LLAMA_BENCH_MEM_INTERVAL_MS=50 MODE=baseline ONLY=none-q8_0 CTX=16384 REPEATS=1 PROMPTS=/tmp/p02-full-prompts.jsonl OUT_TAG=p02-full timeout 1800 python3 scripts/perf/bench_spec.py
 ```
 
 Expected evidence:
 
+- each launch prints `arms: ['none-q8_0']`;
 - each summary contains exactly one process-lifetime memory record with positive
   exact-sample count, provider provenance, `min_free_bytes`, and
   `final_free_bytes`;

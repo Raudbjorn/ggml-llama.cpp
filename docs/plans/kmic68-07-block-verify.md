@@ -51,7 +51,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    compute `keep[k+1]` from `P[k]`, `q[k]`, and `draft[k]`. For a
    nonterminal position, compute
    `S=sum_y max(keep[k+1]*P[k+1](y)-q[k+1](y),0)` and
-   `h=S/(S+1-keep[k+1])`; for `k=G-1`, use `h=keep[G]`. Set
+   `h[k+1]=S/(S+1-keep[k+1])`; for `k=G-1`, use `h[G]=keep[G]`. Set
    `tau=k+1` whenever the draw passes and continue through the block.
 4. Initialize correction/bonus `y` from the target draw at `P[tau]`. If
    `tau<G`, form the residual as
@@ -67,10 +67,12 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    do not share it across slots or independently seeded samplers. Protect updates
    when one acceptor can be reached concurrently.
 7. The pure helper computes provisional
-   `E_block=sum_{k=0..G-1} keep[k+1]` and
+   `E_block=sum_{r=1..G} (1-product_{i=r..G}(1-h[i]))` and
    `E_token=sum_{k=0..G-1} product_{j=0..k} min(1,P[j](draft[j])/q[j](draft[j]))`,
    then returns `(tau,y,keep,E_block,E_token)` without touching long-lived
-   counters. Both expectations count accepted draft tokens only and exclude the
+   counters. Conditional on the recorded proposal, the final prefix reaches `r`
+   if any independent draw at positions `r..G` passes; `keep[r]` is not that
+   probability. Both expectations count accepted draft tokens only and exclude the
    always-emitted correction/bonus token `y`. The caller holds those
    contributions with the proposal result.
 8. Only after P06 successfully copies committed sampler/RNG state and atomically
@@ -110,6 +112,14 @@ Add a diagnostic-lifetime test: the same acceptor accumulates 128 eligible block
 resets between requests, then accumulates 128 more and emits exactly one
 `blocks=256` record. Two different acceptors with 128 blocks each emit none and
 never mix identities.
+
+Add an exact diagnostic test enumerating all pass/fail combinations for short
+blocks and weighting the greatest passing position by its independent-draw
+probability. For `G=2`, `P[0]=P[1]=(0.25,0.75)`,
+`q[0]=q[1]=(0.5,0.5)`, and `draft=(0,1)`, the helper gets
+`keep=(1,0.5,0.75)`, `h=(0,0.75)`, and `E_block=1.5`, not
+`sum(keep[1:])=1.25`. Include all-zero/all-one draws and `G=1`; the
+diagnostic calculation must consume no RNG draws.
 
 ```bash
 timeout 240 ctest --test-dir build-sycl -R '^test-sampling$' --output-on-failure
