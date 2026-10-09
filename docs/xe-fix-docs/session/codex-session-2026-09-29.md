@@ -11,14 +11,15 @@ from other investigations; it does not claim ownership of their experiments,
 production changes or later kernel work.
 
 - [Full final research report](../FINAL_REPORT.md): the report requested by the
-  user, preserved byte-for-byte from `docs/research/`.
+  user, with portable links and ASCII-normalized text.
 - [Final user-facing response](final-response-2026-09-29.md): the delivered
   explanation, with its report link pointed at this archive.
 - [Correction guide](#corrections-and-evidence-precedence): essential when
   reading older summaries in this directory.
 - [Source manifest](source-manifest-2026-09-30.json): original paths, archived
-  paths, byte counts and SHA-256 for 192 source files. Existing identical copies
-  were reused; missing files were copied. It covers 12,726,618 source bytes.
+  paths, current and original byte counts and SHA-256 for 173 committed files.
+  Nineteen unbundled artifacts are listed separately under `omitted`; this is
+  a partial archive, and historical tracer wrappers are not directly runnable.
 
 This narrative reconstructs the session from available conversation context,
 saved artifacts and tool results. It is not represented as a verbatim transcript

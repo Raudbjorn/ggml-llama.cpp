@@ -1,9 +1,9 @@
 N-xe-r2 hang, 2026-09-29 (xe KMD, 7.3.0-rc1-273-tkg-bore, NEO 26.35.39758, b12305 4e7400c3a)
 
 Round 2 started 12:07:05. Three rows completed by 12:08-12:09:
-  pp512 202.86 ± 9.81 | tg64 13.38 ± 0.17 | pp512 @ d8192 170.24 ± 3.03
+  pp512 202.86 +/- 9.81 | tg64 13.38 +/- 0.17 | pp512 @ d8192 170.24 +/- 3.03
 Fourth test (tg64 @ d8192) never completed; killed 12:31:25 (SIGTERM, exited in 2 s).
-Round 1 (12:00:59-12:04:05) had completed the same test at 12.50 ± 0.13.
+Round 1 (12:00:59-12:04:05) had completed the same test at 12.50 +/- 0.13.
 
 State while hung (sampled ~12:30):
 - llama-bench PID 249340: 1350 s elapsed, main thread 99.9 % CPU in userspace (R, no kernel stack);

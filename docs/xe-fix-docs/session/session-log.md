@@ -33,9 +33,9 @@ After switching from i915 to xe driver on Arc A770:
 
 Key files:
 
-- `README.md` (488 lines) — complete driver config, method, results, fix ladder, upstream report material
-- `copy-path-trace.md` — 17:35 follow-up tracer evidence confirming expert-weight uploads
-- `raw/` — 28 subdirectories with bench results, coredumps, traces, logs
+- `README.md` (488 lines) - complete driver config, method, results, fix ladder, upstream report material
+- `copy-path-trace.md` - 17:35 follow-up tracer evidence confirming expert-weight uploads
+- `raw/` - 28 subdirectories with bench results, coredumps, traces, logs
 
 ### Additional Investigation Artifacts
 
@@ -55,7 +55,7 @@ Key files:
 
 - **Copy engine ON:** 11/14 failures (BCS resets, silent hangs, decode collapse)
 - **Copy engine OFF:** 0/10 failures (4 benchmark rounds + 6 production requests)
-- Every kernel-visible failure: `Engine reset: engine_class=bcs … Timedout job … guc_id=6`
+- Every kernel-visible failure: `Engine reset: engine_class=bcs ... Timedout job ... guc_id=6`
 
 ### 2. Root Cause
 
@@ -74,7 +74,7 @@ MoE expert-weight uploads via scheduler `copy_experts` (ggml-backend.cpp:2430):
 - Host-resident Q4_K/Q6_K expert weights selected per token
 - ~860 KB per expert slice (e.g., `blk.1.ffn_down_exps.weight`, Q6_K, 860672 bytes)
 - Hundreds per token, 0.4-2 MB each
-- NOT activation shuttles — the earlier claim was corrected
+- NOT activation shuttles - the earlier claim was corrected
 
 ### 4. Workaround
 
@@ -103,7 +103,7 @@ MoE expert-weight uploads via scheduler `copy_experts` (ggml-backend.cpp:2430):
 
 | Rung | Test | Result |
 | ------ | ------ | -------- |
-| Blitter job_timeout_ms=10000 | Irrelevant — NEO LR queues have no watchdog | Kept (harmless) |
+| Blitter job_timeout_ms=10000 | Irrelevant - NEO LR queues have no watchdog | Kept (harmless) |
 | `UR_L0_USE_COPY_ENGINE=0` soak | 4/4 bench clean, 6/6 production clean | **WORKS** |
 | Localization (copy engine back on) | in-order off: reset faster; counter-events: 1 pass; batched CL: decode collapse; direct/relaxed: stall | Nothing rescues default |
 | Event caching disable | Stalls before first row | Not the lever |
@@ -131,9 +131,9 @@ Location: `docs/xe-fix-docs/analysis/adversarial-research-artifact.md` (includes
 
 **Key non-claims documented:**
 
-- ❌ IPEHR=0x72080025 not proof of wrong-stream submission
-- ❌ xe has no proven inherent decode regression
-- ❌ llama.cpp has no buffer-ordering bug
+- [fail] IPEHR=0x72080025 not proof of wrong-stream submission
+- [fail] xe has no proven inherent decode regression
+- [fail] llama.cpp has no buffer-ordering bug
 
 ---
 
@@ -144,7 +144,7 @@ Complete adversarial research artifact at:
 
 Contains all required phases:
 
-1. Frame Lock — Version Pinning
+1. Frame Lock - Version Pinning
 2. Phase 0.5 Framing Pushback
 3. Verified Evidence (9 findings with confidence)
 4. Root-Cause Hypotheses (4 ranked)
@@ -171,25 +171,25 @@ Contains all required phases:
 
 ```
 docs/xe-fix-docs/
-├── evidence/
-│   ├── sycl-oneapi-benchmarks-2026-09-29/     # Canonical evidence (README, copy-path-trace, raw/)
-│   ├── xe-investigation-20260929/             # Tracer artifacts
-│   └── arc-a770-xe-driver-switch-2026-09-29.md # Operational write-up
-├── analysis/
-│   └── adversarial-research-artifact.md       # Complete research artifact
-├── artifacts/
-└── session/
-    └── session-log.md                         # This file
++-- evidence/
+|   +-- sycl-oneapi-benchmarks-2026-09-29/     # Canonical evidence (README, copy-path-trace, raw/)
+|   +-- xe-investigation-20260929/             # Tracer artifacts
+|   +-- arc-a770-xe-driver-switch-2026-09-29.md # Operational write-up
++-- analysis/
+|   +-- adversarial-research-artifact.md       # Complete research artifact
++-- artifacts/
++-- session/
+    +-- session-log.md                         # This file
 ```
 
 ---
 
 ## Open Items for Follow-up
 
-1. **Build minimal reproducer** (2 immediate command lists, event-chained copies, ~860 KB, interleaved kernels) — 1-2 days
-2. **File upstream bug** against `intel/compute-runtime` — 0.5 days
-3. **Monitor compute-runtime releases** for `UR_L0_USE_COPY_ENGINE` changes — ongoing
-4. **Do NOT implement per-copy serialization** — rejected (performance killer, no evidence it fixes root cause)
+1. **Build minimal reproducer** (2 immediate command lists, event-chained copies, ~860 KB, interleaved kernels) - 1-2 days
+2. **File upstream bug** against `intel/compute-runtime` - 0.5 days
+3. **Monitor compute-runtime releases** for `UR_L0_USE_COPY_ENGINE` changes - ongoing
+4. **Do NOT implement per-copy serialization** - rejected (performance killer, no evidence it fixes root cause)
 
 ---
 

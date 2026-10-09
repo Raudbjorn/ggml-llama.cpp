@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bench.sh TAG [LD_LIBRARY_PATH] [BINDIR] — offline llama-bench on Ornith, service stopped.
+# bench.sh TAG [LD_LIBRARY_PATH] [BINDIR] - offline llama-bench on Ornith, service stopped.
 set -uo pipefail
 readonly TAG="$1" LDP="${2:-}" BIN="${3:-/usr/bin}"
 readonly UNIT="llama-gpu@Ornith-1.5-35B-Q4_K_M.service"

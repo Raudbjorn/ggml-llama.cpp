@@ -13,17 +13,17 @@ reference numbers are the 2026-09-28 variant-N rounds from
 - **Dense model, all on device:** xe prefill +6 % (pp512) and +17 % (pp2048), decode
   equal. Clean, reproducible.
 - **Ornith-1.5-35B-A3B Q4_K_M with `--fit`, `llama-bench` default `--moe-cache auto`
-  (about half the routed experts host-resident and streamed):** xe prefill +55–62 %,
-  **decode −20 to −29 %** (+14 to +22 ms per token), consistent over five runs. This
+  (about half the routed experts host-resident and streamed):** xe prefill +55-62 %,
+  **decode -20 to -29 %** (+14 to +22 ms per token), consistent over five runs. This
   placement is not the production one; see the `--moe-cache` section.
 - **Stability on xe: 4 failures in 7 long-context exercises**, i915 clean in every
   round. Two silent hangs (host spinning in the L0 adapter's memcpy enqueue), two
-  blitter `Engine reset … Timedout job` events with device coredumps, one of them the
+  blitter `Engine reset ... Timedout job` events with device coredumps, one of them the
   **production `llama-server` in default config on its second real request**.
 - `UR_L0_USE_COPY_ENGINE=0` was the only lever that finished and moved decode
-  (+5–7 %). One pass; not evidence it removes the hang.
-- **Fix ladder (16:37–17:32):** `UR_L0_USE_COPY_ENGINE=0` (all copies on the compute
-  queue) went **0 for 10** (4 bench rounds + 6 real 7k–14k-token production requests)
+  (+5-7 %). One pass; not evidence it removes the hang.
+- **Fix ladder (16:37-17:32):** `UR_L0_USE_COPY_ENGINE=0` (all copies on the compute
+  queue) went **0 for 10** (4 bench rounds + 6 real 7k-14k-token production requests)
   where the default path went 11 failures in 14. Five submission-model variants did not
   rescue the default path; a UR trace shows the copy-engine memcpy chain simply stops
   completing. **Production stays on xe with a unit drop-in setting that variable.**
@@ -31,7 +31,7 @@ reference numbers are the 2026-09-28 variant-N rounds from
 - **Benchmark caveat found late (17:49):** every Ornith `llama-bench` row, including
   the i915 reference, used `--moe-cache auto` (bench default); production pins `off`.
   On the production placement xe decodes real text at ~32.5 t/s; `llama-bench` says
-  47.6 on random tokens. The −20 to −29 % decode figure is for `auto` only; the
+  47.6 on random tokens. The -20 to -29 % decode figure is for `auto` only; the
   production placement has no i915 number yet.
 - Side findings: xe on DG2 has **no HuC**, so VAAPI encode is CQP-only (VBR/CBR fail);
   `LIBVA_DRIVER_NAME=radeonsi` in `/etc/environment` had been breaking Intel VAAPI on
@@ -52,7 +52,7 @@ reference numbers are the 2026-09-28 variant-N rounds from
   are GuC engine resets reported through the TDR error path, not timer expiries.
 - Live under xe: GuC `i915/dg2_guc_70.bin` 70.53.0 RUNNING, HuC N/A, GSC N/A;
   `wedged_mode=1`, `guc_log_level=1`, `probe_display=Y`; GT freq floor 750 MHz (RPe;
-  i915 floors at 300) — observation only; the research pass found no support for frequency management explaining the performance deltas; hwmon `power2_max` 230 W, pkg 50 °C, VRAM 62 °C at idle.
+  i915 floors at 300) - observation only; the research pass found no support for frequency management explaining the performance deltas; hwmon `power2_max` 230 W, pkg 50  degC, VRAM 62  degC at idle.
 - Engines: sysfs classes `bcs ccs rcs vcs vecs`; debugfs `hw_engines` `rcs0 bcs0
   ccs0 ccs1 ccs2 ccs3`; `tile0/gt0/ccs_mode = 1`.
 
@@ -71,19 +71,19 @@ llama-bench -m /mnt/ssd2/models/ornith-1.5-35b-a3b/Ornith-1.5-35B-Q4_K_M.gguf \
   -p 512 -n 64 -d 0,8192 -r 5 -t 12 -o md
 ```
 
-Host quiet for every run (load 0.7–2.0 at start), swap 0/15 GiB, 30 GB RAM free,
-nothing else on the GPU. Values are mean ± sd over 5 repetitions in t/s. `@8k` = KV
+Host quiet for every run (load 0.7-2.0 at start), swap 0/15 GiB, 30 GB RAM free,
+nothing else on the GPU. Values are mean +/- sd over 5 repetitions in t/s. `@8k` = KV
 depth 8192.
 
 ## Results
 
 ### 1. Dense 8B, i915 vs xe (`raw/dense-8b/`)
 
-| test | i915 | xe (clean) | Δ |
+| test | i915 | xe (clean) | delta |
 |---|--:|--:|--:|
-| pp512 | 1408.08 ± 2.41 | 1495.56 ± 0.49 | +6.2 % |
-| pp2048 | 848.93 ± 0.57 | 990.40 ± 1.28 | +16.7 % |
-| tg128 | 60.15 ± 0.07 | 60.58 ± 0.01 | +0.7 % |
+| pp512 | 1408.08 +/- 2.41 | 1495.56 +/- 0.49 | +6.2 % |
+| pp2048 | 848.93 +/- 0.57 | 990.40 +/- 1.28 | +16.7 % |
+| tg128 | 60.15 +/- 0.07 | 60.58 +/- 0.01 | +0.7 % |
 
 A contended xe run (Ornith unit resident, idle) matched the clean one within noise.
 
@@ -91,20 +91,20 @@ A contended xe run (Ornith unit resident, idle) matched the clean one within noi
 
 | Run | env | pp512 | tg64 | pp512 @8k | tg64 @8k | outcome |
 |---|---|---|---|---|---|---|
-| N r2 (i915, 09-28) | — | 125.30 ± 5.67 | 18.13 ± 0.15 | 107.13 ± 1.93 | 16.81 ± 0.70 | clean |
-| N-xe-r1 | — | 197.85 ± 13.41 | 13.85 ± 0.14 | 167.36 ± 4.65 | 12.50 ± 0.13 | clean, 3 min |
-| N-xe-r2 | — | 202.86 ± 9.81 | 13.38 ± 0.17 | 170.24 ± 3.03 | **hang** | stuck in tg64@8k 22 min, killed |
-| N-xe-copyeng0 | `UR_L0_USE_COPY_ENGINE=0` | 202.38 ± 9.98 | 14.50 ± 0.07 | 167.68 ± 2.70 | 13.41 ± 0.20 | clean |
-| N-xe-pinned0 | `GGML_SYCL_ENABLE_HOST_PINNED_MEM=0` | 200.42 ± 9.03 | 12.87 ± 0.08 | 168.44 ± 2.07 | **abort** | bcs engine reset, `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY`, exit 134 |
-| N-xe-graph0 | `GGML_SYCL_ENABLE_GRAPH=0` | 194.33 ± 9.80 | 13.67 ± 0.19 | **hang** | — | stuck in pp512@8k, watchdog 7 min, exit 124 |
+| N r2 (i915, 09-28) | - | 125.30 +/- 5.67 | 18.13 +/- 0.15 | 107.13 +/- 1.93 | 16.81 +/- 0.70 | clean |
+| N-xe-r1 | - | 197.85 +/- 13.41 | 13.85 +/- 0.14 | 167.36 +/- 4.65 | 12.50 +/- 0.13 | clean, 3 min |
+| N-xe-r2 | - | 202.86 +/- 9.81 | 13.38 +/- 0.17 | 170.24 +/- 3.03 | **hang** | stuck in tg64@8k 22 min, killed |
+| N-xe-copyeng0 | `UR_L0_USE_COPY_ENGINE=0` | 202.38 +/- 9.98 | 14.50 +/- 0.07 | 167.68 +/- 2.70 | 13.41 +/- 0.20 | clean |
+| N-xe-pinned0 | `GGML_SYCL_ENABLE_HOST_PINNED_MEM=0` | 200.42 +/- 9.03 | 12.87 +/- 0.08 | 168.44 +/- 2.07 | **abort** | bcs engine reset, `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY`, exit 134 |
+| N-xe-graph0 | `GGML_SYCL_ENABLE_GRAPH=0` | 194.33 +/- 9.80 | 13.67 +/- 0.19 | **hang** | - | stuck in pp512@8k, watchdog 7 min, exit 124 |
 
-Per token: i915 55 ms, xe 69–78 ms at depth 0; 60 ms vs 75–80 ms at 8k.
+Per token: i915 55 ms, xe 69-78 ms at depth 0; 60 ms vs 75-80 ms at 8k.
 
 ### 3. What the decode path is (corrected 17:45)
 
 `--moe-cache` defaults to **off** in this build (`common/arg.cpp`) and the production
 unit pins it off. The fit log line "MoE cache fit selected main-device dense placement
-… (up to 51.3 % coverage)" is the planner's name for the layout it chose; the loader
+... (up to 51.3 % coverage)" is the planner's name for the layout it chose; the loader
 then warns `tensor overrides to CPU are used with mmap enabled`, i.e. roughly half of
 the routed expert tensors are host-resident. A `llama-completion` run with
 `GGML_CUDA_MOE_CACHE_STATS=1` printed neither a cache configuration nor hit/fill
@@ -118,18 +118,18 @@ routing ids back, marks the used experts, groups consecutive ids and issues one
 `ggml_backend_tensor_set_async` per group of expert slices, padded by up to 512 bytes.
 The 17:35 follow-up (`copy-path-trace.md`) caught one such copy live under GDB:
 `SYCL0#blk.1.ffn_down_exps.weight#0`, `GGML_TYPE_Q6_K`, `ne={512,2048,256,1}`,
-offset 202 137 600 = 235 × 860 160 (expert 235), size 860 672 = one expert + 512
+offset 202 137 600 = 235 x 860 160 (expert 235), size 860 672 = one expert + 512
 padding. The earlier claim in this README that the per-token transfers were only
 activation shuttles to CPU-computed experts was **wrong**; they are expert-weight
-uploads, hundreds per token, 0.4–2 MB each. That is the decode cost that xe's copy
-path makes 20–29 % more expensive, and the reason the copy-engine lever moves decode
+uploads, hundreds per token, 0.4-2 MB each. That is the decode cost that xe's copy
+path makes 20-29 % more expensive, and the reason the copy-engine lever moves decode
 at all. Placement is byte-identical on both drivers; bytes moved per token are
 therefore identical too, given identical routing (llama-bench feeds seeded
 pseudo-random tokens on both drivers), so the delta is per-copy cost, not volume.
 `--prefetch-experts-slots` was off in every run.
 
 `llama-bench`'s random tokens are the worst case for expert locality on either
-driver. The relative comparison holds; the absolute 13–14 t/s does not represent
+driver. The relative comparison holds; the absolute 13-14 t/s does not represent
 production. Real text on xe, `llama-completion`, 38-token prompt, 63 tokens: 24.7 t/s
 (40.4 ms/token), two runs within 0.1 t/s.
 
@@ -141,14 +141,14 @@ production. Real text on xe, `llama-completion`, 38-token prompt, 63 tokens: 24.
 
 ```
 __sched_yield
-(libur_adapter_level_zero ×5)
+(libur_adapter_level_zero x5)
 enqueueMemCopyHelper(ur_command_t, ur_queue_handle_t_*, void*, unsigned char, unsigned long, void const*, ...)
 ur::level_zero::urEnqueueUSMMemcpy
 sycl::_V1::detail::MemoryManager::copy_usm
 sycl::_V1::queue::memcpy
 (libggml-sycl)
 ggml_backend_sched_graph_compute_async
-llama_context::graph_compute → process_ubatch → decode
+llama_context::graph_compute -> process_ubatch -> decode
 ```
 
 12 worker threads in `futex_wait`. `fdinfo` over 5 s: `drm-cycles-ccs` +96 088 348 of
@@ -180,7 +180,7 @@ establish exhausted VRAM.
 messages.
 
 **Production server, default config, twice** (`raw/N-xe-server/`). The unit reset
-the blitter at **13:15:16** (`Timedout job: seqno=11684 … in llama-server [264942]`,
+the blitter at **13:15:16** (`Timedout job: seqno=11684 ... in llama-server [264942]`,
 `state=0x29`, unit exited `status=6/ABRT` at 13:15:18) on traffic nobody in this
 session sent, and again at 13:20:39 on request 2 below. The device coredump in
 `raw/N-xe-server/xe-devcoredump-132039.txt.gz` is the **13:15** one (xe keeps a single
@@ -202,14 +202,14 @@ systemd restart. Journal and kernel excerpts alongside. No lever was set.
 **17:35 follow-up, other session** (`copy-path-trace.md`, `raw/N-xe-copytrace*`,
 `raw/copy-tracer/`). An `LD_PRELOAD` tracer on `ggml_backend_tensor_set_async`, default
 copy engine, `bench-xe.sh` flags. Run 1 completed pp512 (197.8) and tg64 (13.60), then
-stalled before pp512@8k with the host in `urQueueFinish → ur_queue_handle_t_::synchronize
-→ sched_yield`; `fdinfo` over 3 s: **bcs +57 603 176 of total +57 603 652, ccs +0**, the
+stalled before pp512@8k with the host in `urQueueFinish -> ur_queue_handle_t_::synchronize
+-> sched_yield`; `fdinfo` over 3 s: **bcs +57 603 176 of total +57 603 652, ccs +0**, the
 mirror image of round 2 (ccs 100 %, bcs 0). Run 2 with `UR_L0_DISABLE_EVENTS_CACHING=1`
 stalled before the first row, host in `enqueueMemCopyHelper`, again bcs scheduled and
 ccs idle (+38 405 183 / +38 405 660 over 2 s). Both terminated by SIGTERM (exit 143).
 Verified here from their samples. Their note says no xe reset appeared during these
-runs; the kernel log disagrees: `17:39:37 Engine reset: engine_class=bcs … Timedout job:
-seqno=88884 … in llama-bench [428746]`, `state=0x29`, fifth bcs reset this boot, fourth
+runs; the kernel log disagrees: `17:39:37 Engine reset: engine_class=bcs ... Timedout job:
+seqno=88884 ... in llama-bench [428746]`, `state=0x29`, fifth bcs reset this boot, fourth
 device coredump saved as `raw/N-xe-copytrace/xe-devcoredump-173937.txt.gz`.
 
 Reading of the two stall shapes together: whichever engine's context holds the pending
@@ -232,7 +232,7 @@ timing, which success on i915 does not exclude. The exact defect is not establis
 The first verdict stopped at three single-pass levers. This rung works the one that
 finished.
 
-### Blitter job timeout (kept, but irrelevant — corrected 18:55)
+### Blitter job timeout (kept, but irrelevant - corrected 18:55)
 
 `xe-a770-tune` also sets `bcs` `job_timeout_ms=10000`. At the time this was written the
 blitter resets were read as 5 s job timeouts. Wrong: NEO puts every queue on an LR-mode
@@ -244,18 +244,18 @@ this workload; it stays because it is harmless. See `deep-research-xe-i915-2026-
 
 ### `UR_L0_USE_COPY_ENGINE=0` soak, Ornith bench (`raw/N-xe-copyeng0*`)
 
-Same command as above, `BENCH_TIMEOUT=420` watchdog, host quiet (load 0.5–5).
+Same command as above, `BENCH_TIMEOUT=420` watchdog, host quiet (load 0.5-5).
 
 | round | pp512 | tg64 | pp512 @8k | tg64 @8k | outcome |
 |---|--:|--:|--:|--:|---|
-| r1 (12:32) | 202.38 ± 9.98 | 14.50 ± 0.07 | 167.68 ± 2.70 | 13.41 ± 0.20 | clean |
-| r2 (16:38) | 201.83 ± 10.74 | 14.52 ± 0.11 | 167.58 ± 2.59 | 13.70 ± 0.11 | clean |
-| r3 (16:41) | 200.99 ± 10.77 | 14.54 ± 0.08 | 167.78 ± 3.35 | 13.33 ± 0.12 | clean |
-| r4 (16:45) | 201.84 ± 10.45 | 14.57 ± 0.18 | 168.85 ± 2.39 | 12.30 ± 0.22 | clean |
+| r1 (12:32) | 202.38 +/- 9.98 | 14.50 +/- 0.07 | 167.68 +/- 2.70 | 13.41 +/- 0.20 | clean |
+| r2 (16:38) | 201.83 +/- 10.74 | 14.52 +/- 0.11 | 167.58 +/- 2.59 | 13.70 +/- 0.11 | clean |
+| r3 (16:41) | 200.99 +/- 10.77 | 14.54 +/- 0.08 | 167.78 +/- 3.35 | 13.33 +/- 0.12 | clean |
+| r4 (16:45) | 201.84 +/- 10.45 | 14.57 +/- 0.18 | 168.85 +/- 2.39 | 12.30 +/- 0.22 | clean |
 
 4/4 clean with copies on the compute queue, against 3 failures in 5 with the copy
 engine on. No xe kernel messages during any of them. Decode 14.5 t/s at depth 0 is
-stable to ±0.05 across rounds; i915 was 18.1.
+stable to +/-0.05 across rounds; i915 was 18.1.
 
 ### Production unit on xe with the lever (`raw/server-soak/`)
 
@@ -279,7 +279,7 @@ copy-engine setting reset the blitter twice in six minutes (13:15, 13:20).
 
 ### Localization rung (`raw/run-xe-levers2.sh`, copy engine back on default)
 
-Host load was 12–16 during these runs (`mergerfs` + an `rg` sweep of the pool, not
+Host load was 12-16 during these runs (`mergerfs` + an `rg` sweep of the pool, not
 part of the test); t/s values are contaminated, pass/fail is not.
 
 | run | env | outcome |
@@ -322,8 +322,8 @@ stall, copytrace stall + 17:39 reset, copytrace-nocache stall; passes: r1, cbeve
 server request 1; counting the decode collapse as a failure). **Copy engine off: 0
 failures in 10** (4 bench rounds, 6 server requests). Five bcs resets this boot, five
 `Timedout job` lines, all `guc_id=6`, four coredumps saved.
-Every kernel-visible failure is the same event: `Engine reset: engine_class=bcs …
-Timedout job … guc_id=6`, bcs0 context runtime 0 ms.
+Every kernel-visible failure is the same event: `Engine reset: engine_class=bcs ...
+Timedout job ... guc_id=6`, bcs0 context runtime 0 ms.
 
 ### Upstream report material
 
@@ -341,38 +341,38 @@ engine-counter samples showing either engine parked (`stall-samples.json`), and 
 live pending copy (`raw/N-xe-copytrace-nocache/live-copy.txt`: one Q6_K expert slice,
 860 672 bytes, from `ggml_backend_sched`'s `copy_experts`). Reproducer: `raw/bench.sh` with
 `llama.cpp-sycl-f16-git b12305` and an MoE model that leaves expert tensors on the CPU
-(`--fit`), failure in 6–9 of 12 runs within 3–10 minutes.
+(`--fit`), failure in 6-9 of 12 runs within 3-10 minutes.
 
 ### Revised verdict
 
 xe + `UR_L0_USE_COPY_ENGINE=0` survived 4 bench rounds and 6 long-context production
 requests; the default path failed 9 of 12 exercises. Intermittent failures and ten
 clean passes are not a proof, but the odds of ten clean passes at the default failure
-rate are well under 1 %. With the lever, xe gives prefill +55–62 % and decode −20 %
-on the random-token bench versus i915 (real-text decode through the unit 22–34 t/s
+rate are well under 1 %. With the lever, xe gives prefill +55-62 % and decode -20 %
+on the random-token bench versus i915 (real-text decode through the unit 22-34 t/s
 with speculation). **Production stays on xe with the drop-in.** The i915 revert
 commands below remain the fallback if the unit ever logs a `bcs` reset again; the
 check is `journalctl -k -g "Timedout job"`.
 
 
-## `--moe-cache` placement: the benchmarks were not measuring the production config (17:49–18:05)
+## `--moe-cache` placement: the benchmarks were not measuring the production config (17:49-18:05)
 
 `llama-bench` in this fork defaults to `--moe-cache auto`; the production unit pins
 `--moe-cache off`. Every Ornith `llama-bench` row above, **including the 09-27/28 i915
 reference rounds** (their `bench.err` carries the same `MoE cache fit selected
 main-device dense placement` lines), ran the `auto` placement: all 42 layers on the GPU,
 about half of the routed expert tensors host-resident, and the scheduler streaming the
-used experts every token. That is the placement with the −20 to −29 % decode on xe and
+used experts every token. That is the placement with the -20 to -29 % decode on xe and
 the copy-engine failures. Nobody runs it in production.
 
 Same bench, xe, copy engine off, three placements (`raw/N-xe-copyeng0-moesoft`,
-`raw/N-xe-copyeng0-moeoff`; `auto` = r2–r4 above):
+`raw/N-xe-copyeng0-moeoff`; `auto` = r2-r4 above):
 
 | `--moe-cache` | placement (fit log) | pp512 | tg64 | pp512 @8k | tg64 @8k |
 |---|---|--:|--:|--:|--:|
 | auto | dense, ~50 % experts host-resident, all streamed | 201.8 | 14.52 | 167.6 | 13.70 |
-| soft | 18/41 layers' experts GPU-resident, 9.6 GB evicted, ~0.5 GB cache | 272.9 ± 7.5 | 22.72 ± 0.06 | 226.3 ± 3.6 | 20.08 ± 0.19 |
-| off | standard `--fit` (no fit-log lines) | 325.0 ± 19.4 | **47.55 ± 0.42** | 274.0 ± 2.6 | **42.07 ± 0.18** |
+| soft | 18/41 layers' experts GPU-resident, 9.6 GB evicted, ~0.5 GB cache | 272.9 +/- 7.5 | 22.72 +/- 0.06 | 226.3 +/- 3.6 | 20.08 +/- 0.19 |
+| off | standard `--fit` (no fit-log lines) | 325.0 +/- 19.4 | **47.55 +/- 0.42** | 274.0 +/- 2.6 | **42.07 +/- 0.18** |
 
 Then real text (`llama-completion`, 562-token man-page prompt, 128 tokens, temperature
 0, same fit/KV/FA flags; `raw/N-xe-realtext-moecache/`):
@@ -425,12 +425,12 @@ and the `UR_L0_USE_COPY_ENGINE=0` drop-in are harmless under i915.
 - **journald**: on the 11:00 xe boot journald wrote only UID-1000 entries
   (`SplitMode=uid`); kernel, PID 1 and root entries were dropped until
   `systemctl restart systemd-journald` at 11:17 (`journalctl --verify` PASS, disk
-  fine). `dmesg` had lost the first 27 s of boot to 624 `amdgpu … Unsupported screen
+  fine). `dmesg` had lost the first 27 s of boot to 624 `amdgpu ... Unsupported screen
   format RA24` lines. No kernel record of the first xe probe exists; firmware state
   came from debugfs.
 - **Multi-CCS**: 4 CCS in hardware, 1 exposed. Intel's `MULTI_CCS_MODES.md` configures
   it through `/sys/class/drm/cardX/gt/gtY/ccs_mode` (i915 layout); xe's file is
-  `…/device/tile0/gt0/ccs_mode`, and `libze_intel_gpu.so.1` (26.35) composes only the
+  `.../device/tile0/gt0/ccs_mode`, and `libze_intel_gpu.so.1` (26.35) composes only the
   i915 path (`/sys/class/drm/` + `/gt/gt` + `/ccs_mode`), so `ZEX_NUMBER_OF_CCS` has
   nothing to write under xe. A root write returns `EBUSY` while any DRM client holds the
   device (kwin, Xorg, Xwayland, logind, llama-server all do). `fdinfo` on the server
@@ -439,7 +439,7 @@ and the `UR_L0_USE_COPY_ENGINE=0` drop-in are harmless under i915.
 - **Live driver swap** is not possible on this workstation: kwin and friends hold
   `card0` even though the A770 has no display; every driver change is a reboot.
 - **PCIe**: endpoint reports `2.5GT/s x1` (DG2 internal switch virtual link); real link
-  `16GT/s x16` at `00:01.1 ↔ 01:00.0`, ReBAR 16 GB.
+  `16GT/s x16` at `00:01.1 <-> 01:00.0`, ReBAR 16 GB.
 
 ## Not claimed
 
@@ -447,7 +447,7 @@ and the `UR_L0_USE_COPY_ENGINE=0` drop-in are harmless under i915.
   reading is inferred from engine counters, the backtrace and the bcs coredumps, not
   from adapter internals.
 - First-rung levers were one pass each; the copy-engine-off lever has 10 passes, the
-  rest of the localization rung one each. Host load was 12–20 during the localization
+  rest of the localization rung one each. Host load was 12-20 during the localization
   rung, so its t/s values are contaminated (pass/fail is not).
 - The UR trace stalled during model load, not in the decode test that failed earlier;
   same copy-chain shape, different moment. `UR_L0_DEBUG` changes timing.

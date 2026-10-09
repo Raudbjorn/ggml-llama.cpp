@@ -17,7 +17,7 @@
 2026-09-29T13:20:40+00:00 vinbonesjr sh[318738]: SYCL error: CHECK_TRY_ERROR( (stream)->memcpy((char *)tensor->data + offset, data, size)): Exception caught in this line of code.
 2026-09-29T13:20:40+00:00 vinbonesjr sh[318738]:   in function ggml_backend_sycl_set_tensor_async at /mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/ggml-sycl.cpp:6230
 2026-09-29T13:20:40+00:00 vinbonesjr sh[318738]: /mnt/nvme1/llama-sycl-build/build/llama.cpp-sycl-f16-git/src/llama.cpp/ggml/src/ggml-sycl/../ggml-sycl/common.hpp:174: SYCL error
-2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: ⚠️ warning: The current terminal doesn't support styling.  Styled output might not appear as expected.
+2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [warning] warning: The current terminal doesn't support styling.  Styled output might not appear as expected.
 2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319503]
 2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319371]
 2026-09-29T13:20:40+00:00 vinbonesjr sh[325416]: [New LWP 319370]

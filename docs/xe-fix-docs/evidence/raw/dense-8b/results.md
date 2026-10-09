@@ -12,9 +12,9 @@ llama-bench -m /mnt/ssd1/models/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf \
 
 | test | i915 (10:37, Ornith unit stopped) | xe (11:09, Ornith unit running, idle) | xe (11:46, Ornith unit stopped) |
 |---|--:|--:|--:|
-| pp512 | 1408.08 ± 2.41 | 1494.10 ± 2.23 | 1495.56 ± 0.49 |
-| pp2048 | 848.93 ± 0.57 | 988.93 ± 0.23 | 990.40 ± 1.28 |
-| tg128 | 60.15 ± 0.07 | 60.53 ± 0.14 | 60.58 ± 0.01 |
+| pp512 | 1408.08 +/- 2.41 | 1494.10 +/- 2.23 | 1495.56 +/- 0.49 |
+| pp2048 | 848.93 +/- 0.57 | 988.93 +/- 0.23 | 990.40 +/- 1.28 |
+| tg128 | 60.15 +/- 0.07 | 60.53 +/- 0.14 | 60.58 +/- 0.01 |
 
 Clean xe vs i915: pp512 +6.2 %, pp2048 +16.7 %, tg128 +0.7 % (noise). An idle
 resident server costs nothing measurable.

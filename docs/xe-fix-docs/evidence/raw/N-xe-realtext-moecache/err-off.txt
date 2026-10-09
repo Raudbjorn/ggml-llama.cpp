@@ -103,7 +103,7 @@
 0.00.173.389 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.00.192.037 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.00.196.565 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.00.214.493 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.00.214.493 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.00.214.495 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.00.214.496 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.00.214.496 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -212,7 +212,7 @@
 0.00.372.262 I print_info: EOS token             = 248046 '<|im_end|>'
 0.00.372.262 I print_info: EOT token             = 248046 '<|im_end|>'
 0.00.372.262 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.00.372.262 I print_info: LF token              = 198 'Ċ'
+0.00.372.262 I print_info: LF token              = 198 '\u010a'
 0.00.372.262 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.00.372.262 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.00.372.262 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -2511,7 +2511,7 @@
 0.00.433.961 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.00.450.173 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.00.454.141 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.00.470.051 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.00.470.051 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.00.470.053 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.00.470.053 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.00.470.053 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -2620,7 +2620,7 @@
 0.00.604.594 I print_info: EOS token             = 248046 '<|im_end|>'
 0.00.604.594 I print_info: EOT token             = 248046 '<|im_end|>'
 0.00.604.594 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.00.604.594 I print_info: LF token              = 198 'Ċ'
+0.00.604.594 I print_info: LF token              = 198 '\u010a'
 0.00.604.595 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.00.604.595 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.00.604.595 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -5038,7 +5038,7 @@
 0.00.668.439 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.00.684.795 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.00.688.738 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.00.704.644 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.00.704.644 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.00.704.647 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.00.704.647 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.00.704.647 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -5147,7 +5147,7 @@
 0.00.822.468 I print_info: EOS token             = 248046 '<|im_end|>'
 0.00.822.468 I print_info: EOT token             = 248046 '<|im_end|>'
 0.00.822.468 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.00.822.468 I print_info: LF token              = 198 'Ċ'
+0.00.822.468 I print_info: LF token              = 198 '\u010a'
 0.00.822.469 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.00.822.469 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.00.822.469 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -7443,7 +7443,7 @@
 0.00.892.180 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.00.907.155 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.00.910.709 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.00.925.227 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.00.925.227 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.00.925.228 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.00.925.228 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.00.925.229 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -7552,7 +7552,7 @@
 0.01.041.631 I print_info: EOS token             = 248046 '<|im_end|>'
 0.01.041.631 I print_info: EOT token             = 248046 '<|im_end|>'
 0.01.041.632 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.01.041.632 I print_info: LF token              = 198 'Ċ'
+0.01.041.632 I print_info: LF token              = 198 '\u010a'
 0.01.041.632 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.01.041.632 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.01.041.632 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -9971,7 +9971,7 @@
 0.01.144.437 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.01.158.747 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.01.162.305 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.01.176.143 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.01.176.143 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.01.176.145 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.01.176.145 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.01.176.146 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -10080,7 +10080,7 @@
 0.01.288.865 I print_info: EOS token             = 248046 '<|im_end|>'
 0.01.288.865 I print_info: EOT token             = 248046 '<|im_end|>'
 0.01.288.866 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.01.288.866 I print_info: LF token              = 198 'Ċ'
+0.01.288.866 I print_info: LF token              = 198 '\u010a'
 0.01.288.866 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.01.288.866 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.01.288.866 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -12378,7 +12378,7 @@
 0.01.346.145 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.01.360.581 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.01.364.081 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.01.378.094 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.01.378.094 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.01.378.096 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.01.378.096 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.01.378.097 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -12487,7 +12487,7 @@
 0.01.497.733 I print_info: EOS token             = 248046 '<|im_end|>'
 0.01.497.734 I print_info: EOT token             = 248046 '<|im_end|>'
 0.01.497.734 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.01.497.734 I print_info: LF token              = 198 'Ċ'
+0.01.497.734 I print_info: LF token              = 198 '\u010a'
 0.01.497.734 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.01.497.734 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.01.497.734 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -14826,7 +14826,7 @@
 0.01.572.565 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.01.587.079 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.01.590.579 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.01.604.662 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.01.604.662 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.01.604.664 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.01.604.664 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.01.604.665 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -14935,7 +14935,7 @@
 0.01.724.655 I print_info: EOS token             = 248046 '<|im_end|>'
 0.01.724.655 I print_info: EOT token             = 248046 '<|im_end|>'
 0.01.724.655 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.01.724.655 I print_info: LF token              = 198 'Ċ'
+0.01.724.655 I print_info: LF token              = 198 '\u010a'
 0.01.724.656 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.01.724.656 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.01.724.656 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -17272,7 +17272,7 @@
 0.01.797.126 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.01.811.568 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.01.815.111 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.01.829.075 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.01.829.075 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.01.829.076 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.01.829.077 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.01.829.077 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -17381,7 +17381,7 @@
 0.01.943.045 I print_info: EOS token             = 248046 '<|im_end|>'
 0.01.943.046 I print_info: EOT token             = 248046 '<|im_end|>'
 0.01.943.046 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.01.943.046 I print_info: LF token              = 198 'Ċ'
+0.01.943.046 I print_info: LF token              = 198 '\u010a'
 0.01.943.046 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.01.943.046 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.01.943.046 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -19724,7 +19724,7 @@
 0.02.016.402 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.02.031.057 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.02.034.567 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.02.048.725 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.02.048.725 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.02.048.726 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.02.048.727 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.02.048.727 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -19833,7 +19833,7 @@
 0.02.164.979 I print_info: EOS token             = 248046 '<|im_end|>'
 0.02.164.979 I print_info: EOT token             = 248046 '<|im_end|>'
 0.02.164.979 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.02.164.979 I print_info: LF token              = 198 'Ċ'
+0.02.164.979 I print_info: LF token              = 198 '\u010a'
 0.02.164.980 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.02.164.980 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.02.164.980 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -22175,7 +22175,7 @@
 0.02.238.247 I llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = qwen35
 0.02.252.899 I llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,248320]  = ["!", "\"", "#", "$", "%", "&", "'", ...
 0.02.256.434 I llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,248320]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-0.02.270.605 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+0.02.270.605 I llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,247587]  = ["\u0120 \u0120", "\u0120\u0120 \u0120\u0120", "i n", "\u0120 t",...
 0.02.270.607 I llama_model_loader: - kv  38:                tokenizer.ggml.eos_token_id u32              = 248046
 0.02.270.607 I llama_model_loader: - kv  39:            tokenizer.ggml.padding_token_id u32              = 248044
 0.02.270.608 I llama_model_loader: - kv  40:                tokenizer.ggml.bos_token_id u32              = 248044
@@ -22284,7 +22284,7 @@
 0.02.392.245 I print_info: EOS token             = 248046 '<|im_end|>'
 0.02.392.245 I print_info: EOT token             = 248046 '<|im_end|>'
 0.02.392.245 I print_info: PAD token             = 248044 '<|endoftext|>'
-0.02.392.246 I print_info: LF token              = 198 'Ċ'
+0.02.392.246 I print_info: LF token              = 198 '\u010a'
 0.02.392.246 I print_info: FIM PRE token         = 248060 '<|fim_prefix|>'
 0.02.392.246 I print_info: FIM SUF token         = 248062 '<|fim_suffix|>'
 0.02.392.246 I print_info: FIM MID token         = 248061 '<|fim_middle|>'
@@ -24609,8 +24609,8 @@
 0.06.960.253 I 
 0.06.960.255 D n_ctx: 32768, add_bos: 0
 0.06.960.257 D tokenize the prompt
-0.06.961.724 D prompt: "BASH(1) General Commands Manual BASH(1) NAME bash - GNU Bourne-Again SHell SYNOPSIS bash [options] [command_string | file] COPYRIGHT Bash is Copyright (C) 1989-2025 by the Free Software Foundation, Inc. DESCRIPTION Bash is a command language interpreter that executes commands read from the standard input, from a string, or from a file. It is a reimplementation and extension of the Bourne shell, the historical Unix command language interpreter. Bash also incorporates useful features from the Korn and C shells (ksh and csh). POSIX is the name for a family of computing standards based on Unix. Bash is intended to be a conformant implementation of the Shell and Utilities portion of the IEEE POSIX specification (IEEE Standard 1003.1). Bash POSIX mode (hereafter referred to as posix mode) changes the shell's behavior where its default operation differs from the standard to strictly conform to the standard. See SEE ALSO below for a reference to a document that details how posix mode affects bash's behavior. Bash can be configured to be POSIX-conformant by default. OPTIONS All of the single-character shell options documented in the description of the set builtin command, including -o, can be used as options when the shell is invoked. In addition, bash interprets the following options when it is invoked: -c If the -c option is present, then commands are read from the first non-option argu‐ ment command_string. If there are arguments after the command_string, the first ar‐ gument is assigned to $0 and any remaining arguments are assigned to the positional parameters. The assignment to $0 sets the name of the shell, which is used in warn‐ ing and error messages. -i If the -i option is present, the shell is interactive. -l Make bash act as if it had been invoked as a login shell (see INVOCATION below). -r If the -r option is present, the shell becomes restricted (see RESTRICTED SHELL be‐ low). -s If the -s option is present, or if no arguments remain after option processing, the shell reads commands from the standard input. This option allows the positional pa‐ rameters to be set when invoking an interactive shell or when reading input through a pipe. -D Print a list of all double-quoted strings preceded by $ on the standard output. These are the strings that are subject to language translation when the current lo‐ cale is not C or POSIX. This implies the -n option; no commands will be executed. [-+]O [shopt_option] shopt_option is one of the shell options accepted by the shopt builtin (see In three sentences, summarize the documentation above:"
-0.06.961.800 D tokens: [ 'BASH':84640, '(':7, '1':16, ')':8, ' General':3146, ' Commands':45608, ' Manual':14121, ' B':417, 'ASH':9255, '(':7, '1':16, ')':8, ' NAME':18544, ' bash':26156, ' -':471, ' GNU':4114, ' Bour':37103, 'ne':785, '-A':6481, 'gain':57146, ' SH':6232, 'ell':598, ' SYN':59612, 'OPSIS':88015, ' bash':26156, ' [':498, 'options':2782, ']':60, ' [':498, 'command':5454, '_string':3773, ' |':735, ' file':999, ']':60, ' COPYRIGHT':14119, ' Bash':37250, ' is':369, ' Copyright':2861, ' (':318, 'C':34, ')':8, ' ':220, '1':16, '9':24, '8':23, '9':24, '-':12, '2':17, '0':15, '2':17, '5':20, ' by':539, ' the':279, ' Free':3455, ' Software':4236, ' Foundation':4846, ',':11, ' Inc':4693, '.':13, ' DESCRIPTION':31124, ' Bash':37250, ' is':369, ' a':264, ' command':3108, ' language':3992, ' interpreter':37999, ' that':421, ' executes':49703, ' commands':10966, ' read':1301, ' from':494, ' the':279, ' standard':5129, ' input':1879, ',':11, ' from':494, ' a':264, ' string':886, ',':11, ' or':466, ' from':494, ' a':264, ' file':999, '.':13, ' It':1049, ' is':369, ' a':264, ' re':311, 'implementation':13957, ' and':321, ' extension':8626, ' of':314, ' the':279, ' Bour':37103, 'ne':785, ' shell':12168, ',':11, ' the':279, ' historical':13263, ' Unix':45426, ' command':3108, ' language':3992, ' interpreter':37999, '.':13, ' Bash':37250, ' also':1048, ' incorporates':50079, ' useful':5222, ' features':4275, ' from':494, ' the':279, ' Korn':243571, ' and':321, ' C':351, ' shells':41535, ' (':318, 'k':74, 'sh':898, ' and':321, ' c':272, 'sh':898, ').':553, ' POSIX':69695, ' is':369, ' the':279, ' name':803, ' for':364, ' a':264, ' family':2902, ' of':314, ' computing':23470, ' standards':10344, ' based':3018, ' on':383, ' Unix':45426, '.':13, ' Bash':37250, ' is':369, ' intended':10287, ' to':310, ' be':381, ' a':264, ' conform':25054, 'ant':505, ' implementation':7873, ' of':314, ' the':279, ' Shell':28442, ' and':321, ' Utilities':33836, ' portion':12961, ' of':314, ' the':279, ' IEEE':37742, ' POSIX':69695, ' specification':24332, ' (':318, 'IEEE':74082, ' Standard':11429, ' ':220, '1':16, '0':15, '0':15, '3':18, '.':13, '1':16, ').':553, ' Bash':37250, ' POSIX':69695, ' mode':3728, ' (':318, 'here':6527, 'after':10378, ' referred':13464, ' to':310, ' as':430, ' posix':94946, ' mode':3728, ')':8, ' changes':4203, ' the':279, ' shell':12168, ''s':579, ' behavior':7465, ' where':1332, ' its':1141, ' default':1581, ' operation':5488, ' differs':42103, ' from':494, ' the':279, ' standard':5129, ' to':310, ' strictly':24660, ' conform':25054, ' to':310, ' the':279, ' standard':5129, '.':13, ' See':3382, ' SEE':25269, ' ALSO':48146, ' below':3559, ' for':364, ' a':264, ' reference':5604, ' to':310, ' a':264, ' document':2128, ' that':421, ' details':3447, ' how':1204, ' posix':94946, ' mode':3728, ' affects':20843, ' bash':26156, ''s':579, ' behavior':7465, '.':13, ' Bash':37250, ' can':628, ' be':381, ' configured':19152, ' to':310, ' be':381, ' POSIX':69695, '-con':14429, 'form':610, 'ant':505, ' by':539, ' default':1581, '.':13, ' OPTIONS':49555, ' All':1942, ' of':314, ' the':279, ' single':3074, '-character':76506, ' shell':12168, ' options':2519, ' documented':25530, ' in':303, ' the':279, ' description':3874, ' of':314, ' the':279, ' set':716, ' builtin':57610, ' command':3108, ',':11, ' including':2583, ' -':471, 'o':78, ',':11, ' can':628, ' be':381, ' used':1429, ' as':430, ' options':2519, ' when':948, ' the':279, ' shell':12168, ' is':369, ' invoked':26019, '.':13, ' In':733, ' addition':5089, ',':11, ' bash':26156, ' interpre':17393, 'ts':2491, ' the':279, ' following':2614, ' options':2519, ' when':948, ' it':424, ' is':369, ' invoked':26019, ':':25, ' -':471, 'c':66, ' If':1368, ' the':279, ' -':471, 'c':66, ' option':2904, ' is':369, ' present':2945, ',':11, ' then':1179, ' commands':10966, ' are':513, ' read':1301, ' from':494, ' the':279, ' first':1118, ' non':2397, '-option':47064, ' arg':1344, 'u':84, '‐':28944, ' ment':10961, ' command':3108, '_string':3773, '.':13, ' If':1368, ' there':1017, ' are':513, ' arguments':5789, ' after':1238, ' the':279, ' command':3108, '_string':3773, ',':11, ' the':279, ' first':1118, ' ar':771, '‐':28944, ' g':338, 'ument':1087, ' is':369, ' assigned':12244, ' to':310, ' $':393, '0':15, ' and':321, ' any':866, ' remaining':9376, ' arguments':5789, ' are':513, ' assigned':12244, ' to':310, ' the':279, ' positional':65269, ' parameters':4868, '.':13, ' The':561, ' assignment':15840, ' to':310, ' $':393, '0':15, ' sets':7062, ' the':279, ' name':803, ' of':314, ' the':279, ' shell':12168, ',':11, ' which':864, ' is':369, ' used':1429, ' in':303, ' warn':8543, '‐':28944, ' ing':6537, ' and':321, ' error':1412, ' messages':6397, '.':13, ' -':471, 'i':72, ' If':1368, ' the':279, ' -':471, 'i':72, ' option':2904, ' is':369, ' present':2945, ',':11, ' the':279, ' shell':12168, ' is':369, ' interactive':20122, '.':13, ' -':471, 'l':75, ' Make':7170, ' bash':26156, ' act':1121, ' as':430, ' if':413, ' it':424, ' had':995, ' been':978, ' invoked':26019, ' as':430, ' a':264, ' login':5677, ' shell':12168, ' (':318, 'see':3924, ' INV':64663, 'OC':7371, 'ATION':3381, ' below':3559, ').':553, ' -':471, 'r':81, ' If':1368, ' the':279, ' -':471, 'r':81, ' option':2904, ' is':369, ' present':2945, ',':11, ' the':279, ' shell':12168, ' becomes':8772, ' restricted':21068, ' (':318, 'see':3924, ' REST':24609, 'RICT':38170, 'ED':1425, ' SHE':51796, 'LL':3950, ' be':381, '‐':28944, ' low':3238, ').':553, ' -':471, 's':82, ' If':1368, ' the':279, ' -':471, 's':82, ' option':2904, ' is':369, ' present':2945, ',':11, ' or':466, ' if':413, ' no':874, ' arguments':5789, ' remain':6922, ' after':1238, ' option':2904, ' processing':8427, ',':11, ' the':279, ' shell':12168, ' reads':15339, ' commands':10966, ' from':494, ' the':279, ' standard':5129, ' input':1879, '.':13, ' This':1061, ' option':2904, ' allows':5954, ' the':279, ' positional':65269, ' pa':6885, '‐':28944, ' ram':17292, 'eters':2345, ' to':310, ' be':381, ' set':716, ' when':948, ' invoking':44491, ' an':449, ' interactive':20122, ' shell':12168, ' or':466, ' when':948, ' reading':5122, ' input':1879, ' through':1472, ' a':264, ' pipe':13254, '.':13, ' -':471, 'D':35, ' Print':7956, ' a':264, ' list':1103, ' of':314, ' all':660, ' double':1923, '-':12, 'quoted':61574, ' strings':8796, ' preceded':50714, ' by':539, ' $':393, ' on':383, ' the':279, ' standard':5129, ' output':2468, '.':13, ' These':4081, ' are':513, ' the':279, ' strings':8796, ' that':421, ' are':513, ' subject':3704, ' to':310, ' language':3992, ' translation':14053, ' when':948, ' the':279, ' current':1428, ' lo':750, '‐':28944, ' cale':196717, ' is':369, ' not':524, ' C':351, ' or':466, ' POSIX':69695, '.':13, ' This':1061, ' implies':23197, ' the':279, ' -':471, 'n':77, ' option':2904, ';':26, ' no':874, ' commands':10966, ' will':668, ' be':381, ' executed':15234, '.':13, ' [-':9758, '+]':54031, 'O':46, ' [':498, 'sh':898, 'opt':2818, '_option':9384, ']':60, ' sh':542, 'opt':2818, '_option':9384, ' is':369, ' one':799, ' of':314, ' the':279, ' shell':12168, ' options':2519, ' accepted':11330, ' by':539, ' the':279, ' sh':542, 'opt':2818, ' builtin':57610, ' (':318, 'see':3924, ' In':733, ' three':2250, ' sentences':22157, ',':11, ' summarize':59987, ' the':279, ' documentation':9417, ' above':3294, ':':25 ]
+0.06.961.724 D prompt: "BASH(1) General Commands Manual BASH(1) NAME bash - GNU Bourne-Again SHell SYNOPSIS bash [options] [command_string | file] COPYRIGHT Bash is Copyright (C) 1989-2025 by the Free Software Foundation, Inc. DESCRIPTION Bash is a command language interpreter that executes commands read from the standard input, from a string, or from a file. It is a reimplementation and extension of the Bourne shell, the historical Unix command language interpreter. Bash also incorporates useful features from the Korn and C shells (ksh and csh). POSIX is the name for a family of computing standards based on Unix. Bash is intended to be a conformant implementation of the Shell and Utilities portion of the IEEE POSIX specification (IEEE Standard 1003.1). Bash POSIX mode (hereafter referred to as posix mode) changes the shell's behavior where its default operation differs from the standard to strictly conform to the standard. See SEE ALSO below for a reference to a document that details how posix mode affects bash's behavior. Bash can be configured to be POSIX-conformant by default. OPTIONS All of the single-character shell options documented in the description of the set builtin command, including -o, can be used as options when the shell is invoked. In addition, bash interprets the following options when it is invoked: -c If the -c option is present, then commands are read from the first non-option argu- ment command_string. If there are arguments after the command_string, the first ar- gument is assigned to $0 and any remaining arguments are assigned to the positional parameters. The assignment to $0 sets the name of the shell, which is used in warn- ing and error messages. -i If the -i option is present, the shell is interactive. -l Make bash act as if it had been invoked as a login shell (see INVOCATION below). -r If the -r option is present, the shell becomes restricted (see RESTRICTED SHELL be- low). -s If the -s option is present, or if no arguments remain after option processing, the shell reads commands from the standard input. This option allows the positional pa- rameters to be set when invoking an interactive shell or when reading input through a pipe. -D Print a list of all double-quoted strings preceded by $ on the standard output. These are the strings that are subject to language translation when the current lo- cale is not C or POSIX. This implies the -n option; no commands will be executed. [-+]O [shopt_option] shopt_option is one of the shell options accepted by the shopt builtin (see In three sentences, summarize the documentation above:"
+0.06.961.800 D tokens: [ 'BASH':84640, '(':7, '1':16, ')':8, ' General':3146, ' Commands':45608, ' Manual':14121, ' B':417, 'ASH':9255, '(':7, '1':16, ')':8, ' NAME':18544, ' bash':26156, ' -':471, ' GNU':4114, ' Bour':37103, 'ne':785, '-A':6481, 'gain':57146, ' SH':6232, 'ell':598, ' SYN':59612, 'OPSIS':88015, ' bash':26156, ' [':498, 'options':2782, ']':60, ' [':498, 'command':5454, '_string':3773, ' |':735, ' file':999, ']':60, ' COPYRIGHT':14119, ' Bash':37250, ' is':369, ' Copyright':2861, ' (':318, 'C':34, ')':8, ' ':220, '1':16, '9':24, '8':23, '9':24, '-':12, '2':17, '0':15, '2':17, '5':20, ' by':539, ' the':279, ' Free':3455, ' Software':4236, ' Foundation':4846, ',':11, ' Inc':4693, '.':13, ' DESCRIPTION':31124, ' Bash':37250, ' is':369, ' a':264, ' command':3108, ' language':3992, ' interpreter':37999, ' that':421, ' executes':49703, ' commands':10966, ' read':1301, ' from':494, ' the':279, ' standard':5129, ' input':1879, ',':11, ' from':494, ' a':264, ' string':886, ',':11, ' or':466, ' from':494, ' a':264, ' file':999, '.':13, ' It':1049, ' is':369, ' a':264, ' re':311, 'implementation':13957, ' and':321, ' extension':8626, ' of':314, ' the':279, ' Bour':37103, 'ne':785, ' shell':12168, ',':11, ' the':279, ' historical':13263, ' Unix':45426, ' command':3108, ' language':3992, ' interpreter':37999, '.':13, ' Bash':37250, ' also':1048, ' incorporates':50079, ' useful':5222, ' features':4275, ' from':494, ' the':279, ' Korn':243571, ' and':321, ' C':351, ' shells':41535, ' (':318, 'k':74, 'sh':898, ' and':321, ' c':272, 'sh':898, ').':553, ' POSIX':69695, ' is':369, ' the':279, ' name':803, ' for':364, ' a':264, ' family':2902, ' of':314, ' computing':23470, ' standards':10344, ' based':3018, ' on':383, ' Unix':45426, '.':13, ' Bash':37250, ' is':369, ' intended':10287, ' to':310, ' be':381, ' a':264, ' conform':25054, 'ant':505, ' implementation':7873, ' of':314, ' the':279, ' Shell':28442, ' and':321, ' Utilities':33836, ' portion':12961, ' of':314, ' the':279, ' IEEE':37742, ' POSIX':69695, ' specification':24332, ' (':318, 'IEEE':74082, ' Standard':11429, ' ':220, '1':16, '0':15, '0':15, '3':18, '.':13, '1':16, ').':553, ' Bash':37250, ' POSIX':69695, ' mode':3728, ' (':318, 'here':6527, 'after':10378, ' referred':13464, ' to':310, ' as':430, ' posix':94946, ' mode':3728, ')':8, ' changes':4203, ' the':279, ' shell':12168, ''s':579, ' behavior':7465, ' where':1332, ' its':1141, ' default':1581, ' operation':5488, ' differs':42103, ' from':494, ' the':279, ' standard':5129, ' to':310, ' strictly':24660, ' conform':25054, ' to':310, ' the':279, ' standard':5129, '.':13, ' See':3382, ' SEE':25269, ' ALSO':48146, ' below':3559, ' for':364, ' a':264, ' reference':5604, ' to':310, ' a':264, ' document':2128, ' that':421, ' details':3447, ' how':1204, ' posix':94946, ' mode':3728, ' affects':20843, ' bash':26156, ''s':579, ' behavior':7465, '.':13, ' Bash':37250, ' can':628, ' be':381, ' configured':19152, ' to':310, ' be':381, ' POSIX':69695, '-con':14429, 'form':610, 'ant':505, ' by':539, ' default':1581, '.':13, ' OPTIONS':49555, ' All':1942, ' of':314, ' the':279, ' single':3074, '-character':76506, ' shell':12168, ' options':2519, ' documented':25530, ' in':303, ' the':279, ' description':3874, ' of':314, ' the':279, ' set':716, ' builtin':57610, ' command':3108, ',':11, ' including':2583, ' -':471, 'o':78, ',':11, ' can':628, ' be':381, ' used':1429, ' as':430, ' options':2519, ' when':948, ' the':279, ' shell':12168, ' is':369, ' invoked':26019, '.':13, ' In':733, ' addition':5089, ',':11, ' bash':26156, ' interpre':17393, 'ts':2491, ' the':279, ' following':2614, ' options':2519, ' when':948, ' it':424, ' is':369, ' invoked':26019, ':':25, ' -':471, 'c':66, ' If':1368, ' the':279, ' -':471, 'c':66, ' option':2904, ' is':369, ' present':2945, ',':11, ' then':1179, ' commands':10966, ' are':513, ' read':1301, ' from':494, ' the':279, ' first':1118, ' non':2397, '-option':47064, ' arg':1344, 'u':84, '-':28944, ' ment':10961, ' command':3108, '_string':3773, '.':13, ' If':1368, ' there':1017, ' are':513, ' arguments':5789, ' after':1238, ' the':279, ' command':3108, '_string':3773, ',':11, ' the':279, ' first':1118, ' ar':771, '-':28944, ' g':338, 'ument':1087, ' is':369, ' assigned':12244, ' to':310, ' $':393, '0':15, ' and':321, ' any':866, ' remaining':9376, ' arguments':5789, ' are':513, ' assigned':12244, ' to':310, ' the':279, ' positional':65269, ' parameters':4868, '.':13, ' The':561, ' assignment':15840, ' to':310, ' $':393, '0':15, ' sets':7062, ' the':279, ' name':803, ' of':314, ' the':279, ' shell':12168, ',':11, ' which':864, ' is':369, ' used':1429, ' in':303, ' warn':8543, '-':28944, ' ing':6537, ' and':321, ' error':1412, ' messages':6397, '.':13, ' -':471, 'i':72, ' If':1368, ' the':279, ' -':471, 'i':72, ' option':2904, ' is':369, ' present':2945, ',':11, ' the':279, ' shell':12168, ' is':369, ' interactive':20122, '.':13, ' -':471, 'l':75, ' Make':7170, ' bash':26156, ' act':1121, ' as':430, ' if':413, ' it':424, ' had':995, ' been':978, ' invoked':26019, ' as':430, ' a':264, ' login':5677, ' shell':12168, ' (':318, 'see':3924, ' INV':64663, 'OC':7371, 'ATION':3381, ' below':3559, ').':553, ' -':471, 'r':81, ' If':1368, ' the':279, ' -':471, 'r':81, ' option':2904, ' is':369, ' present':2945, ',':11, ' the':279, ' shell':12168, ' becomes':8772, ' restricted':21068, ' (':318, 'see':3924, ' REST':24609, 'RICT':38170, 'ED':1425, ' SHE':51796, 'LL':3950, ' be':381, '-':28944, ' low':3238, ').':553, ' -':471, 's':82, ' If':1368, ' the':279, ' -':471, 's':82, ' option':2904, ' is':369, ' present':2945, ',':11, ' or':466, ' if':413, ' no':874, ' arguments':5789, ' remain':6922, ' after':1238, ' option':2904, ' processing':8427, ',':11, ' the':279, ' shell':12168, ' reads':15339, ' commands':10966, ' from':494, ' the':279, ' standard':5129, ' input':1879, '.':13, ' This':1061, ' option':2904, ' allows':5954, ' the':279, ' positional':65269, ' pa':6885, '-':28944, ' ram':17292, 'eters':2345, ' to':310, ' be':381, ' set':716, ' when':948, ' invoking':44491, ' an':449, ' interactive':20122, ' shell':12168, ' or':466, ' when':948, ' reading':5122, ' input':1879, ' through':1472, ' a':264, ' pipe':13254, '.':13, ' -':471, 'D':35, ' Print':7956, ' a':264, ' list':1103, ' of':314, ' all':660, ' double':1923, '-':12, 'quoted':61574, ' strings':8796, ' preceded':50714, ' by':539, ' $':393, ' on':383, ' the':279, ' standard':5129, ' output':2468, '.':13, ' These':4081, ' are':513, ' the':279, ' strings':8796, ' that':421, ' are':513, ' subject':3704, ' to':310, ' language':3992, ' translation':14053, ' when':948, ' the':279, ' current':1428, ' lo':750, '-':28944, ' cale':196717, ' is':369, ' not':524, ' C':351, ' or':466, ' POSIX':69695, '.':13, ' This':1061, ' implies':23197, ' the':279, ' -':471, 'n':77, ' option':2904, ';':26, ' no':874, ' commands':10966, ' will':668, ' be':381, ' executed':15234, '.':13, ' [-':9758, '+]':54031, 'O':46, ' [':498, 'sh':898, 'opt':2818, '_option':9384, ']':60, ' sh':542, 'opt':2818, '_option':9384, ' is':369, ' one':799, ' of':314, ' the':279, ' shell':12168, ' options':2519, ' accepted':11330, ' by':539, ' the':279, ' sh':542, 'opt':2818, ' builtin':57610, ' (':318, 'see':3924, ' In':733, ' three':2250, ' sentences':22157, ',':11, ' summarize':59987, ' the':279, ' documentation':9417, ' above':3294, ':':25 ]
 0.06.961.810 I sampler seed: 209345852
 0.06.961.817 I sampler params: 
 	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
