@@ -79,7 +79,8 @@ int main() {
     }
     ZE_CALL(zeCommandListClose(cmd_list));
     ZE_CALL(zeCommandQueueExecuteCommandLists(queue, 1, &cmd_list, nullptr));
-    ZE_CALL(zeCommandQueueSynchronize(queue, UINT64_MAX));
+    constexpr uint64_t sync_timeout_ns = 30ULL * 1000 * 1000 * 1000;
+    ZE_CALL(zeCommandQueueSynchronize(queue, sync_timeout_ns));
 
     printf("Done.\n");
     return 0;

@@ -1,5 +1,7 @@
 // CPU-only: c++ -std=c++17 tests/test-repro-l0.cpp -o /tmp/test-repro-l0
 #include <cassert>
+#include <sys/wait.h>
+#include <unistd.h>
 #define main repro_main
 #include "../repro_l0.cpp"
 #undef main
@@ -50,12 +52,27 @@ ze_result_t ZE_APICALL zeCommandQueueExecuteCommandLists(ze_command_queue_handle
     assert(queue_ordinal == (scenario == 0 ? 0u : 2u));
     submitted = true; return ZE_RESULT_SUCCESS;
 }
-ze_result_t ZE_APICALL zeCommandQueueSynchronize(ze_command_queue_handle_t, uint64_t) { return ZE_RESULT_SUCCESS; }
+ze_result_t ZE_APICALL zeCommandQueueSynchronize(ze_command_queue_handle_t, uint64_t timeout_ns) {
+    // A stalled queue must have a finite deadline, not UINT64_MAX.
+    assert(timeout_ns > 0 && timeout_ns <= 30ULL * 1000 * 1000 * 1000);
+    return scenario == 4 ? ZE_RESULT_NOT_READY : ZE_RESULT_SUCCESS;
+}
 int main() {
     for (scenario = 0; scenario < 4; ++scenario) {
         submitted = false;
         assert(repro_main() == (scenario < 2 ? 0 : 1));
         assert(submitted == (scenario < 2));
     }
-    puts("4 queue-ordinal scenarios passed");
+    fflush(nullptr);
+    const pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        scenario = 4;
+        repro_main();
+        _exit(0);
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+    puts("4 queue-ordinal scenarios and synchronization timeout passed");
 }
