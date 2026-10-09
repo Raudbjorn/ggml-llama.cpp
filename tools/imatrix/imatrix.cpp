@@ -888,6 +888,11 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
     std::vector<std::string> to_store;
     size_t data_size = 0;
 
+    const char * stats_schema[] = {
+        "sum_sq", "mean", "elements", "std_deviation", "skewness", "kurtosis", "gain", "h_norm", "l2_dist", "cossim", "pearson", "covariance"
+    };
+    constexpr size_t n_stats = sizeof(stats_schema) / sizeof(stats_schema[0]);
+
     bool is_first = true; // for printing
     for (const auto & kv : m_stats) {
         const int n_all = kv.second.counts.size();
@@ -912,7 +917,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.activations.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.counts.size(), GGML_MEM_ALIGN);
-        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * 10, GGML_MEM_ALIGN);
+        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * n_stats, GGML_MEM_ALIGN);
     }
 
     // deterministic tensor name order
@@ -956,10 +961,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         // Write how many of the top layers are NextN layers, so statistics can tell them apart
         if (m_n_layer_nextn > 0) { gguf_set_val_u32(ctx_gguf, LLM_KV_IMATRIX_N_LAYER_NEXTN, m_n_layer_nextn); }
         // Define the schema for the tensor statistics (for use in quantize.cpp)
-        const char * stats_schema[] = {
-            "sum_sq", "mean", "elements", "std_deviation", "skewness", "kurtosis", "gain", "h_norm", "l2_dist", "cossim", "pearson", "covariance"
-        };
-        gguf_set_arr_str(ctx_gguf, LLM_KV_IMATRIX_STATS_SCHEMA, stats_schema, 12);
+        gguf_set_arr_str(ctx_gguf, LLM_KV_IMATRIX_STATS_SCHEMA, stats_schema, n_stats);
     }
 
     for (const auto & name : to_store) {
@@ -1026,7 +1028,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
                 covariance = ts->second->covariance;
             }
 
-            struct ggml_tensor * stats = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 12);
+            struct ggml_tensor * stats = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_stats);
             ggml_format_name(stats, "%s.stats", name.c_str());
             // Store the statistics in the same order as defined in stats_schema[]
             ((float *)stats->data)[0] = (float)sum_sq;
@@ -1681,7 +1683,7 @@ static bool show_statistics(const common_params & params) {
             w_lay, "Layer", sep,
             w_nam, "Tensor", sep,
             "Mean", "StdDev", "Skew", "Kurt", "H Norm", sep,
-            "∑ E[A²]", "Gain", sep,
+            "sum E[A^2]", "Gain", sep,
             "PCC", "Cov");
         printf("%s\n", std::string(153, '-').c_str());
     } else {
@@ -1689,7 +1691,7 @@ static bool show_statistics(const common_params & params) {
             w_lay, "Layer", sep,
             w_nam, "Tensor", sep,
             "Mean", "StdDev", "Skew", "Kurt", "H Norm", sep,
-            "∑ E[A²]", "Gain", sep,
+            "sum E[A^2]", "Gain", sep,
             "L2 Dist", "PCC", "Cov");
         printf("%s\n", std::string(165, '-').c_str());
     }
@@ -1773,13 +1775,13 @@ static bool show_statistics(const common_params & params) {
     if (legacy) {
         printf("%*s%s%17s%8s%s%9s%9s%12s\n",
             w_lay, "Layer", sep,
-            "∑ E[A²]", "Gain", sep,
+            "sum E[A^2]", "Gain", sep,
             "CosSim", "PCC", "Cov");
         printf("%s\n", std::string(64, '-').c_str());
     } else {
         printf("%*s%s%17s%8s%s%12s%9s%9s%12s\n",
             w_lay, "Layer", sep,
-            "∑ E[A²]", "Gain", sep,
+            "sum E[A^2]", "Gain", sep,
             "L2 Dist", "CosSim", "PCC", "Cov");
         printf("%s\n", std::string(76, '-').c_str());
     }
