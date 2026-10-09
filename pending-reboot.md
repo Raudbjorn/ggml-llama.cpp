@@ -9,8 +9,9 @@ passed on the second boot (02:17). Details in "Observed after reboot".
 - Second boot (02:17): the Arc's client list was empty, `fuser` found no holders, and a runtime
   `ccs_mode` write succeeded where it used to return `EBUSY`. `llama-gpu@Ornith-1.5-35B-A3B-uncensored-Q8_0`
   then started under the new `0660` mode and became the only client.
-- `ccs_mode` was left at **2** at the user's request (production default is 1). The service is
-  stopped. Nothing has been measured in mode 2.
+- The last recorded `ccs_mode` readback was **1** (the production default), followed by the
+  service start. Leaving mode 2 active with the service stopped was requested, but no later
+  stop, write or readback is recorded here. No workload was measured in mode 2.
 
 This file can be deleted once the questions in #92 that depend on it are closed; the host
 configuration it describes does not depend on the file.
@@ -171,8 +172,8 @@ SUBSYSTEM=="drm", KERNELS=="0000:03:00.0", KERNEL=="renderD*", GROUP="render", M
   `svnbjrn` it succeeds.
 - Who keeps access: `render` members `svnbjrn`, `plex`, `xpum`; `llama-gpu@.service` runs as
   `User=svnbjrn` with `SupplementaryGroups=render video` and sets no `PrivateDevices=` or
-  `DeviceAllow=`; root-run units bypass the mode. Not tested: starting `llama-gpu@...` under the
-  new mode.
+  `DeviceAllow=`; root-run units bypass the mode. Service startup under the new mode was checked
+  on the second boot (see below).
 - Not covered: Docker containers given `--device /dev/dri/renderD128` whose process is non-root
   need a matching `render` GID. Any other user outside `render` loses the Arc, by design.
 - Not changed by this rule: session apps run by `svnbjrn` are in `render` and can still open the
@@ -289,8 +290,10 @@ about 1 MiB of VRAM and a few thousand engine cycles.
 
 ## Post-reboot check
 
-Run these with `sudo`; without root the compositor is invisible. Every device is named by PCI
-address, so the checks stay valid even if the card numbers change at boot.
+Run these from a terminal as the logged-in desktop user. Use `sudo` only where shown for
+privileged probes; without root the compositor is invisible to `fuser`. `systemctl --user`
+must query the desktop user's manager, not root's. Every device is named by PCI address,
+so the checks stay valid even if the card numbers change at boot.
 
 ```bash
 ARC=0000:03:00.0 RADEON=0000:0f:00.0
@@ -317,11 +320,22 @@ Reading a failed check:
   which means `KWIN_DRM_DEVICES` was not in effect.
 - A process from the session other than KWin or Xorg: that is an app opening the render node (see
   "What it does not do"), not a failure of these changes.
-- `sddm-greeter` in the client list after the second reboot: rule 71 did not apply. Check
-  `ls -l /dev/dri/renderD128` (expect `crw-rw---- root render`), that its group is `render`, and
-  `udevadm test /sys/class/drm/renderD128 | grep 71-arc`.
-- Add to the check above: `ls -l /dev/dri/by-path/pci-$ARC-render` shows `0660`, and
-  `sudo -u sddm test -r /dev/dri/renderD128 || echo blocked` prints `blocked`.
+- `sddm-greeter` in the client list: check rule 71 and the Arc's current permissions. Resolve
+  the PCI-named link before listing permissions, testing access or tracing rules. The listing
+  should show `crw-rw---- root render`, and the access test should print `blocked`:
+
+  ```bash
+  (
+    set -e -o pipefail
+    ARC_RENDER=$(readlink -e /dev/dri/by-path/pci-0000:03:00.0-render)
+    test -c "$ARC_RENDER"
+    ls -l "$ARC_RENDER"
+    sudo -u sddm sh -c 'test -r "$1" && echo readable || echo blocked' sh "$ARC_RENDER"
+    sudo udevadm test "/sys/class/drm/${ARC_RENDER##*/}" 2>&1 | grep 71-arc
+  )
+  ```
+
+  A missing node stops the check. The udev trace includes stderr, where debug messages go.
 
 ## Rollback
 
@@ -337,9 +351,20 @@ From a text console (Ctrl+Alt+F3):
     start KWin with it again.
   - The likely cause is a missing or wrong `desktop-card` link, which leaves KWin with no GPU.
 - The `70-desktop-gpu.rules` udev rule only adds links and is safe to leave in place.
-- Rule 71: delete `/etc/udev/rules.d/71-arc-render-restricted.rules`, then
-  `sudo udevadm trigger --action=change --subsystem-match=drm --sysname-match=renderD128`. The
-  node returns to `0666`. Do this if a non-root service outside `render` loses the Arc.
+- Rule 71: delete `/etc/udev/rules.d/71-arc-render-restricted.rules`, then reload the rules and
+  trigger the Arc's current render node. Do this if a non-root service outside `render` loses
+  the Arc:
+
+  ```bash
+  (
+    set -e
+    ARC_RENDER=$(readlink -e /dev/dri/by-path/pci-0000:03:00.0-render)
+    test -c "$ARC_RENDER"
+    sudo udevadm control --reload
+    sudo udevadm trigger --settle --action=change --subsystem-match=drm --sysname-match="${ARC_RENDER##*/}"
+    ls -l "$ARC_RENDER"  # expect: crw-rw-rw- root render (0666)
+  )
+  ```
 
 ## Stale host configuration noticed, not changed
 
