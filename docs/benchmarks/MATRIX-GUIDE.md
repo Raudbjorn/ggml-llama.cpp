@@ -21,7 +21,7 @@ below re-aggregate existing measurements; no GPU experiment was repeated.
    [CSV](matrix-1006/COMPLETE-MATRIX.csv) for phase-1 settings and per-run values.
    "Complete" means the original phase-1 selection, not all seven phases.
 4. Follow the suite table below to the raw cell, then join its tag to
-   [index.tsv](matrix-1006/index.tsv), [master.log](matrix-1006/master.log)
+   [index.tsv](matrix-1006/index.tsv), master.log (not archived)
    and the runner. A throughput table alone does not establish successful
    completion, a clean host, or correct output.
 
@@ -30,7 +30,7 @@ For the original snapshot, use [phase1-final/](matrix-1006/phase1-final/).
 [summary-tables.md](matrix-1006/summary-tables.md) are earlier summaries.
 [index-part1.tsv](matrix-1006/index-part1.tsv),
 [index-phase1.tsv](matrix-1006/index-phase1.tsv) and
-[master-part1.log](matrix-1006/master-part1.log) preserve partial history.
+master-part1.log (not archived) preserve partial history.
 
 ## Scope and provenance
 
@@ -106,7 +106,7 @@ Runner: [matrix2-run.sh](matrix2-run.sh); client:
 | [two2](matrix-1006/two2/) | Concurrent dense processes with 8k measurements and `.span` start/end timestamps; compare with `single6` thread-count control |
 | [cost](matrix-1006/cost/) | Small prompt batches 1/2/4/8/16/32/64/128 on dense and MoE models; converts throughput into verification-batch time proxies |
 | [correct](matrix-1006/correct/) | Dense-model perplexity under kernel-affecting knobs and CCS changes; includes the actual `text.txt` input assembled from local notes/docs |
-| [oracle](matrix-1006/oracle/) | CPU/SYCL correctness logs with MKL on/off; original in-phase invocation hit `setvars.sh` under `set -u`, so inspect recovery logs and the final report |
+| oracle (not archived) | CPU/SYCL correctness logs with MKL on/off; original in-phase invocation hit `setvars.sh` under `set -u`, so inspect recovery logs and the final report |
 | [spec2](matrix-1006/spec2/) | Ten heterogeneous prompts for dense/Ornith speculative arms and prefetch tests; early throughput interpretation is superseded by `spec6` |
 
 ### Phases 3-5: fill gaps, investigate failures, explore depth
@@ -154,7 +154,7 @@ and [VMM allocation abort](matrix-1006/issues/02-pool-vmm-alloc-abort.md).
 | `raw/*.json` | Generated text, token/logprob data and response timings; `wgcheck` also stores usage. These are output evidence, not copies of every source prompt |
 | `two2/*.span` | A/B process start/end timestamps, useful to establish overlap before adding their rates |
 | `master.log`, launcher stdout logs | Experiment order, retries, failures, skips, setting changes and cleanup messages; logs can outlive the exact revision of the shared library that produced them |
-| `klog*.txt`, [monitor/](matrix-1006/monitor/), [sysfs-writes.log](matrix-1006/sysfs-writes.log) | Kernel snapshots/stream, fault matches and setting readbacks; inspect timestamps and distinguish intentional CCS resets from unexpected events |
+| `klog*.txt`, [monitor/](matrix-1006/monitor/), sysfs-writes.log (not archived) | Kernel snapshots/stream, fault matches and setting readbacks; inspect timestamps and distinguish intentional CCS resets from unexpected events |
 
 There is no `summary.jsonl` in this matrix tree. The primary numerical records
 are per-cell Markdown and the server `results.jsonl` files. Phase-1 CSV settings

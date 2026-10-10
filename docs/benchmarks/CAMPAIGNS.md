@@ -16,11 +16,11 @@ Links below use the shorter root-level copy. Preserve both artifact trees.
 
 | Question | Read first | Then inspect | What it can establish |
 | --- | --- | --- | --- |
-| What changed between the old compiler/DNN builds? | [run-abcd.sh](run-abcd.sh), [run-dca.sh](run-dca.sh) | `A/C/D-final*` tables and stderr, [run-abcd.log](run-abcd.log), [run-dca.log](run-dca.log) | Historical same-workload build comparison; separate compiler and DNN arms |
+| What changed between the old compiler/DNN builds? | [run-abcd.sh](run-abcd.sh), [run-dca.sh](run-dca.sh) | `A/C/D-final*` tables and stderr, run-abcd.log (not archived), run-dca.log (not archived) | Historical same-workload build comparison; separate compiler and DNN arms |
 | Why were xe copy engines disabled? | [dated driver investigation](../research/software-stack/xe-kmd-bcs-copy-engine-2026-09-30.md) | `N-xe-x*`, before/after kernel logs, trace anchors and dumps | Failure mechanism and bounded control experiments on that stack |
 | Does larger GRF help attention? | [dated GRF analysis](../research/sycl/sycl-fa-large-grf-2026-09-30.md) | `grf*/product.json`, provenance and sample files | Per-model, per-depth paired throughput with validity limits |
-| Is a plain-decode difference host-load noise? | [decode/matrix.sh](decode/matrix.sh), [decode/quiet.sh](decode/quiet.sh) | [decode/matrix.log](decode/matrix.log), [decode/quiet.log](decode/quiet.log) | Interleaved builds and deliberate CPU-load controls |
-| Did a real server survive the workaround? | [server-soak/soak.log](server-soak/soak.log) | Six saved request/response pairs in [server-soak/](server-soak/) | Completion and timing for those requests, not indefinite stability |
+| Is a plain-decode difference host-load noise? | [decode/matrix.sh](decode/matrix.sh), [decode/quiet.sh](decode/quiet.sh) | decode/matrix.log (not archived), decode/quiet.log (not archived) | Interleaved builds and deliberate CPU-load controls |
+| Did a real server survive the workaround? | server-soak/soak.log (not archived) | Six saved request/response pairs in [server-soak/](server-soak/) | Completion and timing for those requests, not indefinite stability |
 | Does work-group size change long-context greedy output? | [longcheck.py](longcheck.py), [longcheck-analyze.py](longcheck-analyze.py) | [matrix-1006/wgcheck/](matrix-1006/wgcheck/) and matrix guide | Token-string prefix/logprob differences, including same-size repeated launches |
 | What did the b12327 update change? | [b12327-p1/meta](b12327-p1/meta), [b12327-d8k-p1/meta](b12327-d8k-p1/meta) | `run1-A`, `run2-B`, `run3-B`, `run4-A` tables/stderr | ABBA comparison of extracted old package and then-installed binary, at recorded CCS mode |
 
@@ -71,14 +71,14 @@ comparison, so the label alone does not establish causation.
 | [A-final/](A-final/), [C-final/](C-final/), [D-final/](D-final/) | Forward A/C/D order through the shared bench wrapper |
 | [D-final2/](D-final2/), [C-final2/](C-final2/), [A-final2/](A-final2/) | Reverse D/C/A order, separate outputs; do not average away order or load differences |
 | [A-pkg/](A-pkg/) and [A.ldpath](A.ldpath) | Extracted old package executables/libraries/headers and original runtime-library path input; package files are archived dependencies, not trusted current executables |
-| [N-clean-r1/](N-clean-r1/), [N-clean-r2/](N-clean-r2/) | Two installed-build baseline rounds, with wait/load evidence in [run-n2.log](run-n2.log) |
-| [N-xe-r1/](N-xe-r1/), [N-xe-r2/](N-xe-r2/) | Same early workload after xe switch; second directory also preserves hang diagnostics. Use [run-xe.log](run-xe.log) for driver/timing context |
+| [N-clean-r1/](N-clean-r1/), [N-clean-r2/](N-clean-r2/) | Two installed-build baseline rounds, with wait/load evidence in run-n2.log (not archived) |
+| [N-xe-r1/](N-xe-r1/), [N-xe-r2/](N-xe-r2/) | Same early workload after xe switch; second directory also preserves hang diagnostics. Use run-xe.log (not archived) for driver/timing context |
 | [K-aocc-ceoff-mmap/](K-aocc-ceoff-mmap/), [K-aocc-ceon-mmap/](K-aocc-ceon-mmap/) | mmap/copy-engine labeled bench controls with kernel snapshots; inspect stderr and result rows, not K as an assumed independent variable |
 | [K-aocc-x4b-pinned-ceoff/](K-aocc-x4b-pinned-ceoff/), [K-aocc-x4c-pinned-ceon/](K-aocc-x4c-pinned-ceon/), [K-aocc-x4d-mmap-ceoff/](K-aocc-x4d-mmap-ceoff/) | Follow-up pinned/mmap and copy-engine controls; no standalone invocation manifest in these directories |
 | [K-aocc-rt-ceon-pinned/](K-aocc-rt-ceon-pinned/), [K-aocc-oracle/](K-aocc-oracle/) | Real-text output plus before/after logs, and separate default/FA256 oracle output; not throughput equivalents |
 | [decode/](decode/) | Plain-decode new/old trials, injected CPU load, quiet-host retries, [tables.json](decode/tables.json), and extracted `old-4e7400c3a` package |
 | [old-b12321/](old-b12321/), [b12327-p1/](b12327-p1/), [b12327-d8k-p1/](b12327-d8k-p1/) | Old package and ABBA update trials; both `meta` files record `ccs_mode=2`, not the single-CCS baseline |
-| [C-quiet.log](C-quiet.log), [N.log](N.log), [swap.log](swap.log), [swap-2.log](swap-2.log), [gputop.json](gputop.json) | Loose run/host diagnostics; contextual evidence, not independent throughput suites |
+| C-quiet.log (not archived), N.log (not archived), swap.log (not archived), swap-2.log (not archived), [gputop.json](gputop.json) | Loose run/host diagnostics; contextual evidence, not independent throughput suites |
 
 ## xe failure investigation and controls
 
@@ -89,7 +89,7 @@ license transplanting old runtime debug switches into production.
 
 | Family | Investigation question and evidence |
 | --- | --- |
-| [N-xe-copyeng0/](N-xe-copyeng0/), `N-xe-copyeng0-r2/r3/r4` | Copy engine disabled and repeated bounded soak, with [run-xe-soak.log](run-xe-soak.log) |
+| [N-xe-copyeng0/](N-xe-copyeng0/), `N-xe-copyeng0-r2/r3/r4` | Copy engine disabled and repeated bounded soak, with run-xe-soak.log (not archived) |
 | [N-xe-pinned0/](N-xe-pinned0/), [N-xe-graph0/](N-xe-graph0/) | Disable host pinned memory or graphs separately; pinned-off includes coredump and kernel log |
 | `N-xe-inorder0`, `N-xe-cbevents0`, `N-xe-immcl0`, `N-xe-nodirectsub`, `N-xe-norelaxed` | Five submission/event-ordering controls from [run-xe-levers2.sh](run-xe-levers2.sh); one passing setting is not a validated workaround |
 | [N-xe-trace/](N-xe-trace/) | UR Level Zero debug log alongside bench stderr/table; instrumented throughput must not rank builds |

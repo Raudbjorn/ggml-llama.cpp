@@ -17,6 +17,7 @@ class InventoryTests(unittest.TestCase):
             (root / "oneapi-ab").mkdir()
             (root / "README.md").write_text("guide, excluded")
             (root / "FILES.tsv").write_text("old inventory, excluded")
+            (root / "AGENTS.md").write_text("archive guide, excluded")
             (root / "case/README.md").write_text("archived report, included")
             (root / "case/result.json").write_bytes(b"same")
             (root / "oneapi-ab/result.json").write_bytes(b"same")

@@ -13,7 +13,7 @@ import sys
 from collections.abc import Iterator
 
 
-GUIDE_FILES = {"README.md", "CAMPAIGNS.md", "MATRIX-GUIDE.md", "FILES.tsv"}
+GUIDE_FILES = {"README.md", "CAMPAIGNS.md", "MATRIX-GUIDE.md", "AGENTS.md", "FILES.tsv"}
 FIELDS = ("path", "kind", "bytes", "sha256", "identical_to", "link_target")
 READ_BYTES = 1024 * 1024
 
