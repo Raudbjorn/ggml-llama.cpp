@@ -17,9 +17,6 @@ docs/benchmarks/oneapi-ab/decode/old-4e7400c3a/usr/lib/libggml-sycl.so.0.25.3 fi
 docs/benchmarks/oneapi-ab/A-pkg/usr/lib/libggml-sycl.so.0.25.3 filter=lfs diff=lfs merge=lfs -text
 docs/benchmarks/N-xe-x7A-neomaster/bench.stdout filter=lfs diff=lfs merge=lfs -text
 docs/benchmarks/oneapi-ab/N-xe-x7H-pkg-be85a8d685-noretry/bench.stdout filter=lfs diff=lfs merge=lfs -text
-is filter=lfs diff=lfs merge=lfs -text
-83.89 filter=lfs diff=lfs merge=lfs -text
-MB filter=lfs diff=lfs merge=lfs -text
 docs/benchmarks/oneapi-ab/N-xe-trace/bench.err filter=lfs diff=lfs merge=lfs -text
 docs/benchmarks/oneapi-ab/N-xe-x7G-pkg-be85a8d685-retry/bench.stdout filter=lfs diff=lfs merge=lfs -text
 docs/benchmarks/oneapi-ab/N-xe-x7F-neopatch-hardened/bench.stdout filter=lfs diff=lfs merge=lfs -text
