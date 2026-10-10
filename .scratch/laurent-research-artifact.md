@@ -119,17 +119,22 @@ Decision forced to (B) technique/algorithm port, restricted to **target-only tec
 Do **C1** (acceptance-curve regression test) on Monday. The first cell to measure:
 
 ```
-pre:   ls build-sycl/bin/llama-cli 2>/dev/null   # must exist; else rebuild JIT
-guard: sudo systemctl stop llama-sycl.cpp.service; fuser -v /dev/dri/renderD128
-dmesg | grep -iE 'reset|hang|hung|timed?out|GuC|wedged|banned|page.?fault|device.?lost'
-# (no GPU errors before/after per AGENTS.md discipline)
+FAIL='reset|hang|hung|timed?[ _-]?out|Timedout|Unsuccessful|GuC|wedged|banned|CAT error|fault|device.?lost'
+gate() { dmesg | grep -iE "\b(i915|xe)\b.*($FAIL)|($FAIL).*\b(i915|xe)\b"; }   # must print nothing
 
-build:    ./build-sycl/bin/llama-bench -m /path/to/Qwen3.5-9B-UD-Q4_K_M.gguf -ngl 99 -fa 1 -p 512 -n 128 -r 5
-spec:     ./build-sycl/bin/llama-cli   -m /path/to/Qwen3.5-9B-UD-Q4_K_M.gguf -ngl 99 -fa 1 \
+pre:   ls build-sycl/bin/llama-cli 2>/dev/null   # must exist; else rebuild JIT
+guard: trap 'sudo systemctl start llama-sycl.cpp.service' EXIT   # restore on success or failure
+       sudo systemctl stop llama-sycl.cpp.service; fuser -v /dev/dri/renderD128
+       gate   # before: empty
+       # xe stalls can be silent: keep every GPU run in timeout, and an empty gate is not proof of a healthy run
+
+build:    timeout 900 ./build-sycl/bin/llama-bench -m /path/to/Qwen3.5-9B-UD-Q4_K_M.gguf -ngl 99 -fa 1 -p 512 -n 128 -r 5
+spec:     timeout 900 ./build-sycl/bin/llama-cli   -m /path/to/Qwen3.5-9B-UD-Q4_K_M.gguf -ngl 99 -fa 1 \
           -c 2048 -n 512 --spec-type draft-mtp --spec-draft-n-min 3 --spec-draft-n-max 7 \
           --spec-draft-n-min-adaptive 3
 fixed-3:  same with --spec-draft-n-min 3 --spec-draft-n-max 3 --spec-draft-n-min-adaptive 3
 fixed-7:  same with --spec-draft-n-min 7 --spec-draft-n-max 7 --spec-draft-n-min-adaptive 7
+after:    gate   # empty, else discard the run as evidence
 ```
 
 Numeric go/no-go: **adaptive-3-7 acceptance >= 0.80 AND adaptive-vs-fixed-7 gap >= 0.20**. If gap < 0.20, the claim does not generalise to A770 and the test is a `KNOWN-FAIL` documenting the divergence. If Tuesday is open, run C2 and C3 verifications in parallel (one `grep` each, 5 minutes total).

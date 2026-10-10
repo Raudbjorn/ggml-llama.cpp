@@ -43,6 +43,14 @@ class InventoryTests(unittest.TestCase):
             self.assertTrue(all(row["kind"] == "symlink" and not row["sha256"] for row in rows))
             self.assertEqual(rows[1]["link_target"], "/does/not/exist")
 
+    def test_unresolved_lfs_pointer_aborts_the_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "lib.so").write_bytes(
+                b"version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 9\n")
+            with self.assertRaisesRegex(ValueError, "git lfs pull"):
+                list(inventory(root))
+
 
 REPO = Path(__file__).resolve().parent.parent
 LFS_POINTER = "version https://git-lfs.github.com/spec/v1"

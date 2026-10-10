@@ -13,7 +13,8 @@ The inventory below uses `git ls-files`, not a recursive count of build outputs.
 At inventory time there were **3,636 tracked paths**, including **646 under
 `docs/`**, of which **109 were Markdown**. `docs/research/` accounted for 564
 tracked paths, including raw artifacts. `docs/benchmarks/` was a separate,
-untracked collection and is deliberately excluded from those totals. Counts
+then-untracked collection (now added by PR #103) and is deliberately excluded
+from those totals. Counts
 precede creation of this guide and do not imply that every source file was read.
 
 This guide synthesizes existing indexes and inspected build, API, routing and
@@ -220,7 +221,8 @@ that is a different scope from the 3,636 tracked-path census above. Both
 pack summaries explicitly exclude benchmark `product.json` files. Read
 those original JSON files to inspect provenance and validity diagnostics.
 The packs and their skills were inspected, not regenerated or edited during
-this curation; they remain local untracked references. The field guides add
+this curation; they were local untracked references then and are tracked
+as of PR #103. The field guides add
 task routes, synthesis and evidence caveats around these existing indexes.
 
 ### Refresh procedure

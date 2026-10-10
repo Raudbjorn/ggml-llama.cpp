@@ -17,12 +17,15 @@ GUIDE_FILES = {"README.md", "CAMPAIGNS.md", "MATRIX-GUIDE.md", "AGENTS.md", "FIL
                "FILES-unarchived.tsv"}
 FIELDS = ("path", "kind", "bytes", "sha256", "identical_to", "link_target")
 READ_BYTES = 1024 * 1024
+LFS_POINTER_MAGIC = b"version https://git-lfs.github.com/spec/v1\n"
+LFS_POINTER_MAX_BYTES = 1024
 
 
 def inventory(root: Path) -> Iterator[dict[str, str | int]]:
     """Include hidden/ignored artifacts; never follow symlinks or run files."""
     first_by_hash: dict[str, str] = {}
     # os.walk with onerror avoids silently skipping an unreadable directory.
+
     def fail(error: OSError) -> None:
         raise error
 
@@ -43,6 +46,10 @@ def inventory(root: Path) -> Iterator[dict[str, str | int]]:
         elif stat.S_ISREG(before.st_mode):
             digest = hashlib.sha256()
             with path.open("rb") as stream:
+                if before.st_size <= LFS_POINTER_MAX_BYTES and stream.read(
+                        len(LFS_POINTER_MAGIC)) == LFS_POINTER_MAGIC:
+                    raise ValueError(f"unresolved Git LFS pointer, run git lfs pull: {path}")
+                stream.seek(0)
                 for chunk in iter(lambda: stream.read(READ_BYTES), b""):
                     digest.update(chunk)
             after = path.lstat()

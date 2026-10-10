@@ -66,7 +66,7 @@ measurements or a canonical choice of evidence.
 
 ### The `oneapi-ab` copy is nearly, but not exactly, redundant
 
-Of its 4,563 entries, 4,553 match the primary tree at the same relative path
+Of its 4,347 tracked entries, 4,337 match the primary tree at the same relative path
 (regular-file SHA-256 or symlink target). One file differs:
 [primary vmstat](matrix-1006/wgclean-aborted-relaunch/wg16.r0.vmstat) versus
 [copied vmstat](oneapi-ab/matrix-1006/wgclean-aborted-relaunch/wg16.r0.vmstat).
@@ -173,9 +173,11 @@ a hardware memory-controller measurement.
   Moving the logs here did not make those dependencies portable. Preserve
   recorded paths and configure new runs separately.
 - **A Git checkout is not this whole archive.** Existing ignore rules omit
-  many `.log`, `.so`, `.bin` and cache files. No ignore rules were changed and
-  no archive was staged. Do not assume that committing just these guides
-  publishes their linked raw evidence.
+  many `.log`, `.so`, `.bin` and cache files, and the ignore rules were not
+  changed. The tracked archive is the 8,689 entries in [FILES.tsv](FILES.tsv);
+  the 432 artifacts that were ignored and are unavailable are recorded only in
+  [FILES-unarchived.tsv](FILES-unarchived.tsv). Do not assume that a link to
+  a log or library file in the guides resolves.
 
 ## Reproduce a new measurement
 
@@ -212,6 +214,7 @@ not import archived Python, execute shell scripts or load captured binaries.
 Run from the repository root:
 
 ```bash
+git lfs pull        # the indexer refuses to run on unresolved LFS pointers
 python3 -m unittest discover -s scripts -p test_index_benchmarks.py
 # The script walks the checkout, including ignored files. Run it on a clean
 # checkout, or drop rows for paths that `git ls-files` does not list.

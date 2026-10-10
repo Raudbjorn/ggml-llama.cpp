@@ -6,8 +6,11 @@ repos:
   rev: v4.6.0
   hooks:
   - id: trailing-whitespace
-    exclude: ^docs/benchmarks/FILES.*\.tsv$
+    # raw benchmark evidence must keep its bytes (FILES.tsv hashes); the authored guides stay checked
+    exclude: ^docs/benchmarks/(?!(README|CAMPAIGNS|MATRIX-GUIDE|AGENTS)\.md$)
   - id: end-of-file-fixer
+    # raw benchmark evidence must keep its bytes (FILES.tsv hashes); the authored guides stay checked
+    exclude: ^docs/benchmarks/(?!(README|CAMPAIGNS|MATRIX-GUIDE|AGENTS)\.md$)
   - id: check-yaml
   - id: check-added-large-files
 - repo: https://github.com/PyCQA/flake8
