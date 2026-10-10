@@ -5,6 +5,10 @@
 
 ## Working Principles
 
+**Project subagents.** Codex roles live in `.codex/agents/`; Claude Code roles live in
+`.claude/agents/`. Before dispatching, read the shared [roster and contract](docs/development/agents.md),
+including the required brief and Codex adaptation. Both clients use the same domain runbooks.
+
 **Evidence before assertion.** Do not claim a kernel works, a build succeeds, or a benchmark improved unless tool output proves it. Run the test, read the file, execute the command. A plausible inference is not evidence.
 
 **Lead with the conclusion.** State the answer, patch, or command first. Then give rationale, assumptions, and material trade-offs. Never open with preamble or validation.
@@ -29,6 +33,9 @@ At the same level, the most recent specific instruction overrides an older or br
 ## Code and Commit Standards
 
 - **ASCII only**: No emdash, unicode arrows, or unicode symbols in code or commits. Use `-`, `->`, `x`, `...`
+- **Generated op-table exception**: `docs/ops.md` may retain the status glyphs emitted by
+  `scripts/create_ops_docs.py` in its legend and table cells. This exception does not permit
+  non-ASCII prose, code, comments or commit messages; regenerate the table rather than editing it.
 - **Concise comments**: No redundant or excessive inline commentary
 - **Reuse existing infrastructure**: No new subsystems or invasive changes that risk breaking existing behavior
 - **Read before write**: Understand existing patterns; your changes must blend in with the surrounding codebase
@@ -151,6 +158,7 @@ ninja -C build-aot   # ~14 min
 | `GGML_SYCL_DEVICE_ARCH` | "" (JIT) | AOT target (`acm-g10`) |
 | `GGML_SYCL_GRAPH` | ON | SYCL graph capture |
 | `GGML_SYCL_DEVICE_CODE_SPLIT` | ON | Per-kernel device code split |
+| `GGML_SYCL_XMX_GATHER` | AUTO | XMX gather build policy; see docs/backend/SYCL.md, "XMX gather GEMMs and DG2 AOT builds" |
 | `GGML_SYCL_SUPPORT_LEVEL_ZERO_API` | ON | Level Zero direct allocation |
 
 `GGML_SYCL_WARP_SIZE=16` hardcoded for INTEL (`ggml-sycl/CMakeLists.txt:209`). Beware: some headers define `QK_WARP_SIZE`/`WARP_32_SIZE` as 32.
@@ -178,6 +186,21 @@ token precedence is `HF_TOKEN` then
 `HF_ENDPOINT`. The `lib` branch is generated from `master` and must never be
 edited directly. Server-only GCP behavior: when `AIP_MODE=PREDICTION`,
 `AIP_HTTP_PORT` overrides the CLI port.
+
+### Scheduler input-copy policy
+
+`GGML_SCHED_COPY_SYNC` defaults to synchronous copies. Only the exact value `0`
+opts into experimental stream-ordered copies; unset, `1`, empty, or other strings
+keep synchronization. It is cached process-wide on first scheduler use, so set
+it before launch. The opt-in requires single-device SYCL, a single-copy scheduler,
+compatible non-mapped host input, and an upload-completion event for mutable
+sources. Disabled mode allocates no extra upload event. CPU lifetime tests and the
+A770 gate pass, but model-output equivalence remains unproven; do not enable this
+by default or claim a speedup from the current evidence. For A/B runs use explicit
+`0` versus `1` and require a nonzero `stream-ordered input copies` counter in the
+opt-in arm (`-lv 5` for completion, `-v` for bench).
+Full contract, examples, exclusions, and evidence:
+[SYCL scheduler input-copy synchronization](docs/backend/SYCL.md#scheduler-input-copy-synchronization).
 
 ### GPU Discipline (mandatory before timing runs)
 
