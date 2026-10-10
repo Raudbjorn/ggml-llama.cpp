@@ -21,6 +21,7 @@
 #include <tuple>
 #include <vector>
 
+
 //////////////////////////////////////////////////
 // utils
 
@@ -44,6 +45,7 @@ static void print_usage(int, char ** argv) {
 }
 
 //////////////////////////////////////////////////
+
 
 // cb_eval is reused for each pair of positive - negative prompt
 struct callback_data {
@@ -337,8 +339,7 @@ static bool cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
 
 static bool get_hidden_layers(llama_context * ctx, std::vector<llama_token> & tokens) {
     llama_memory_clear(llama_get_memory(ctx), true);
-    common_batch batch = common_batch_get_one(ctx, tokens);
-    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+    if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {
         fprintf(stderr, "%s : failed to eval\n", __func__);
         return false;
     }
@@ -403,6 +404,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "PCA iterations must by multiply of PCA batch size\n");
         return 1;
     }
+
 
     callback_data cb_data;
 

@@ -19,8 +19,6 @@ import { serverStore } from '$lib/stores/server.svelte';
 // into the stores, and going through it here would read a half-built module
 import { TTLCache } from '$lib/utils/cache-ttl';
 import { detectThinkingSupport } from '$lib/utils/chat-template-thinking-detector';
-import { detectToolUseSupport } from '$lib/utils/chat-template-tool-detector';
-import { untrack } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
 
 /**
@@ -112,23 +110,6 @@ export class ModelPropsManager {
 		return detectThinkingSupport(props?.chat_template ?? '');
 	}
 
-	/** Infer tool support from the same props used for thinking detection. */
-	checkModelSupportsToolUse(modelId: string): boolean {
-		if (!serverStore.isRouterMode) {
-			return detectToolUseSupport(serverStore.props?.chat_template ?? '');
-		}
-
-		if (!modelId) return false;
-
-		// Subscribe to async cache writes; TTLCache itself is not reactive.
-		void this.cacheVersion;
-		const props = this.getModelProps(modelId);
-
-		if (!props) void this.fetchModelProps(modelId);
-
-		return detectToolUseSupport(props?.chat_template ?? '');
-	}
-
 	constructor(private host: ModelPropsHost) {}
 
 	/** Fetch modalities for all loaded models from /props endpoint. */
@@ -179,8 +160,7 @@ export class ModelPropsManager {
 			return null;
 		}
 
-		// In-flight changes must not retrigger reactive callers after a failed fetch.
-		if (untrack(() => this.fetching.has(modelId))) return null;
+		if (this.fetching.has(modelId)) return null;
 
 		this.fetching.add(modelId);
 
