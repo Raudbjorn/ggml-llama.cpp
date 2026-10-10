@@ -33,7 +33,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - **R03.5 (Ubiquitous):** The turbo FA proxy report shall label target reachability as undetermined by proxy timing.
 - **R03.6 (State-driven):** WHILE a memory-floor build is running, the `test-sycl-turbo-correctness` harness shall label every emitted result as non-correctness data.
 - **R03.7 (State-driven):** WHILE `GGML_SYCL_FA_MEMORY_FLOOR` is `OFF`, the SYCL VEC FA translation unit shall compile the existing kernel body without a floor-mode runtime branch.
-- **R03.8 (Unwanted behaviour):** IF the paired device-code manifest differs in a retained memory-path category, THEN the `bench-sycl-fa-floor.py` harness shall reject the floor measurement.
+- **R03.8 (Unwanted behaviour):** IF the paired device-code manifest differs in a retained category or normalized retained-path fingerprint, or cannot establish that fingerprint, THEN the `bench-sycl-fa-floor.py` harness shall reject the floor measurement.
 - **R03.9 (Ubiquitous):** The floor kernel shall retain the matching full kernel's global K/V load path.
 - **R03.10 (Ubiquitous):** The floor kernel shall retain the matching full kernel's local-memory staging and barrier path.
 - **R03.11 (Ubiquitous):** The floor kernel shall retain the matching full kernel's indexing and output-store path.
@@ -66,15 +66,28 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    symbol, build ID, compile command hash, route, type, and counts for global
    load messages, SLM load/store messages, gateway/barrier instructions, index/
    address instructions, and global output stores. Require nonzero applicable
-   categories and exact full/floor equality for all retained categories; require
-   the floor's floating arithmetic count to be lower as a negative control.
+   categories and exact full/floor equality for all retained categories. Also
+   retain a normalized instruction/dataflow record and fingerprint covering each
+   memory message's operation, address space/surface, cache policy, access width,
+   vector length, lane mask/predicate, and addressed bytes as a function of
+   lane/query/KV-loop indices. Include address/index dependencies, loop bounds,
+   control-flow edges, barriers, and output-store destinations. Normalize only
+   register/label names and incidental code addresses; do not erase stride,
+   offset, predication, or ordering differences. Compare the records as well as
+   their fingerprints. Unknown descriptors or unprovable address/control
+   equivalence fail closed; equal category counts alone never pass. Require the
+   floor's floating arithmetic count to be lower as a negative control.
 6. Add a manifest-validator fixture-pair test, not another kernel mode. First
    require an intact parsed manifest fixture to pass. Copy that fixture, remove
    one required load/barrier/store-category record, and require the validator to
    reject it with exit code 42 and the exact diagnostic
    `missing-required-category`. This distinguishes the expected fail-closed
    predicate from a missing fixture, unknown option, timeout, or parser crash,
-   without compiling or shipping a hashless kernel variant.
+   without compiling or shipping a hashless kernel variant. Additional mutated
+   copies preserve all category counts but change one message width/surface,
+   address stride, lane predicate, or loop bound. Each must fail with exit 42 and
+   `retained-path-mismatch`; an unparseable descriptor must fail with exit 42 and
+   `unverifiable-retained-path`. Register/label-only renaming must still pass.
 7. Keep non-turbo VEC, normal builds, and TILE unchanged. Add the early
    `LLAMA_TEST_TURBO_FA_BENCH=1` mode to
    `tests/test-sycl-turbo-correctness.cpp`: fixed VEC shapes, warmup,
@@ -154,12 +167,16 @@ Expected evidence:
   medians, descriptive proxy gap, build IDs, route, and named kernel driver;
 - every floor JSON row contains `correctness_valid=false` and no PASS/FAIL
   correctness verdict;
-- the manifest reports equal nonzero retained global-load, SLM, barrier,
-  indexing, and output-store categories for each actual full/floor VEC pair;
+- the manifest reports equal nonzero applicable retained categories and matching
+  normalized memory-descriptor, byte/address, and control-path records and
+  fingerprints for each actual full/floor VEC pair;
 - the manifest validator accepts the intact fixture, then rejects the fixture
   with one required category removed using exit code 42 and the exact
   `missing-required-category` diagnostic, without compiling or executing
   another kernel variant;
+- same-count descriptor/address/predicate/loop mutations fail with
+  `retained-path-mismatch`, unknown descriptors fail with
+  `unverifiable-retained-path`, and register/label-only renaming passes;
 - the report labels target reachability as undetermined by the proxy and emits
   the versioned `p11_eligible` measurement-readiness result;
 - valid fixtures with small, zero, and negative proxy gaps remain eligible for
