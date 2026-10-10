@@ -65,7 +65,8 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 7. Add parser and lifecycle tests to `scripts/test_bench_spec.py`: exact Level
    Zero/SYCL records, total-as-free fallback, `0/0`, malformed intervals,
    missing/duplicate records, write failure, and sleep-wake-shutdown with one
-   process record.
+   process record. Add deterministic exact-sample sequences: `100,60,80` must
+   report minimum/final `60/80`, and `100,60,60` must report `60/60`.
 8. Treat instrumented launches as memory evidence only. Discard their throughput
    fields from performance comparisons; any performance claim must come from a
    separate launch with `LLAMA_BENCH_MEM_LOG` absent.
@@ -106,8 +107,11 @@ Expected evidence:
   `final_free_bytes`;
 - the full-context process reports no more minimum free memory than the 8%-fill
   process under the same setup;
-- at least the full-context record demonstrates the intended distinction by
-  reporting `min_free_bytes < final_free_bytes`;
+- every valid record reports `min_free_bytes <= final_free_bytes`; equality is
+  valid when peak allocations remain live at the pre-cleanup final sample;
+- any observed `min_free_bytes < final_free_bytes` is recorded as a transient
+  dip, not required for acceptance; the deterministic sequences verify both
+  transient and retained-peak tracking independently of hardware behavior;
 - injected total-as-free, `0/0`, query, and write failures invalidate the
   process and produce no numeric headroom claim;
 - a sleep-wake-shutdown scenario emits one record and preserves the minimum
