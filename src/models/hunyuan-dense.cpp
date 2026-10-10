@@ -1,3 +1,6 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:72d728a540dfb3a84efab43efa4231003e560ce19a56a582677d0b8814ec4185
-size 195
+#include "models.h"
+
+std::unique_ptr<llm_graph_context> llama_model_hunyuan_dense::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(*this, params);
+}
+

@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d1477e8630074efa73e36ff49984b161b66888cdd2fe83f9192a31b3e84c6c2c
-size 636
+#include "models.h"
+
+// Stub to allow llama-quantize to open mmproj GGUFs
+
+[[noreturn]]
+void llama_model_clip::load_arch_hparams(llama_model_loader &) {
+    GGML_ABORT("CLIP is a quant-only stub; load_arch_hparams should not be called");
+}
+
+[[noreturn]]
+void llama_model_clip::load_arch_tensors(llama_model_loader &) {
+    GGML_ABORT("CLIP is a quant-only stub; load_arch_tensors should not be called");
+}
+
+[[noreturn]]
+std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_graph_params &) const {
+    GGML_ABORT("CLIP has no inference graph via llama_model dispatch; runtime lives in tools/mtmd/clip.cpp");
+}

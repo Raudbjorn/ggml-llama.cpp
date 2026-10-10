@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e045d5b890ce28e39acbad1c7783d699306fc1018e5c7fa0f3c81ef97590c7e1
-size 464
+<script lang="ts">
+	import { buttonVariants } from '$lib/components/ui/button/index.js';
+	import { cn } from '$lib/components/ui/utils.js';
+	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: AlertDialogPrimitive.ActionProps = $props();
+</script>
+
+<AlertDialogPrimitive.Action
+	bind:ref
+	class={cn(buttonVariants(), className)}
+	data-slot="alert-dialog-action"
+	{...restProps}
+/>

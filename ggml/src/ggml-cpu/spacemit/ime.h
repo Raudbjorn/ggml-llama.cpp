@@ -1,3 +1,21 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2007cbf6ea43a0d97f46e046f1449ab752ff35cc42caa09a22195dbe06656143
-size 511
+#pragma once
+
+#include "ggml-alloc.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+ggml_backend_buffer_type_t ggml_backend_cpu_riscv64_spacemit_buffer_type(void);
+
+void ggml_backend_cpu_riscv64_spacemit_set_numa_thread_affinity(int thread_n);
+
+void ggml_backend_cpu_riscv64_spacemit_clear_numa_thread_affinity_threaded(int thread_n);
+
+void * ggml_backend_cpu_riscv64_spacemit_alloc_shared(size_t size, size_t alignment);
+
+void ggml_backend_cpu_riscv64_spacemit_free_shared(void * ptr);
+
+#ifdef __cplusplus
+}
+#endif

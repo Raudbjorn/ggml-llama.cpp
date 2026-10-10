@@ -1,3 +1,61 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:04b5e591f535dadb3c064bb679229b123f99ab6e3061cf23e0d66e32963d5ad4
-size 1728
+<script lang="ts">
+	import { FileX } from '@lucide/svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+
+	interface Props {
+		open: boolean;
+		emptyFiles: string[];
+		onOpenChange?: (open: boolean) => void;
+	}
+
+	let { emptyFiles, onOpenChange, open = $bindable() }: Props = $props();
+
+	function handleOpenChange(newOpen: boolean) {
+		open = newOpen;
+		onOpenChange?.(newOpen);
+	}
+</script>
+
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title class="flex items-center gap-2">
+				<FileX class="h-5 w-5 text-destructive" />
+
+				Empty Files Detected
+			</AlertDialog.Title>
+
+			<AlertDialog.Description>
+				The following files are empty and have been removed from your attachments:
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+
+		<div class="space-y-3 text-sm">
+			<div class="rounded-lg bg-muted p-3">
+				<div class="mb-2 font-medium">Empty Files:</div>
+
+				<ul class="list-inside list-disc space-y-1 text-muted-foreground">
+					{#each emptyFiles as fileName (fileName)}
+						<li class="font-mono text-sm">{fileName}</li>
+					{/each}
+				</ul>
+			</div>
+
+			<div>
+				<div class="mb-2 font-medium">What happened:</div>
+
+				<ul class="list-inside list-disc space-y-1 text-muted-foreground">
+					<li>Empty files cannot be processed or sent to the AI model</li>
+
+					<li>These files have been automatically removed from your attachments</li>
+
+					<li>You can try uploading files with content instead</li>
+				</ul>
+			</div>
+		</div>
+
+		<AlertDialog.Footer>
+			<AlertDialog.Action onclick={() => handleOpenChange(false)}>Got it</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

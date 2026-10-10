@@ -1,3 +1,35 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:935fc057bb54595eac3b3a892a3e27c6e1ca92c61fa5b27f80adc2fdcdbfe5eb
-size 1102
+import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
+import { ChatFormCommandAction } from '$lib/enums';
+import type { ChatCommandsOptions, ChatFormCommand } from '$lib/types';
+
+/**
+ * The slash commands surfaced by the `/` command picker, in display order.
+ *
+ * Availability is supplied as predicates rather than store imports: this
+ * module is re-exported through the `$lib/utils` barrel, and importing
+ * stores at module load would create a circular dependency (the stores
+ * themselves import from `$lib/utils`).
+ */
+export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[] {
+	return [
+		{
+			action: ChatFormCommandAction.PROMPT,
+			description: 'Insert an MCP prompt',
+			disabled: !options.hasPrompts(),
+			name: 'prompt'
+		},
+		{
+			action: ChatFormCommandAction.CWD,
+			description: SET_WORKING_DIRECTORY_LABEL,
+			disabled: !options.hasCwdTools(),
+			keywords: ['current working directory'],
+			name: 'cwd'
+		},
+		{
+			action: ChatFormCommandAction.MODEL,
+			description: 'Select model',
+			disabled: !options.showModelSelector,
+			name: 'model'
+		}
+	];
+}

@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a1803c458f4c774fa7712352d37384512ffd5683317399b874a84e2a8a74af8f
-size 456
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn('mt-auto flex flex-col gap-2 p-4', className)}
+	data-slot="sheet-footer"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

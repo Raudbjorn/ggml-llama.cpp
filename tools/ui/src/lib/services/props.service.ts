@@ -1,3 +1,49 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:de5c9a98b0cef60b688e44932f5b75760114004e1ee67722b831756517655894
-size 1823
+/**
+ * PropsService - Fetches server properties from /props
+ *
+ * Returns global server settings and capabilities, including per-model
+ * modalities in MODEL mode. No reactive state; consumed by serverStore and
+ * the model props manager.
+ */
+
+import { apiFetchWithParams } from '$lib/utils';
+
+export class PropsService {
+	/**
+	 * Fetches global server properties from the `/props` endpoint.
+	 * In MODEL mode, returns modalities for the single loaded model.
+	 * In ROUTER mode, returns server-wide settings without model-specific modalities.
+	 *
+	 * @param autoload - If false, prevents automatic model loading (default: false)
+	 * @returns Server properties including default generation settings and capabilities
+	 * @throws {Error} If the request fails or returns invalid data
+	 */
+	static async fetch(autoload = false): Promise<ApiLlamaCppServerProps> {
+		const params: Record<string, string> = {};
+
+		if (!autoload) {
+			params.autoload = 'false';
+		}
+
+		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
+	}
+
+	/**
+	 * Fetches server properties for a specific model (ROUTER mode only).
+	 * Required in ROUTER mode because global `/props` does not include per-model modalities.
+	 *
+	 * @param modelId - The model ID to fetch properties for
+	 * @param autoload - If false, prevents automatic model loading (default: false)
+	 * @returns Server properties specific to the requested model
+	 * @throws {Error} If the request fails, model not found, or model not loaded
+	 */
+	static async fetchForModel(modelId: string, autoload = false): Promise<ApiLlamaCppServerProps> {
+		const params: Record<string, string> = { model: modelId };
+
+		if (!autoload) {
+			params.autoload = 'false';
+		}
+
+		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
+	}
+}

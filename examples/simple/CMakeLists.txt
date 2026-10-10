@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c4acc5493295ac4b9a1223f60004e6ea5b054efd75d5f3dc498032c464b24817
-size 224
+set(TARGET llama-simple)
+add_executable(${TARGET} simple.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

@@ -1,3 +1,48 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2ebe69813219a648b3f2df97ae9c5088086b29d8e6f0f6d76ed919c419efeccd
-size 1313
+import { afterNavigate, beforeNavigate } from '$app/navigation';
+import { draftMessagesStore } from '$lib/stores';
+import { onMount } from 'svelte';
+
+interface UseDraftMessagesOptions {
+	getChatId: () => string | undefined;
+	getMessage: () => string;
+	getFiles: () => ChatUploadedFile[];
+	setMessage: (message: string) => void;
+	setFiles: (files: ChatUploadedFile[]) => void;
+	getInitialMessage: () => string;
+}
+
+export function useDraftMessages(options: UseDraftMessagesOptions) {
+	onMount(() => {
+		const chatId = options.getChatId();
+		const draft = draftMessagesStore.getDraftMessage(chatId);
+
+		if ((draft.message || draft.files.length > 0) && !options.getInitialMessage()) {
+			options.setMessage(draft.message);
+			options.setFiles(draft.files);
+		}
+	});
+
+	beforeNavigate(() => {
+		const chatId = options.getChatId();
+
+		draftMessagesStore.saveDraftMessage(chatId, options.getMessage(), options.getFiles());
+	});
+
+	afterNavigate((navigation) => {
+		if (navigation?.from != null) {
+			const chatId = options.getChatId();
+			const draft = draftMessagesStore.getDraftMessage(chatId);
+
+			options.setMessage(draft.message);
+			options.setFiles(draft.files);
+		}
+	});
+
+	function clearDraft() {
+		const chatId = options.getChatId();
+
+		draftMessagesStore.clearDraftMessage(chatId);
+	}
+
+	return { clearDraft };
+}

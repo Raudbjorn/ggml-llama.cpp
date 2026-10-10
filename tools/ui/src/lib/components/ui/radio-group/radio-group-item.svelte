@@ -1,3 +1,31 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:80804f621123cac57e1af274fc36bc2072e929f257dc4367f0346269284afd7d
-size 1447
+<script lang="ts">
+	import CircleIcon from '@lucide/svelte/icons/circle';
+	import { cn, type WithoutChildrenOrChild } from '$lib/components/ui/utils.js';
+	import { RadioGroup as RadioGroupPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithoutChildrenOrChild<RadioGroupPrimitive.ItemProps> = $props();
+</script>
+
+<RadioGroupPrimitive.Item
+	bind:ref
+	class={cn(
+		'border-input dark:bg-input/30 data-checked:bg-primary data-checked:text-primary-foreground dark:data-checked:bg-primary data-checked:border-primary aria-invalid:aria-checked:border-primary aria-invalid:border-destructive focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 dark:aria-invalid:border-destructive/50 flex size-4 rounded-full focus-visible:ring-3 aria-invalid:ring-3 group/radio-group-item peer relative aspect-square shrink-0 border outline-none after:absolute after:-inset-x-3 after:-inset-y-2 disabled:cursor-not-allowed disabled:opacity-50',
+		className
+	)}
+	data-slot="radio-group-item"
+	{...restProps}
+>
+	{#snippet children({ checked })}
+		<div class="flex size-4 items-center justify-center" data-slot="radio-group-indicator">
+			{#if checked}
+				<CircleIcon
+					class="bg-primary-foreground absolute top-1/2 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
+				/>
+			{/if}
+		</div>
+	{/snippet}
+</RadioGroupPrimitive.Item>

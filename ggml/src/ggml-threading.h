@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9652729043ed91482392c1aa08af5d813190d0ace2e7982d2539d28240ab8d8b
-size 198
+#pragma once
+
+#include "ggml.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+GGML_API void ggml_critical_section_start(void);
+GGML_API void ggml_critical_section_end(void);
+
+#ifdef __cplusplus
+}
+#endif

@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:bacbdbb8a74e2ab8bbdec577b57038a5e874e626520eed2777dd7fe878440341
-size 261
+*.o
+*.a
+.cache/
+# Do not ignore .git directory, otherwise the reported build number will always be 0
+.github/
+.gitignore
+.vs/
+.vscode/
+.DS_Store
+
+build*/
+
+tools/ui/node_modules/
+
+models/*
+
+/llama-cli
+/llama-quantize
+
+arm_neon.h
+compile_commands.json
+Dockerfile

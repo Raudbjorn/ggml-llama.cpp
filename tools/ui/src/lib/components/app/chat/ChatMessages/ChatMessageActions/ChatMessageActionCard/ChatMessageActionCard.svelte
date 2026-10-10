@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7c9e59c32e340bd206475028021655cff99e3cd1baba566c415b460d1f4c2fc2
-size 637
+<script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import type { Component, Snippet } from 'svelte';
+
+	interface Props {
+		icon: Component<{ class?: string }>;
+		message: Snippet;
+		actions: Snippet;
+	}
+
+	let { actions, icon: IconComponent, message }: Props = $props();
+</script>
+
+<div class="my-2 rounded-lg border border-border bg-card p-3">
+	<div class="mb-3 flex items-center gap-2 text-sm">
+		<IconComponent class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+
+		<span>
+			{@render message()}
+		</span>
+	</div>
+
+	<div class="flex flex-wrap items-center gap-2">
+		{@render actions()}
+	</div>
+</div>

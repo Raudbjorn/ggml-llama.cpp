@@ -1,3 +1,23 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:bd001d2cabe227daf9b827497ed810dc0efa794955693420197571862cf8927e
-size 496
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLTdAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLTdAttributes> = $props();
+</script>
+
+<td
+	bind:this={ref}
+	class={cn(
+		'bg-clip-padding p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pe-0',
+		className
+	)}
+	data-slot="table-cell"
+	{...restProps}
+>
+	{@render children?.()}
+</td>

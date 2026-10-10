@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1f73fcb1bb208a42c3f39d234a01f100c4e06b21297175bb00eabd0f65c54b78
-size 193
+#ifndef GGML_SYCL_CONV3D_HPP
+#define GGML_SYCL_CONV3D_HPP
+
+#include "common.hpp"
+
+void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#endif // GGML_SYCL_CONV3D_HPP

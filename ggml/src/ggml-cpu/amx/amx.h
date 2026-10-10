@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9d098ceee6a8114d4a660ff269064a27aa25b8a4f205d1e6984d17bec5104f0d
-size 202
+#include "ggml-backend.h"
+#include "ggml-cpu-impl.h"
+
+// GGML internal header
+
+#if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
+ggml_backend_buffer_type_t ggml_backend_amx_buffer_type(void);
+#endif

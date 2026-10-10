@@ -1,3 +1,36 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:894c226e825b63031a8de2b88f436b31cd869543451651d8043a833c15a16076
-size 738
+<script lang="ts">
+	import { ModeWatcher } from 'mode-watcher';
+	import { onMount } from 'svelte';
+
+	interface Props {
+		children?: any;
+	}
+
+	let { children }: Props = $props();
+
+	onMount(() => {
+		const root = document.documentElement;
+		const theme = localStorage.getItem('mode-watcher-mode') || 'system';
+
+		if (theme === 'dark') {
+			root.classList.add('dark');
+		} else if (theme === 'light') {
+			root.classList.remove('dark');
+		} else {
+			const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+			if (prefersDark) {
+				root.classList.add('dark');
+			} else {
+				root.classList.remove('dark');
+			}
+		}
+	});
+</script>
+
+<ModeWatcher />
+
+{#if children}
+	{@const Component = children}
+
+	<Component />
+{/if}

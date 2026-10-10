@@ -1,3 +1,42 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:51578424774638b721f8b6d27cae19fe5dd3bfba23a9ca8e068ba8eb7ebd6b9b
-size 492
+test-results
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+dev-dist
+dist
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# PWA Artifacts
+apple-splash-*.png
+apple-touch-icon-*.png
+maskable-icon-*.png
+pwa-*.png
+static/favicon*
+
+# Storybook
+*storybook.log
+storybook-static
+*.code-workspace
+
+# Vitest browser mode failure artifacts
+.vitest-attachments/
+tests/**/__screenshots__/

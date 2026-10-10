@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0dc4276c45c3925061e2cdb37597d38d641fc2ba976fa98f423e9335175a0491
-size 615
+<script lang="ts">
+	import { ArrowDown } from '@lucide/svelte';
+	import ActionIcon from '$lib/components/app/actions/ActionIcon.svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+
+	let { onclick }: { onclick: (e?: MouseEvent) => void } = $props();
+</script>
+
+<div class="pointer-events-auto flex justify-center relative h-0">
+	<ActionIcon
+		ariaLabel="Scroll to bottom"
+		class="h-9 w-9 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground absolute bottom-4"
+		icon={ArrowDown}
+		iconSize={ICON_CLASS_DEFAULT}
+		{onclick}
+		size="lg"
+		tooltip="Scroll to bottom"
+	/>
+</div>

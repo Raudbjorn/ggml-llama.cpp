@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:bea31f009d2c471a7f6cd7a0ecf31ecaf08691914305a9ef7f986740e39f0910
-size 323
+// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-License-Identifier: MIT
+//
+
+#pragma once
+
+#include "ggml-alloc.h"
+
+#ifdef  __cplusplus
+extern "C" {
+#endif
+
+ggml_backend_buffer_type_t ggml_backend_cpu_kleidiai_buffer_type(void);
+
+#ifdef  __cplusplus
+}
+#endif

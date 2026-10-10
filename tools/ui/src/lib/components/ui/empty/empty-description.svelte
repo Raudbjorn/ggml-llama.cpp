@@ -1,3 +1,23 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8f27be7a2462e5389f729f2d100fcf19610225049e6d5d901b514f692e21380c
-size 556
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn(
+		'text-sm/relaxed text-muted-foreground [&>a:hover]:text-primary text-sm/relaxed [&>a]:underline [&>a]:underline-offset-4',
+		className
+	)}
+	data-slot="empty-description"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

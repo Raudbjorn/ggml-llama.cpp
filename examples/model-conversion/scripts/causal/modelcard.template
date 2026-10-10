@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d358c15d70f308e50263e81099ec44c5d7593fa65e1b3839f1ee7242595d90e7
-size 185
+---
+base_model:
+- {base_model}
+---
+# {model_name} GGUF
+
+Recommended way to run this model:
+
+```sh
+llama-server -hf {namespace}/{model_name}-GGUF
+```
+
+Then, access http://localhost:8080

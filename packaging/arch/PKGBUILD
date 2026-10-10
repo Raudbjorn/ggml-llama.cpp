@@ -1,3 +1,122 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:55f750e5d6909f305728ecd7fdb26bc206b10353fc528513be5ee3d1e1d77d4e
-size 6177
+# Maintainer: Sveinbjorn Geirsson <claude@sveinbjorn.dev>
+#
+# Builds this fork's SYCL backend for Intel Arc (acm-g10 / Xe-HPG), JIT by default.
+# See CLAUDE.md and docs/backend/SYCL.md in the source tree for the rationale behind
+# every non-obvious flag below - do not "simplify" this file without reading those first.
+pkgname=llama-cpp-turboquant-sycl-git
+pkgver=0.5.0.r0.g0000000
+pkgrel=1
+pkgdesc="llama.cpp fork with TurboQuant+ KV/weight codecs, SYCL backend for Intel Arc"
+arch=('x86_64')
+url="https://github.com/Raudbjorn/ggml-llama.cpp"
+license=('MIT')
+# intel-oneapi-mkl is a *runtime* dependency, not just a build one: the SYCL
+# backend dynamically links libmkl_sycl_blas.so.6, libmkl_intel_ilp64.so.3,
+# libmkl_tbb_thread.so.3, and libmkl_core.so.3 (confirmed via ldd on a real
+# build). curl is intentionally absent: -DLLAMA_CURL=OFF below, model
+# download goes through cpp-httplib/openssl (already listed) instead.
+# The SYCL runtime is a runtime dependency too: libggml-sycl.so's RPATH
+# resolves libsycl.so.9, libur_loader.so.0 and libur_adapter_level_zero.so
+# (plus libimf/libintlc/libsvml/libirng/libiomp5) under /opt/intel/oneapi/
+# compiler/<ver>/lib, and intel-oneapi-compiler-shared-runtime does not ship
+# any of those. In the official repos they belong to
+# intel-oneapi-compiler-dpcpp-cpp-runtime-libs; a locally built
+# intel-dpcpp-cpp-compiler (the offline-installer repack used on the
+# reference A770 host) owns the same files but only provides
+# intel-oneapi-dpcpp-cpp, not the runtime-libs name. Depending on
+# intel-oneapi-dpcpp-cpp resolves on both (official: the compiler package,
+# which depends on the runtime libs; local: via provides) and keeps libsycl
+# installed after makedepends are removed. Switch to
+# intel-oneapi-compiler-dpcpp-cpp-runtime-libs once the local compiler
+# package declares that provides.
+depends=('intel-oneapi-dpcpp-cpp' 'intel-oneapi-compiler-shared-runtime' 'intel-oneapi-mkl' 'intel-compute-runtime' 'level-zero-loader' 'onetbb' 'openssl')
+makedepends=('git' 'cmake' 'ninja' 'python' 'npm')
+provides=('llama-cpp')
+conflicts=('llama-cpp' 'llama-cpp-git' 'llama.cpp-sycl' 'llama.cpp-sycl-f16' 'llama.cpp-sycl-f16-git')
+install="${pkgname}.install"
+# Keep the admin's LLAMA_ARGS / env opt-ins across upgrades; a changed default
+# lands as /etc/conf.d/llama-server.pacnew instead of overwriting the file.
+backup=('etc/conf.d/llama-server')
+source=("${pkgname%-git}::git+${url}.git#branch=master")
+sha256sums=('SKIP')
+
+# CRITICAL: host CFLAGS/CXXFLAGS injected by makepkg's buildflags leak into the SYCL
+# device compile and produce garbage GPU output (docs/backend/SYCL.md, "Known Issues").
+# Do not remove this without replacing it with an equivalent CFLAGS/CXXFLAGS reset in
+# build(). LTO is also disabled: it has not been validated against the icpx/SYCL toolchain
+# here.
+options=('!buildflags' '!lto')
+
+pkgver() {
+    cd "${pkgname%-git}"
+    # git describe's own exit status must gate the fallback, not the
+    # pipeline's (sed exits 0 on empty input from a failed git describe,
+    # silently emitting an empty pkgver that makepkg rejects).
+    local described
+    if described="$(git describe --long --tags 2>/dev/null)"; then
+        printf '%s' "$described" | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+    else
+        printf "0.5.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    fi
+}
+
+build() {
+    # Reset host flags even with options=(!buildflags) set, in case makepkg.conf still
+    # exports something into the environment - belt and suspenders per the SYCL doc's
+    # warning that host -march flags corrupt the device pipeline.
+    unset CFLAGS CXXFLAGS LDFLAGS
+
+    local OA=/opt/intel/oneapi
+    source "$OA/setvars.sh" --force > /dev/null
+    export CMPLR_ROOT="$OA/compiler/latest" MKLROOT="$OA/mkl/latest" TBBROOT="$OA/tbb/latest"
+    export PATH="$OA/compiler/latest/bin:$PATH"
+    export LD_LIBRARY_PATH="$OA/compiler/latest/lib:$OA/compiler/latest/opt/compiler/lib:$OA/mkl/latest/lib:$OA/tbb/latest/lib/intel64/gcc4.8:${LD_LIBRARY_PATH:-}"
+
+    # RPATH bakes the oneAPI runtime library locations into the installed
+    # binaries: libggml-sycl.so links libsycl.so and libmkl_*.so.* from these
+    # exact paths (confirmed via ldd on a real build), but LD_LIBRARY_PATH
+    # set here only exists for this build() subshell - without an RPATH the
+    # installed llama-server can't find libsycl.so at all once this function
+    # returns.
+    local RPATH="$CMPLR_ROOT/lib:$CMPLR_ROOT/opt/compiler/lib:$MKLROOT/lib:$TBBROOT/lib/intel64/gcc4.8"
+
+    cmake -S "${pkgname%-git}" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_SHARED_LIBS=ON \
+        -DGGML_NATIVE=OFF \
+        -DGGML_SYCL=ON \
+        -DGGML_SYCL_TARGET=INTEL \
+        -DGGML_SYCL_F16=ON \
+        -DGGML_SYCL_GRAPH=ON \
+        -DCMAKE_C_COMPILER=icx \
+        -DCMAKE_CXX_COMPILER=icpx \
+        -DCMAKE_C_COMPILER_LAUNCHER= \
+        -DCMAKE_CXX_COMPILER_LAUNCHER= \
+        -DMKL_DIR="$MKLROOT/lib/cmake/mkl" \
+        -DTBB_DIR="$TBBROOT/lib/cmake/tbb" \
+        -DIntelSYCL_DIR="$CMPLR_ROOT/lib/cmake/IntelSYCL" \
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+        -DCMAKE_INSTALL_RPATH="$RPATH" \
+        -DLLAMA_CURL=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DGGML_BUILD_TESTS=OFF
+    # Build everything CMake registers install rules for (the default "all"
+    # target), not just the three binaries this package cares about: several
+    # tools' install() calls are unconditional or gated separately from what
+    # a hand-picked --target list would build, so `cmake --install` below
+    # would otherwise abort on the first tool it expected but never built.
+    cmake --build build
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+
+    install -Dm644 "${pkgname%-git}/LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "${pkgname%-git}/packaging/arch/llama-server.conf" \
+        "$pkgdir/etc/conf.d/llama-server"
+    install -Dm644 "${pkgname%-git}/packaging/arch/llama-server.service" \
+        -t "$pkgdir/usr/lib/systemd/system"
+}

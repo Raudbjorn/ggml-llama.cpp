@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:4d02d695a84dd8d48c2f22d799c1ded98d6a9fe1a991b4571369effc7e76c400
-size 374
+#pragma once
+
+#include "openvino/pass/matcher_pass.hpp"
+
+namespace ov {
+namespace frontend {
+namespace ggml {
+namespace pass {
+
+class SqueezeMatmul : public ov::pass::MatcherPass {
+public:
+    OPENVINO_MATCHER_PASS_RTTI("ov::frontend::ggml::pass::SqueezeMatmul")
+    SqueezeMatmul();
+};
+
+}  // namespace pass
+}  // namespace ggml
+}  // namespace frontend
+}  // namespace ov

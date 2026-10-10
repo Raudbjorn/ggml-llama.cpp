@@ -1,3 +1,6 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:30cae5546c83140aaa3a811ef829895423759490d5f34a51e707d1422a99e633
-size 164
+{
+  "Exclude": ["^\\.gitmodules$", "stb_image\\.h", "examples/test-cmake/build/", "examples/test-cmake/build-subdir/"],
+  "Disable": {
+    "IndentSize": true
+  }
+}

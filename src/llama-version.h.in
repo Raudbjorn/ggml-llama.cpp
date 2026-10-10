@@ -1,3 +1,4 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:80db9c43e37fed5e57362ef196270e37d6ecf3e968e166ec0c0d166a2bfa48a3
-size 99
+#pragma once
+
+#define LLAMA_VERSION "@LLAMA_VERSION@"
+#define LLAMA_COMMIT  "@LLAMA_BUILD_COMMIT@"

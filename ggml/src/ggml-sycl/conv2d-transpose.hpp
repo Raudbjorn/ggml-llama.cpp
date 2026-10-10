@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a822eee0fd8574bcddaa73d0e97e0a4274646344e6cddc520b57df139b2c9501
-size 278
+#ifndef GGML_SYCL_CONV2D_TRANSPOSE_HPP
+#define GGML_SYCL_CONV2D_TRANSPOSE_HPP
+
+#include "common.hpp"
+
+#define SYCL_CONV2D_TRANSPOSE_BLOCK_SIZE 256
+
+void ggml_sycl_op_conv2d_transpose(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#endif // GGML_SYCL_CONV2D_TRANSPOSE_HPP

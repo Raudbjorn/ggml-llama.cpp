@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:88ec43bbb5ddad643bad8046f22afd36724ccf02f4e3e9496e77d5d15cc9607b
-size 382
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils';
+	import { Dialog as DialogPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: DialogPrimitive.TitleProps = $props();
+</script>
+
+<DialogPrimitive.Title
+	bind:ref
+	class={cn('text-lg leading-none font-semibold', className)}
+	data-slot="dialog-title"
+	{...restProps}
+/>

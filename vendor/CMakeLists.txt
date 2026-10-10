@@ -1,3 +1,11 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:033e4e5efe1ffe8f2a175e20cf8664b50edafc26aa920a7094e9fde8456379d3
-size 303
+# mtmd needs these even when common is not built
+add_subdirectory(hash)
+add_subdirectory(miniaudio)
+add_subdirectory(nlohmann)
+add_subdirectory(sheredom)
+add_subdirectory(stb)
+
+# used by the server and download helpers
+if (LLAMA_BUILD_SERVER OR LLAMA_DOWNLOAD)
+    add_subdirectory(cpp-httplib)
+endif()

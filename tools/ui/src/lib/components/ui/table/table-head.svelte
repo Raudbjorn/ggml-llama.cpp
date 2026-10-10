@@ -1,3 +1,23 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:60c0e94d6c010edd2376de4c78f3e678b96a51a94a8d1026e1eec79657800733
-size 540
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLThAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLThAttributes> = $props();
+</script>
+
+<th
+	bind:this={ref}
+	class={cn(
+		'h-10 bg-clip-padding px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pe-0',
+		className
+	)}
+	data-slot="table-head"
+	{...restProps}
+>
+	{@render children?.()}
+</th>

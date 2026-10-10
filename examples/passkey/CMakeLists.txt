@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:fe2666390ccb9c1707c6bfdbb2703369bdb8da4cb950b0ca0084feda9a331d5e
-size 239
+set(TARGET llama-passkey)
+add_executable(${TARGET} passkey.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

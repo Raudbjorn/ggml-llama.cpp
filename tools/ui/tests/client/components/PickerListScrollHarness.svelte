@@ -1,3 +1,43 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e15b5f60838023acd01c777e68e236630a7048473ff00a60207c6ae5bcb8cacd
-size 902
+<script lang="ts">
+	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
+
+	interface Item {
+		id: string;
+		label: string;
+	}
+
+	const items: Item[] = Array.from({ length: 20 }, (_, i) => ({
+		id: String(i),
+		label: `item ${i}`
+	}));
+
+	let open = $state(false);
+	let scrollTrigger = $state(0);
+	let selectedIndex = $state(0);
+
+	export function openPicker() {
+		open = true;
+	}
+</script>
+
+<div style="height: 5000px;">conversation</div>
+
+{#if open}
+	<div data-testid="picker-host">
+		<ChatFormPickerList
+			isLoading={false}
+			itemKey={(it) => it.id}
+			{items}
+			{scrollTrigger}
+			searchQuery=""
+			{selectedIndex}
+			showSearchInput={false}
+		>
+			{#snippet item(it, index, isSelected)}
+				<ChatFormPickerListItem dataIndex={index} {isSelected} onclick={() => {}}>
+					{it.label}
+				</ChatFormPickerListItem>
+			{/snippet}
+		</ChatFormPickerList>
+	</div>
+{/if}

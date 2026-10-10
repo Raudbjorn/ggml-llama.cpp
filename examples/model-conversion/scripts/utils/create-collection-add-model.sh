@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:310f14e2951356438ab34fb5e81daef994a456e59ab0d9e7d71e367859d8367e
-size 232
+
+#!/usr/bin/env bash
+
+COLLECTION_SLUG=$(python ./create_collection.py --return-slug)
+echo "Created collection: $COLLECTION_SLUG"
+
+# Use it in the next command
+python add_model_to_collection.py "$COLLECTION_SLUG" "username/my-model"

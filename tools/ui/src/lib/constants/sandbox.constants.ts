@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e0a1d826cfc43eb6705d02cb8b6e0f9625b3884f8403df06b811cffcb0e1b659
-size 371
+import { BuiltInTool } from '$lib/enums';
+
+export const SANDBOX_TOOL_NAME = BuiltInTool.BROWSER_RUN_JAVASCRIPT;
+
+export const SANDBOX_TIMEOUT_MS_DEFAULT = 10000;
+
+export const SANDBOX_TIMEOUT_MS_MAX = 30000;
+
+export const SANDBOX_OUTPUT_MAX_CHARS = 8192;
+
+export const SANDBOX_EMPTY_OUTPUT = '(no output)';
+
+export const SANDBOX_TRUNCATION_NOTICE = '[output truncated]';

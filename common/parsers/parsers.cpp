@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:87593a29686ee0f8b64d1baee19c182aef63ea42c379d926688fb2da4f07e14a
-size 964
+#include "parsers.h"
+
+#include "log.h"
+
+void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
+    for (const auto & tool : tools) {
+        if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
+            LOG_INF("Skipping tool without function: %s", tool.dump(2).c_str());
+            continue;
+        }
+        fn(tool);
+    }
+}
+
+void foreach_parameter(const json & function, const std::function<void(const common_chat_schema_property &, const common_chat_schema_document_ptr &)> & fn) {
+    auto         params = common_chat_tool_parameters(function);
+    auto         doc    = std::make_shared<const common_chat_schema_document>(common_chat_schema_from_json(params));
+    const auto * object = dynamic_cast<const common_chat_schema_object *>(doc->root.get());
+    if (!object) {
+        return;
+    }
+    for (const auto & prop : object->properties) {
+        fn(prop, doc);
+    }
+}

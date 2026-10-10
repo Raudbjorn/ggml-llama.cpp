@@ -1,3 +1,28 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:11bdf5bc721e56dc94c8570199a0261d465daa6af6f88c95c780e370393b1750
-size 775
+#include "frontend.h"
+
+#include "input_model.h"
+#include "op_table.h"
+#include "translate_session.h"
+#include <openvino/core/type.hpp>
+
+namespace ov {
+namespace frontend {
+namespace ggml {
+
+FrontEnd::FrontEnd() {}
+
+std::shared_ptr<Model> FrontEnd::convert(const InputModel::Ptr & model, bool naive) {
+    auto ggml_model = ov::as_type_ptr<ggml::InputModel>(model);
+    FRONT_END_GENERAL_CHECK(ggml_model, "Invalid input model");
+    std::shared_ptr<Model> converted_model;
+    const auto & supported_ops = get_supported_ops();
+    {
+        TranslateSession translate_session(model, supported_ops, naive);
+        converted_model = translate_session.get_converted_model();
+    }
+    return converted_model;
+}
+
+}  // namespace ggml
+}  // namespace frontend
+}  // namespace ov

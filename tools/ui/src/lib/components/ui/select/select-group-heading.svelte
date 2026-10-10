@@ -1,3 +1,21 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7bd6819125fadebbea543727def7f1eb624639c8eb9236df3618589d3e5d862a
-size 546
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { Select as SelectPrimitive } from 'bits-ui';
+	import type { ComponentProps } from 'svelte';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: ComponentProps<typeof SelectPrimitive.GroupHeading> = $props();
+</script>
+
+<SelectPrimitive.GroupHeading
+	bind:ref
+	class={cn('px-2 py-1.5 text-xs text-muted-foreground', className)}
+	data-slot="select-group-heading"
+	{...restProps}
+>
+	{@render children?.()}
+</SelectPrimitive.GroupHeading>

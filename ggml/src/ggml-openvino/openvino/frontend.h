@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:f3d3179b4e9cf4ca9ec4b43903faab18cb9a484ed5a093e120d83caf9c3dfac3
-size 404
+// Copyright (C) 2018-2024 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+//
+
+#pragma once
+
+#include <openvino/frontend/frontend.hpp>
+
+namespace ov {
+namespace frontend {
+namespace ggml {
+
+class FrontEnd {
+public:
+    FrontEnd();
+
+    static std::shared_ptr<Model> convert(const InputModel::Ptr & model, bool naive = false);
+};
+
+}  // namespace ggml
+}  // namespace frontend
+}  // namespace ov

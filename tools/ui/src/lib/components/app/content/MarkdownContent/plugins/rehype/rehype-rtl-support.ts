@@ -1,3 +1,28 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:35bf36212fc7f7ca72cbbdf0069fa0f2019be6c6fcf88ebe197438b0e1bae712
-size 811
+/**
+ * Rehype plugin to provide comprehensive RTL support by adding dir="auto"
+ * to all text-containing elements.
+ *
+ * This operates directly on the HAST tree, ensuring that all elements
+ * (including those not in a predefined list) receive the attribute.
+ */
+
+import type { Element, Root } from 'hast';
+import type { Plugin } from 'unified';
+import { visit } from 'unist-util-visit';
+
+/**
+ * Rehype plugin to add dir="auto" to all elements that have children.
+ * This provides bidirectional text support for mixed RTL/LTR content.
+ */
+export const rehypeRtlSupport: Plugin<[], Root> = () => {
+	return (tree: Root) => {
+		visit(tree, 'element', (node: Element) => {
+			if (node.children && node.children.length > 0) {
+				node.properties = {
+					...node.properties,
+					dir: 'auto'
+				};
+			}
+		});
+	};
+};

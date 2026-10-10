@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:305d5a47e237a5dcfba62f19e24c4fdaa68286e6397d779fef68cf06f87ad14b
-size 417
+set(BUILD_SHARED_LIBS OFF)
+set(CMAKE_SKIP_INSTALL_RULES TRUE)
+
+add_subdirectory("${KLEIDIAI_SRC}" "${KLEIDIAI_BIN}" EXCLUDE_FROM_ALL)
+
+if (NOT TARGET kleidiai)
+    message(FATAL_ERROR "KleidiAI target was not created")
+endif()
+
+if (MSVC)
+    target_compile_options(kleidiai PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:/WX->)
+else()
+    target_compile_options(kleidiai PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-error>)
+endif()

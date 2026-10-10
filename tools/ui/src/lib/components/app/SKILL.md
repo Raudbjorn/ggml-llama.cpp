@@ -1,3 +1,11 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6085fb4c6857915f4175669e386772c997201ab522fab8cc79e89e87bf2d7cf5
-size 583
+---
+name: app
+description: Opinionated app components building on top of ./ui primitives
+---
+
+- Can include business logic and state management
+- Can include data fetching and caching logic
+- Should use original spelling for HTML-native events and `camelCase` for custom events
+- Props and markup attributes should be listed alphabetically
+- Use JS Objects and Arrays for CSS classes and styles when they are dynamic
+- Whenever there can be repetition in the component's markup, if it's too small to be decoupled as a separate component — use Svelte 5's `{#snippet}` + `{@render}`

@@ -1,3 +1,21 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:09cb3f065d697c73526d37099a4561fc91932f9d1d0b2003e16192dae935fe8e
-size 549
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils';
+	import type { Snippet } from 'svelte';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	interface Props extends HTMLAttributes<HTMLDivElement> {
+		children: Snippet;
+	}
+
+	let { children, class: className, ...restProps }: Props = $props();
+</script>
+
+<div
+	class={cn(
+		'flex items-center [&>*:first-child]:rounded-r-none [&>*:last-child]:rounded-l-none [&>*:not(:first-child):not(:last-child)]:rounded-none',
+		className
+	)}
+	{...restProps}
+>
+	{@render children()}
+</div>

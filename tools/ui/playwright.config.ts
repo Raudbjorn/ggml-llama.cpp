@@ -1,3 +1,31 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c76b8eb30f5f12710b7d9224f37277324b88f4674241987f659fc24d26caedbb
-size 653
+import { defineConfig, devices } from '@playwright/test';
+
+export default defineConfig({
+	expect: {
+		timeout: 5000
+	},
+	forbidOnly: !!process.env.CI,
+	fullyParallel: true,
+	projects: [
+		{
+			name: 'chromium',
+			use: { ...devices['Desktop Chrome'] }
+		}
+	],
+	reporter: 'line',
+	retries: process.env.CI ? 2 : 0,
+	testDir: 'tests/e2e',
+	testMatch: ['**/*.e2e.ts'],
+	timeout: 30000,
+	use: {
+		baseURL: 'http://localhost:8181',
+		trace: 'on-first-retry'
+	},
+	webServer: {
+		command: 'npm run build && npx http-server ./dist -p 8181',
+		port: 8181,
+		reuseExistingServer: !process.env.CI,
+		timeout: 120000
+	},
+	workers: process.env.CI ? 1 : undefined
+});

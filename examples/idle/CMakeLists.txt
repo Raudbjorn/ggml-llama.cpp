@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d5bb9f24883b5c75f6aaa9909b1ca8e2c74ab8572516fbb1f2fc3d992b77118e
-size 233
+set(TARGET llama-idle)
+add_executable(${TARGET} idle.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama llama-common ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_11)

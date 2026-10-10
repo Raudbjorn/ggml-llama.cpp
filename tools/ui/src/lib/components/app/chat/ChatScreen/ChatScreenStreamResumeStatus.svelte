@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:bb9935e2db9ea324bd3431cee50150b57f2fa104997441b1f65f14d9bfed2f99
-size 635
+<script lang="ts">
+	import { Loader2 } from '@lucide/svelte';
+	import { StreamConnectionState } from '$lib/enums';
+	import { chatStore } from '$lib/stores';
+
+	let state = $derived(chatStore.streamConnectionState);
+</script>
+
+{#if state === StreamConnectionState.RESUMING}
+	<div
+		aria-live="polite"
+		class="pointer-events-auto mx-auto mt-2 mb-2 flex max-w-[48rem] items-center gap-2 rounded-md border border-blue-400/40 bg-blue-50/60 px-3 py-1.5 text-sm text-blue-700 dark:bg-blue-950/40 dark:text-blue-200"
+		role="status"
+	>
+		<Loader2 class="h-3.5 w-3.5 animate-spin" />
+
+		<span>Reconnecting to the stream...</span>
+	</div>
+{/if}

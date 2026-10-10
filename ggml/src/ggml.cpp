@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:64e6b5c8d716ae8697e45481a7153540be01f721be2dc7e753aa47b36a69c753
-size 738
+#include "ggml-impl.h"
+
+#include <cstdlib>
+#include <exception>
+
+static std::terminate_handler previous_terminate_handler;
+
+GGML_NORETURN static void ggml_uncaught_exception() {
+    ggml_print_backtrace();
+    if (previous_terminate_handler) {
+        previous_terminate_handler();
+    }
+    abort(); // unreachable unless previous_terminate_handler was nullptr
+}
+
+static bool ggml_uncaught_exception_init = []{
+    const char * GGML_NO_BACKTRACE = getenv("GGML_NO_BACKTRACE");
+    if (GGML_NO_BACKTRACE) {
+        return false;
+    }
+    const auto prev{std::get_terminate()};
+    GGML_ASSERT(prev != ggml_uncaught_exception);
+    previous_terminate_handler = prev;
+    std::set_terminate(ggml_uncaught_exception);
+    return true;
+}();

@@ -1,3 +1,47 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d4397df2dbe7a59934bfb4e8a1d46729388387cd96600f1aae1098580a1c47aa
-size 1157
+<script lang="ts">
+	import { ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { Badge } from '$lib/components/ui/badge';
+	import * as Collapsible from '$lib/components/ui/collapsible';
+
+	interface Tool {
+		name: string;
+		description?: string;
+	}
+
+	interface Props {
+		tools: Tool[];
+	}
+
+	let { tools }: Props = $props();
+
+	let isExpanded = $state(false);
+	let toolsCount = $derived(tools.length);
+</script>
+
+<Collapsible.Root bind:open={isExpanded}>
+	<Collapsible.Trigger
+		class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+	>
+		{#if isExpanded}
+			<ChevronDown class="h-3.5 w-3.5" />
+		{:else}
+			<ChevronRight class="h-3.5 w-3.5" />
+		{/if}
+
+		<span>{toolsCount} tools available · Show details</span>
+	</Collapsible.Trigger>
+
+	<Collapsible.Content class="mt-2">
+		<div class="max-h-64 space-y-3 overflow-y-auto">
+			{#each tools as tool (tool.name)}
+				<div>
+					<Badge variant="secondary">{tool.name}</Badge>
+
+					{#if tool.description}
+						<p class="mt-1 text-xs text-muted-foreground">{tool.description}</p>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	</Collapsible.Content>
+</Collapsible.Root>

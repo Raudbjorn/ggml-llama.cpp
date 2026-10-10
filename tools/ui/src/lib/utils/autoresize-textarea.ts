@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:25a333f4f79a27482246bfc79352a1c83ee0050066322773fd96ea26c7b9a8ea
-size 366
+/**
+ * Automatically resizes a textarea element to fit its content
+ * @param textareaElement - The textarea element to resize
+ */
+export default function autoResizeTextarea(textareaElement: HTMLTextAreaElement | null): void {
+	if (textareaElement) {
+		textareaElement.style.height = '1rem';
+		textareaElement.style.height = textareaElement.scrollHeight + 'px';
+	}
+}

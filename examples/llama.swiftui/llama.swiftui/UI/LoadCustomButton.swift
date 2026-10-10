@@ -1,3 +1,44 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3f289541b1a4ab07a16549030f65f32962e1aec632656d211e1a23334fc7e3aa
-size 1323
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct LoadCustomButton: View {
+    @ObservedObject private var llamaState: LlamaState
+    @State private var showFileImporter = false
+
+    init(llamaState: LlamaState) {
+        self.llamaState = llamaState
+    }
+
+    var body: some View {
+        VStack {
+            Button(action: {
+                showFileImporter = true
+            }) {
+                Text("Load Custom Model")
+            }
+        }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [UTType(filenameExtension: "gguf", conformingTo: .data)!],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let files):
+                files.forEach { file in
+                    let gotAccess = file.startAccessingSecurityScopedResource()
+                    if !gotAccess { return }
+
+                    do {
+                        try llamaState.loadModel(modelUrl: file.absoluteURL)
+                    } catch let err {
+                        print("Error: \(err.localizedDescription)")
+                    }
+
+                    file.stopAccessingSecurityScopedResource()
+                }
+            case .failure(let error):
+                print(error)
+            }
+        }
+    }
+}

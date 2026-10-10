@@ -1,3 +1,141 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8bb374b55cda03468b892afcdc3c1aaa376d3149acadb6bf30667a3ffd3a4f0e
-size 6746
+#pragma once
+
+#include "llama.h"
+#include "common.h"
+
+struct common_speculative;
+
+// comma separated list the provided types
+std::string common_speculative_type_name_str(const std::vector<enum common_speculative_type> & types);
+
+// comma separated list of all types
+const char * common_speculative_all_types_str();
+
+// parse user provided types
+std::vector<enum common_speculative_type> common_speculative_types_from_names(const std::vector<std::string> & names);
+
+// infer the spec types from the GGUF metadata of a draft model; empty if unknown
+std::vector<enum common_speculative_type> common_speculative_types_from_gguf(const std::string & path);
+
+// convert string to type
+enum common_speculative_type common_speculative_type_from_name(const std::string & name);
+
+// convert type to string
+std::string common_speculative_type_to_str(enum common_speculative_type type);
+
+// return the max number of draft tokens based on the speculative parameters
+int32_t common_speculative_n_max(const common_params_speculative * spec);
+
+// return the max number of draft tokens from the initialized implementations
+int32_t common_speculative_n_max(const common_speculative * spec);
+
+// validate and resolve the unconditional synthetic acceptance rates
+std::vector<double> common_speculative_synth_rates_resolve(const common_params_speculative * spec, int32_t n_max);
+
+// return the conditional synthetic acceptance probabilities
+const std::vector<double> & common_speculative_get_synth_probs(const common_speculative * spec);
+
+common_params common_base_params_to_speculative(const common_params & params);
+
+// Where the speculative checkpoints of one sequence of a context are kept.
+struct common_speculative_checkpoint_place {
+    llama_state_seq_flags flags     = 0; // state flags of the latest checkpoint, 0 before the first one
+    size_t                size_copy = 0; // tensor bytes of the copy the context holds on the device
+};
+
+// Picks the state flags for the next speculative checkpoint of one sequence of ctx and records them in place.
+// Call it before every checkpoint update; the load that follows has to use place.flags.
+// LLAMA_STATE_SEQ_FLAGS_ON_DEVICE keeps a device copy that --fit does not measure and that is allocated
+// again whenever its size changes. It is chosen only while every device of the model keeps its margin free
+// after the copy has grown to the new size. Otherwise the checkpoint stays on the host.
+// The whole growth is checked against each device, which overstates a device's part of a split model.
+// margins are indexed like --fit-target: by the device order of model_margins, the model they were given
+// for. A device that model does not use keeps the largest margin free.
+llama_state_seq_flags common_speculative_checkpoint_flags(
+        common_speculative_checkpoint_place & place,
+        llama_context * ctx, llama_seq_id seq_id,
+        const std::vector<size_t> & margins, const llama_model * model_margins);
+
+struct common_speculative_output_limits {
+    int32_t total;
+    int32_t per_seq;
+};
+
+// return the output limits needed for speculative decoding
+common_speculative_output_limits common_speculative_get_output_limits(
+        int32_t n_batch, int32_t n_parallel, int32_t n_draft);
+
+common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq);
+
+void common_speculative_free(common_speculative * spec);
+
+struct common_speculative_draft_params {
+    // this flag is used to chain the drafts through all the available implementations
+    // after the first successful draft from an implementation, we set it
+    //   to false to prevent further drafts for that sequence
+    // at the end of the draft() call, all drafting flags will be reset to false
+    bool drafting = false;
+
+    // overrides individual configurations (-1 disabled)
+    // can be used to constraint the max draft based on the remaining context size
+    int32_t n_max = -1;
+
+    llama_pos   pos0;
+    llama_token id_last;
+
+    // TODO: remove in the future by keeping track of the prompt from the _begin() call and the consecutive accept calls
+    const llama_tokens * prompt;
+
+    // the generated draft from the last _draft() call
+    llama_tokens * result;
+};
+
+common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
+
+// optionally call once at the beginning of a new generation
+void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
+
+// process a batch already evaluated by the target and update the speculative context's internal state
+// returns true for a null spec; otherwise stops at the first implementation returning false
+// updates made by earlier implementations are retained on failure
+bool common_speculative_process(common_speculative * spec, const common_batch & batch);
+
+// legacy llama_batch input, converted with common_batch_from_llama_batch() when spec has a target context
+// returns false if conversion fails; without explicit positions, target memory must still end at this batch
+// otherwise has the same result and state-update behavior as the common_batch overload
+bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
+
+// generate drafts for the sequences specified with `common_speculative_get_draft_params`
+void common_speculative_draft(common_speculative * spec);
+
+// informs the speculative context that n_accepted tokens were accepted by the target model
+void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
+
+// (optional) get/set internal state
+bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data);
+void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data);
+
+// print statistics about the speculative decoding
+void common_speculative_print_stats(const common_speculative * spec);
+
+struct common_speculative_deleter {
+    void operator()(common_speculative * s) { common_speculative_free(s); }
+};
+
+typedef std::unique_ptr<common_speculative, common_speculative_deleter> common_speculative_ptr;
+
+struct common_speculative_init_result {
+    common_speculative_init_result(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
+    ~common_speculative_init_result();
+
+    llama_model   * model();
+    llama_context * context();
+
+private:
+    struct impl;
+    std::unique_ptr<impl> pimpl;
+};
+
+using common_speculative_init_result_ptr = std::unique_ptr<common_speculative_init_result>;
+
+common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);

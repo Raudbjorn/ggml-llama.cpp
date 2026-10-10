@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a4203ba9caa8d15650fbbd25aedaa789bac969cae1117fe03a2ccbb74b2436cf
-size 271
+/**
+ * Discriminator of a record line in the JSONL conversation format. A session
+ * record opens a conversation and carries its properties; every following
+ * message record belongs to it.
+ */
+export enum SessionRecordType {
+	MESSAGE = 'message',
+	SESSION = 'session'
+}

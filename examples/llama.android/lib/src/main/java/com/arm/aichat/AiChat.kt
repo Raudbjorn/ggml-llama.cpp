@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1275085698ebc337114d9c600e1e30b4ce8adbb3be55445fda01a95b89896016
-size 333
+package com.arm.aichat
+
+import android.content.Context
+import com.arm.aichat.internal.InferenceEngineImpl
+
+/**
+ * Main entry point for Arm's AI Chat library.
+ */
+object AiChat {
+    /**
+     * Get the inference engine single instance.
+     */
+    fun getInferenceEngine(context: Context) = InferenceEngineImpl.getInstance(context)
+}

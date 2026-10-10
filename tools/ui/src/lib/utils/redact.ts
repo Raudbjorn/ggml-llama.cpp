@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6f2ac5c0ed86a6feb5faaca361fdb2b188ae799e6a909492819697f590b22c32
-size 416
+/**
+ * Redacts a sensitive value, optionally showing the last N characters.
+ *
+ * @param value - The value to redact
+ * @param showLastChars - If provided, reveals the last N characters with a leading mask
+ * @returns The redacted string
+ */
+export function redactValue(value: string, showLastChars?: number): string {
+	if (showLastChars) {
+		return `....${value.slice(-showLastChars)}`;
+	}
+
+	return '[redacted]';
+}

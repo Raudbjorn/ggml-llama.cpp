@@ -1,3 +1,27 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b105931740d594dd5646d7a8dee9ce8056e0a401f70876b3d5fc6ed744d7ee05
-size 705
+#include "../node_context.h"
+#include "../op_table.h"
+#include "../utils.h"
+
+#include <openvino/core/node_output.hpp>
+#include <openvino/op/multiply.hpp>
+#include <openvino/op/sigmoid.hpp>
+
+namespace ov {
+namespace frontend {
+namespace ggml {
+namespace op {
+
+OutputVector translate_unary_silu(const NodeContext & context) {
+    num_inputs_check(context, 1, 1);
+
+    auto input = process_view_input_new(context, 0);
+    auto sigmoid = std::make_shared<ov::op::v0::Sigmoid>(input);
+    auto res = std::make_shared<ov::op::v1::Multiply>(input, sigmoid);
+
+    return rename_outputs_with_suffix({res}, context.get_name());
+}
+
+}  // namespace op
+}  // namespace ggml
+}  // namespace frontend
+}  // namespace ov

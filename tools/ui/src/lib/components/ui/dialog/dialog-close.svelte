@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c08832a77e6eca380994f1eb08fd8f1ee7e34359053fc8881732eab304843eaf
-size 321
+<script lang="ts">
+	import { Dialog as DialogPrimitive } from 'bits-ui';
+
+	let { ref = $bindable(null), ...restProps }: DialogPrimitive.CloseProps = $props();
+</script>
+
+<DialogPrimitive.Close bind:ref data-slot="dialog-close" {...restProps} />
+
+<style>
+	:global([data-slot="dialog-close"]) {
+		z-index: 999;
+	}
+</style>

@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:87e6418ebc388fbd615c0ff866b049902f8554251cb1fae6cbd8ca71efcdf91e
-size 806
+import { SETTINGS_KEYS } from '$lib/constants';
+import { describe, expect, it } from 'vitest';
+
+/**
+ * Default-value policy for the `MCP_SERVERS` setting.
+ *
+ * Earlier versions of the UI preloaded a hard-coded list of suggested
+ * MCP servers into this setting on first install. That caused silent
+ * third-party HTTP requests at app load (see issue #25509) and a popup
+ * "recommendation" dialog (see issue #25274). New users must now opt
+ * in explicitly when adding a server, so the default is an empty list.
+ */
+describe('MCP_SERVERS default value', () => {
+	it('does not preload any servers in the MCP_SERVERS setting default', async () => {
+		const { SETTING_CONFIG_DEFAULT } = await import('$lib/constants');
+
+		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.MCP_SERVERS]).toBe('[]');
+	}, 15000);
+});

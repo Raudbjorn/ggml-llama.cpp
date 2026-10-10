@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d368f6398ae35e2e1f424d0b7ad4722d6dfa5ead2f2727239d6c50ff4e1eddef
-size 268
+#ifndef GGML_SYCL_WKV_HPP
+#define GGML_SYCL_WKV_HPP
+
+#include "common.hpp"
+
+void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#endif // GGML_SYCL_WKV_HPP

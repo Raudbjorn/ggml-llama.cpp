@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a4641456c03ecba6a0c86b9f70302c794212d13d447c8fdb297d0183d8896ae0
-size 464
+// Half of the card width, matching the w-64 class on the card.
+export const CONTEXT_GAUGE_CARD_HALF_WIDTH_PX = 128;
+// Minimum distance kept between the card and the form edges.
+export const CONTEXT_GAUGE_EDGE_MARGIN_PX = 8;
+// Gap between the top of the dial and the bottom edge of the card.
+export const CONTEXT_GAUGE_DIAL_GAP_PX = 8;
+// Grace delay before closing, letting the pointer travel from dial to card.
+export const CONTEXT_GAUGE_CLOSE_GRACE_MS = 150;

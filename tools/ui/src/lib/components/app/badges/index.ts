@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:052b45346a347ccc378cf977b3c7f6315257c0c2e025be5356a4eb546c2773d9
-size 352
+/**
+ *
+ * BADGES & INDICATORS
+ *
+ * Small visual indicators for status and metadata.
+ *
+ */
+
+/** Generic info badge with optional tooltip and click handler. */
+export { default as BadgeInfo } from './BadgeInfo.svelte';
+
+/** Badge indicating model modality (vision, audio, tools). */
+export { default as BadgesModality } from './BadgesModality.svelte';

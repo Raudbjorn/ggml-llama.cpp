@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a6e08e96aef0cd13fe8f28abbb5713d6ce8940f5e9f6e98c45406eaa9ece8c29
-size 397
+/*
+ * Author : Martin Donk
+ * Website : http://www.nerdamer.com
+ * Email : martin.r.donk@gmail.com
+ * Source : https://github.com/jiggzson/nerdamer
+ * Can be used to load all add-ons with one require
+ */
+
+const nerdamer = require('./nerdamer.core.js');
+require('./Algebra.js');
+require('./Calculus.js');
+require('./Solve.js');
+require('./Extra.js');
+
+// Export nerdamer
+module.exports = nerdamer;

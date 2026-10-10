@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e4275eca0793e02ab16460d19f15827895fec0e8495b5a0775cf98bbe226f315
-size 589
+//
+// MIT license
+// Copyright (C) 2026 Intel Corporation
+// SPDX-License-Identifier: MIT
+//
+
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+
+#ifndef GGML_SYCL_POOL_HPP
+#define GGML_SYCL_POOL_HPP
+
+#include "common.hpp"
+#include "presets.hpp"
+
+void ggml_sycl_op_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_op_pool1d(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#endif // GGML_SYCL_POOL_HPP

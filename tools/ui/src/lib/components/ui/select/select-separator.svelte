@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e1e740d540ae2c1637f9d55932c3992cb4f0326e31e93970e70f079f646bdc82
-size 469
+<script lang="ts">
+	import { Separator } from '$lib/components/ui/separator/index.js';
+	import { cn } from '$lib/components/ui/utils.js';
+	import type { Separator as SeparatorPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: SeparatorPrimitive.RootProps = $props();
+</script>
+
+<Separator
+	bind:ref
+	class={cn('pointer-events-none -mx-1 my-1 h-px bg-border', className)}
+	data-slot="select-separator"
+	{...restProps}
+/>

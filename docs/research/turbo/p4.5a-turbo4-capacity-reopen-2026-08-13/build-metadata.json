@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:04660b7144b84d1c7c9eaa852b0610cc73c81794f14761dedf7ceedc0dd1bfa2
-size 112
+{
+  "source_sha": "ef1c35835dd99f236b5f2470193dd565d964b9d4",
+  "build_mode": "JIT",
+  "sycl_device_arch": ""
+}

@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:5915519c4e2227db28239b2a5d3b8a5f9022730cc0ddb7880b24748ee78cd1f9
-size 518
+#pragma once
+
+#include "common.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void ggml_compute_forward_add_non_quantized(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_sub(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_mul(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_div(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+
+#ifdef __cplusplus
+}
+#endif

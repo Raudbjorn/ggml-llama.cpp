@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:37dcf755d36c39a41e31f0c3a99e61676da91c54666f2ba330e5003c50c49cce
-size 612
+<script lang="ts">
+	import MentionBadge from './MentionBadge.svelte';
+	import { splitMentionSegments } from '$lib/utils';
+
+	interface Props {
+		content: string;
+	}
+
+	let { content }: Props = $props();
+
+	let segments = $derived(splitMentionSegments(content));
+</script>
+
+<!-- Segments sit in a `whitespace-pre-wrap` parent, so the markup stays
+     glued: any newline between the tags below would print as a space. -->
+<!-- prettier-ignore -->
+{#each segments as segment, index (index)}{#if segment.mention}<MentionBadge name={segment.mention.name} path={segment.mention.path} />{:else}{segment.text}{/if}{/each}

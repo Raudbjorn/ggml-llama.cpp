@@ -1,3 +1,2 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c206798c086eeaeaf20f806330f16ed71405f376aeb956d4d59533cf026d5653
-size 10
+.venv
+tmp

@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:adc64f72782aa0d9c35a6404464a05eca1e5d2478183cecde3cd134cd6ee0432
-size 335
+<script lang="ts">
+	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
+
+	let {
+		ref = $bindable(null),
+		value = $bindable(),
+		...restProps
+	}: DropdownMenuPrimitive.RadioGroupProps = $props();
+</script>
+
+<DropdownMenuPrimitive.RadioGroup
+	bind:ref
+	bind:value
+	data-slot="dropdown-menu-radio-group"
+	{...restProps}
+/>

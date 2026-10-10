@@ -1,3 +1,48 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:bd730415efa86583e0d13851ec6dcbb6b1e389111464b66ebe138cd7846eb574
-size 1092
+<script lang="ts">
+	import { BadgeInfo } from '$lib/components/app';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { copyToClipboard } from '$lib/utils';
+	import type { Component } from 'svelte';
+
+	interface Props {
+		class?: string;
+		icon: Component;
+		value: string | number;
+		tooltipLabel?: string;
+	}
+
+	let { class: className = '', icon: IconComponent, tooltipLabel, value }: Props = $props();
+
+	function handleClick() {
+		void copyToClipboard(String(value));
+	}
+</script>
+
+{#if tooltipLabel}
+	<Tooltip.Root>
+		<Tooltip.Trigger>
+			<!-- prevent another nested button element -->
+			{#snippet child({ props })}
+				<BadgeInfo {...props} class={className} onclick={handleClick}>
+					{#snippet icon()}
+						<IconComponent class="h-3 w-3" />
+					{/snippet}
+
+					{value}
+				</BadgeInfo>
+			{/snippet}
+		</Tooltip.Trigger>
+
+		<Tooltip.Content>
+			<p>{tooltipLabel}</p>
+		</Tooltip.Content>
+	</Tooltip.Root>
+{:else}
+	<BadgeInfo class={className} onclick={handleClick}>
+		{#snippet icon()}
+			<IconComponent class="h-3 w-3" />
+		{/snippet}
+
+		{value}
+	</BadgeInfo>
+{/if}

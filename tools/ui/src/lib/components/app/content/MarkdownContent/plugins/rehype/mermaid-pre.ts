@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:460b0dd5f229566db1fe5c941fcf651eff789684b21c8ae90b678f77ded2f8d7
-size 310
+import { createPreTransform } from './pre-transform';
+import { MERMAID_BLOCK_CLASS, MERMAID_LANGUAGE } from '$lib/constants';
+
+/**
+ * Converts mermaid code blocks to <pre class="mermaid"> for client-side rendering.
+ */
+export const rehypeMermaidPre = createPreTransform(MERMAID_LANGUAGE, MERMAID_BLOCK_CLASS);

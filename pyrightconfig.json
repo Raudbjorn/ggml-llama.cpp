@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1b481b0aa0ddb2990ef34d5defa9375e39ccad183092f24c830d5fde30134891
-size 696
+{
+  "extraPaths": ["gguf-py", "examples/model-conversion/scripts", "examples/model-conversion/scripts/utils"],
+  "pythonVersion": "3.9",
+  "pythonPlatform": "All",
+  "reportUnusedImport": "warning",
+  "reportDuplicateImport": "error",
+  "reportDeprecated": "warning",
+  "reportUnnecessaryTypeIgnoreComment": "information",
+  "disableBytesTypePromotions": false, // TODO: change once Python 3.12 is the minimum
+  "executionEnvironments": [
+    {
+      // TODO: make this version override work correctly
+      "root": "gguf-py",
+      "pythonVersion": "3.8",
+    },
+    {
+      // uses match expressions in steps.py
+      "root": "tools/server/tests",
+      "pythonVersion": "3.10",
+    },
+  ],
+ }

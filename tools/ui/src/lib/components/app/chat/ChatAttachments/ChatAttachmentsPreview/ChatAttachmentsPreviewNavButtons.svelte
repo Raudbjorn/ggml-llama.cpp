@@ -1,3 +1,34 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b91c74bd858dfa2f8a73ed2c61023b471ce16c39a7a858eaa96324cc48f8a3e0
-size 782
+<script lang="ts">
+	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+
+	interface Props {
+		onPrev: () => void;
+		onNext: () => void;
+		show: boolean;
+	}
+
+	let { onNext, onPrev, show }: Props = $props();
+</script>
+
+{#if show}
+	<Button
+		aria-label="Previous"
+		class="absolute top-1/2 left-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
+		onclick={onPrev}
+		size="icon"
+		variant="secondary"
+	>
+		<ChevronLeft class="size-4" />
+	</Button>
+
+	<Button
+		aria-label="Next"
+		class="absolute top-1/2 right-4 z-10 h-8 w-8 -translate-y-1/2 rounded-full bg-background/5 p-0 text-white!"
+		onclick={onNext}
+		size="icon"
+		variant="secondary"
+	>
+		<ChevronRight class="size-4" />
+	</Button>
+{/if}

@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:32756898d52216e6f44bdebe4dc3ef0e7a44e01a43bff79320709f26f1c40530
-size 351
+#include "openvino/pass/matcher_pass.hpp"
+
+namespace ov {
+namespace frontend {
+namespace ggml {
+namespace pass {
+
+class FuseToConv : public ov::pass::MatcherPass {
+public:
+    OPENVINO_MATCHER_PASS_RTTI("ov::frontend::ggml::pass::FuseToConv")
+    FuseToConv();
+};
+
+}  // namespace pass
+}  // namespace ggml
+}  // namespace frontend
+}  // namespace ov

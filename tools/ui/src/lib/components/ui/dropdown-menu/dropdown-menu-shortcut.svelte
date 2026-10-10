@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:27f1f6b58e997188024aedd86f764be94a77490e653b187b171b3ac1609cda0a
-size 491
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLSpanElement>> = $props();
+</script>
+
+<span
+	bind:this={ref}
+	class={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
+	data-slot="dropdown-menu-shortcut"
+	{...restProps}
+>
+	{@render children?.()}
+</span>

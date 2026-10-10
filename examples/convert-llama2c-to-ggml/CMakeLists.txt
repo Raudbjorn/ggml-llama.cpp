@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3a90137e9eb64772b72ba1b7141d4ec4bd34d5868a0b9b31312388a6bb44c720
-size 313
+if (GGML_CPU)
+    set(TARGET llama-convert-llama2c-to-ggml)
+    add_executable(${TARGET} convert-llama2c-to-ggml.cpp)
+    install(TARGETS ${TARGET} RUNTIME)
+    target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+endif()

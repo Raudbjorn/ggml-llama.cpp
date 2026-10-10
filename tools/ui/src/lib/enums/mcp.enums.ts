@@ -1,3 +1,68 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:309c19fac701697d8f46cc56e920d821546e9bfc56001d4ba1b90b91e4e4f10e
-size 1236
+/**
+ * Connection lifecycle phases for MCP protocol
+ */
+export enum MCPConnectionPhase {
+	CAPABILITIES_EXCHANGED = 'capabilities_exchanged',
+	CONNECTED = 'connected',
+	DISCONNECTED = 'disconnected',
+	ERROR = 'error',
+	IDLE = 'idle',
+	INITIALIZING = 'initializing',
+	LISTING_TOOLS = 'listing_tools',
+	TRANSPORT_CREATING = 'transport_creating',
+	TRANSPORT_READY = 'transport_ready'
+}
+
+/**
+ * Log level for connection events
+ */
+export enum MCPLogLevel {
+	ERROR = 'error',
+	INFO = 'info',
+	WARN = 'warn'
+}
+
+/**
+ * Transport types for MCP connections
+ */
+export enum MCPTransportType {
+	SSE = 'sse',
+	STREAMABLE_HTTP = 'streamable_http',
+	WEBSOCKET = 'websocket'
+}
+
+/**
+ * Health check status for MCP servers
+ */
+export enum HealthCheckStatus {
+	CONNECTING = 'connecting',
+	ERROR = 'error',
+	IDLE = 'idle',
+	SUCCESS = 'success'
+}
+
+/**
+ * Content types for MCP tool results
+ */
+export enum MCPContentType {
+	IMAGE = 'image',
+	RESOURCE = 'resource',
+	TEXT = 'text'
+}
+
+/**
+ * JSON Schema types used in MCP tool definitions
+ */
+export enum JsonSchemaType {
+	NUMBER = 'number',
+	OBJECT = 'object',
+	STRING = 'string'
+}
+
+/**
+ * Reference types for MCP completions
+ */
+export enum MCPRefType {
+	PROMPT = 'ref/prompt',
+	RESOURCE = 'ref/resource'
+}

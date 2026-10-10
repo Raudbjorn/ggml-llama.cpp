@@ -1,3 +1,35 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b7f2d17932f8d632556951f664f48f1da938387bd331b0f3b730dcdc7625651a
-size 601
+#if !defined(GGML_ROPE_PARAMS)
+#define GGML_ROPE_PARAMS
+
+struct rope_params {
+    uint rope_mode;
+    uint nrows;
+    uint n_dims;
+    uint n_offs;
+    float freq_scale;
+    float freq_base;
+    float ext_factor;
+    float attn_factor;
+    float corr_dims[2];
+    float theta_scale;
+    uint has_ff;
+    int sections[4];
+    uint is_imrope;
+    uint is_back;
+    uint set_rows_stride;
+
+    uint ne00;
+    uint ne01;
+    uint ne02;
+    uint nb01;
+    uint nb02;
+    uint nb03;
+    uint nb11;
+    uint nb12;
+    uint nb13;
+
+    uint a_offset;
+    uint d_offset;
+};
+
+#endif // !defined(GGML_ROPE_PARAMS)

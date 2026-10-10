@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3235a9270094d67bfda33c3c0ac5fce981de35d33fdc8d8446775d224deca47d
-size 243
+set(TARGET llama-lookahead)
+add_executable(${TARGET} lookahead.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

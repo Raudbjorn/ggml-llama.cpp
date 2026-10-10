@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e0d4a61bfa231df06803349aaffc4bfaa86d85ac1a6788a5c021c4b7a6099fbc
-size 724
+# llama-completion-impl: completion logic, reusable by app
+
+set(TARGET llama-completion-impl)
+
+add_library(${TARGET} completion.cpp)
+set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(${TARGET} PUBLIC llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} LIBRARY)
+endif()
+
+# llama-completion executable
+
+set(TARGET llama-completion)
+
+add_executable(${TARGET} main.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-completion-impl)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()

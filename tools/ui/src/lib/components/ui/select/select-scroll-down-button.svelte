@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:924039555ddd0d2909da19b3003f3e33859b2b3bc977452632529d47a4816ead
-size 628
+<script lang="ts">
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+	import { cn, type WithoutChildrenOrChild } from '$lib/components/ui/utils.js';
+	import { Select as SelectPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithoutChildrenOrChild<SelectPrimitive.ScrollDownButtonProps> = $props();
+</script>
+
+<SelectPrimitive.ScrollDownButton
+	bind:ref
+	class={cn('flex cursor-default items-center justify-center py-1', className)}
+	data-slot="select-scroll-down-button"
+	{...restProps}
+>
+	<ChevronDownIcon class="size-4" />
+</SelectPrimitive.ScrollDownButton>

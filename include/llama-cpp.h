@@ -1,3 +1,35 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:26175c5711004432b5678d6b14ce711a79388ff96eeff46dab3c9f8a3694521d
-size 1102
+#pragma once
+
+#ifndef __cplusplus
+#error "This header is for C++ only"
+#endif
+
+#include <memory>
+
+#include "llama.h"
+
+struct llama_model_deleter {
+    void operator()(llama_model * model) { llama_model_free(model); }
+};
+
+struct llama_context_deleter {
+    void operator()(llama_context * context) { llama_free(context); }
+};
+
+struct llama_sampler_deleter {
+    void operator()(llama_sampler * sampler) { llama_sampler_free(sampler); }
+};
+
+struct llama_adapter_lora_deleter {
+    void operator()(llama_adapter_lora * adapter) { llama_adapter_lora_free(adapter); }
+};
+
+struct llama_batch_ext_deleter {
+    void operator()(llama_batch_ext * batch) { llama_batch_ext_free(batch); }
+};
+
+typedef std::unique_ptr<llama_model, llama_model_deleter> llama_model_ptr;
+typedef std::unique_ptr<llama_context, llama_context_deleter> llama_context_ptr;
+typedef std::unique_ptr<llama_sampler, llama_sampler_deleter> llama_sampler_ptr;
+typedef std::unique_ptr<llama_adapter_lora, llama_adapter_lora_deleter> llama_adapter_lora_ptr;
+typedef std::unique_ptr<llama_batch_ext, llama_batch_ext_deleter> llama_batch_ext_ptr;

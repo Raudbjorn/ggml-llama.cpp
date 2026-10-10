@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:544f2e3fe8be6d0e604a8a365ac6f8bfcfa2bec22653da78b7d28be968ace76a
-size 78
+datasets~=4.8.0
+matplotlib~=3.10.0
+numpy~=2.2.6
+requests~=2.32.3
+tqdm~=4.67.1

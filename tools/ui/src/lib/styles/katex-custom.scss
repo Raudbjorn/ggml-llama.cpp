@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:af7aafc9a79d247d72204772a806d8e2f939668c2a5a3e8d282a3168f8569f0d
-size 415
+// Override KaTeX SCSS variables to disable ttf and woff fonts
+// Only use woff2 format which is embedded in the bundle
+$use-woff2: true;
+$use-woff: false;
+$use-ttf: false;
+
+// Use Vite alias for font folder
+$font-folder: 'katex-fonts';
+
+// Import KaTeX SCSS with overridden variables
+@use 'katex/src/styles/katex.scss' with (
+	$use-woff2: true,
+	$use-woff: false,
+	$use-ttf: false,
+	$font-folder: 'katex-fonts'
+);

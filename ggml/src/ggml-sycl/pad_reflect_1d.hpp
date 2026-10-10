@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9d8820bd22e84cf4cea7db852ecf26b86f31572480842f66f65a0ddc09c79590
-size 266
+#ifndef GGML_SYCL_PAD_REFLECT_1D_HPP
+#define GGML_SYCL_PAD_REFLECT_1D_HPP
+
+#include "common.hpp"
+
+#define SYCL_PAD_REFLECT_1D_BLOCK_SIZE 256
+
+void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context& ctx, ggml_tensor* dst);
+
+#endif // GGML_SYCL_PAD_REFLECT_1D_HPP

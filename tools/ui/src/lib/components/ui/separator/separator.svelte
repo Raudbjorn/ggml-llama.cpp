@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8b0109c2a6e799d74c9803045895e3d5b30c4c8a53283b6bff80650e8f2de577
-size 523
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { Separator as SeparatorPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: SeparatorPrimitive.RootProps = $props();
+</script>
+
+<SeparatorPrimitive.Root
+	bind:ref
+	class={cn(
+		'shrink-0 bg-border data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px',
+		className
+	)}
+	data-slot="separator"
+	{...restProps}
+/>

@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3aa18218d8815a16f361921489ccdc86e0f0768b0a59b814a269f5474c9fa9b2
-size 418
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { RadioGroup as RadioGroupPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		value = $bindable(''),
+		...restProps
+	}: RadioGroupPrimitive.RootProps = $props();
+</script>
+
+<RadioGroupPrimitive.Root
+	bind:ref
+	bind:value
+	class={cn('grid gap-2 w-full', className)}
+	data-slot="radio-group"
+	{...restProps}
+/>

@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6ec12aa9244a8ffb13ae56b2e391f905b1d152ae25ff45da6a66e18daf650b3b
-size 524
+#pragma once
+#include <stdint.h>
+#include <stdbool.h>
+
+#if defined(__VXE__) || defined(__VXE2__)
+#include <vecintrin.h>
+#endif
+
+#ifdef _MSC_VER
+#define NOINLINE __declspec(noinline)
+#else
+#define NOINLINE __attribute__((__noinline__))
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t, int64_t, int64_t,
+                     const void *, int64_t, const void *, int64_t, void *, int64_t,
+                     int, int, int);
+
+#ifdef __cplusplus
+}
+#endif

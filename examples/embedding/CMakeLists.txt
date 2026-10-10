@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1cf460f35453625d5399d6b9d115f56ee8e388a0fc0939b0e6e95ac2e6216c56
-size 243
+set(TARGET llama-embedding)
+add_executable(${TARGET} embedding.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

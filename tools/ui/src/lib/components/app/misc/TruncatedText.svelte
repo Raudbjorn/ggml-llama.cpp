@@ -1,3 +1,50 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:19b4a6ce402209099303146a52502b3701ef0d119446586be89b512da6a53c4d
-size 1065
+<script lang="ts">
+	import * as Tooltip from '$lib/components/ui/tooltip';
+
+	interface Props {
+		text: string;
+		class?: string;
+		showTooltip?: boolean;
+	}
+
+	let { class: className = '', showTooltip = true, text }: Props = $props();
+
+	let textElement: HTMLSpanElement | undefined = $state();
+	let isTruncated = $state(false);
+
+	function checkTruncation() {
+		if (textElement) {
+			isTruncated = textElement.scrollWidth > textElement.clientWidth;
+		}
+	}
+
+	$effect(() => {
+		if (textElement) {
+			checkTruncation();
+
+			const observer = new ResizeObserver(checkTruncation);
+
+			observer.observe(textElement);
+
+			return () => observer.disconnect();
+		}
+	});
+</script>
+
+{#if isTruncated && showTooltip}
+	<Tooltip.Root>
+		<Tooltip.Trigger class="{className} min-w-0">
+			<span bind:this={textElement} class="block truncate">
+				{text}
+			</span>
+		</Tooltip.Trigger>
+
+		<Tooltip.Content class="z-[9999]">
+			<p>{text}</p>
+		</Tooltip.Content>
+	</Tooltip.Root>
+{:else}
+	<span bind:this={textElement} class="{className} block min-w-0 truncate">
+		{text}
+	</span>
+{/if}

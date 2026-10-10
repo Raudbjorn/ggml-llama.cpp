@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0dfec76111b23fdba46f00ae5e9130bdd7a7e5838e8d378baa4dfb12028adf4a
-size 427
+<script lang="ts">
+	interface Props {
+		currentItem: { name?: string } | null;
+		displayPreview: string | undefined;
+	}
+
+	let { currentItem, displayPreview }: Props = $props();
+</script>
+
+{#if displayPreview}
+	<div class="flex flex-1 items-center justify-center">
+		<img
+			alt={currentItem?.name || 'preview'}
+			class="max-h-[80vh] max-w-[80vw] rounded-lg object-contain shadow-lg"
+			src={displayPreview}
+		/>
+	</div>
+{/if}

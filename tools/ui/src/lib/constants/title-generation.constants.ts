@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:08602c9d285c0711135ec62a54ee00d05a370db40d1740875d0b3d66f74cd75b
-size 454
+/* Title generation constants */
+export const TITLE_GENERATION = {
+	DEFAULT_PROMPT:
+		'Based on the following interaction, generate a short, concise title (maximum 6-8 words) that captures the main topic. Return ONLY the title text, nothing else. Do not use quotes.\n\nUser: {{USER}}\n\nAssistant: {{ASSISTANT}}\n\nTitle:',
+	FALLBACK: 'New Chat',
+	MIN_LENGTH: 3,
+	PREFIX_PATTERN: /^(Title:|Subject:|Topic:)\s*/i,
+	QUOTE_PATTERN: /^["]|["]$/g
+} as const;

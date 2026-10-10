@@ -1,3 +1,21 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6cf1368093d7207c5ddd40f8c9841e50621b71e57d2fd0c13afda3b84a973eb0
-size 505
+get_filename_component(DEST_DIR "${DEST}" DIRECTORY)
+file(MAKE_DIRECTORY "${DEST_DIR}")
+
+if(NOT EXISTS "${DEST}")
+    message(STATUS "Downloading ${NAME} from ggml-org/models...")
+endif()
+
+file(DOWNLOAD
+    "https://huggingface.co/ggml-org/models/resolve/main/${NAME}?download=true"
+    "${DEST}"
+    TLS_VERIFY ON
+    EXPECTED_HASH ${HASH}
+    STATUS status
+)
+
+list(GET status 0 code)
+
+if(NOT code EQUAL 0)
+    list(GET status 1 msg)
+    message(FATAL_ERROR "Failed to download ${NAME}: ${msg}")
+endif()

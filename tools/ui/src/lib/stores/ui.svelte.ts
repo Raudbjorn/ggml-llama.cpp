@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d7a579a0a2ae5d5d8980f1717532c013bd9229443398ba77ca5b8dd0b54e68a4
-size 394
+/**
+ * uiStore - Shared UI/layout state
+ *
+ * Holds cross-component UI state that does not belong to a single component
+ * (e.g. the desktop sidebar's expanded/collapsed state, which the sidebar
+ * controls and the chat tab bar reacts to).
+ */
+
+class UiStore {
+	/** Whether the desktop sidebar is expanded (open). */
+	isSidebarExpanded = $state(false);
+}
+
+export const uiStore = new UiStore();

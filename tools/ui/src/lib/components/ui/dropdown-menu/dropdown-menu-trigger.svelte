@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e2b9a5b152fdf0128103e81a2b33c57bc6b496b1f69fc5754b6155e215deda0d
-size 282
+<script lang="ts">
+	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
+
+	let { ref = $bindable(null), ...restProps }: DropdownMenuPrimitive.TriggerProps = $props();
+</script>
+
+<DropdownMenuPrimitive.Trigger bind:ref data-slot="dropdown-menu-trigger" {...restProps} />

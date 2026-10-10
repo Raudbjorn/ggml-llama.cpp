@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:05eda6f2726990b0aff42bdb24584b221bf985a957e1579662ceeb67b15cd105
-size 126
+#version 450
+
+#include "glu_head.glsl"
+
+float op(float a, float b) {
+    return max(a, 0.0f) * b;
+}
+
+#include "glu_main.glsl"

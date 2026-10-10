@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:542fe2fe56ef52640a77617ef27f00700c06fb859efa12659fdceef1af3fe26a
-size 243
+#ifndef GGML_SYCL_CONV2D_DW_HPP
+#define GGML_SYCL_CONV2D_DW_HPP
+
+#include "common.hpp"
+
+#define SYCL_CONV2D_DW_BLOCK_SIZE 256
+
+void ggml_sycl_op_conv2d_dw(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#endif // GGML_SYCL_CONV2D_DW_HPP

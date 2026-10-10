@@ -1,3 +1,15 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0e4b6b140de8148cd0ab5314676a0bdae7866c4cc47563b89348c8c4bb02d2ba
-size 394
+# llama.cpp/example/passkey
+
+A passkey retrieval task is an evaluation method used to measure a language
+models ability to recall information from long contexts.
+
+See the following PRs for more info:
+
+- https://github.com/ggml-org/llama.cpp/pull/3856
+- https://github.com/ggml-org/llama.cpp/pull/4810
+
+### Usage
+
+```bash
+llama-passkey -m ./models/llama-7b-v2/ggml-model-f16.gguf --junk 250
+```

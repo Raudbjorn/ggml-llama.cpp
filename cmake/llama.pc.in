@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:738a35bfe973f9c5c990e67f92b20bc438a4c2a93bde5a9e45536c0d269006ef
-size 303
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=@CMAKE_INSTALL_PREFIX@
+libdir=@CMAKE_INSTALL_FULL_LIBDIR@
+includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
+
+Name: llama
+Description: Port of Facebook's LLaMA model in C/C++
+Version: @LLAMA_VERSION@
+Libs: -L${libdir} -lggml -lggml-base -lllama
+Cflags: -I${includedir}

@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:bd33d0713b12daf9eedea1619dd715619baaa36b98c44ec754d532909d80933a
-size 397
+#pragma once
+#include "common.h"
+
+size_t ggml_backend_amx_desired_wsize(const struct ggml_tensor * dst);
+
+size_t ggml_backend_amx_get_alloc_size(const struct ggml_tensor * tensor);
+
+void ggml_backend_amx_convert_weight(struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
+
+void ggml_backend_amx_mul_mat(const struct ggml_compute_params * params, struct ggml_tensor * dst);

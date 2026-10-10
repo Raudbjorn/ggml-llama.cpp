@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:81cf8d21005a58822cdf457f1caab1da5f02d34ddcaa75e871b32f05e3e52efe
-size 257
+define newline
+
+
+endef
+
+$(error Build system changed:$(newline)\
+The Makefile build has been replaced by CMake.$(newline)$(newline)\
+For build instructions see:$(newline)\
+https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md$(newline)${newline})

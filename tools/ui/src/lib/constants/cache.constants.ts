@@ -1,3 +1,34 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b0af9a544e1c25f2e9ff2c6c9c9980c572657fb247b00cf9719692632866a479
-size 924
+/**
+ * Cache configuration constants
+ */
+
+/**
+ * Default cache limits when no per-cache overrides are given.
+ */
+export const CACHE = {
+	/** Default maximum number of entries in a cache */
+	DEFAULT_MAX_ENTRIES: 100,
+	/** Default TTL (Time-To-Live) for cache entries in milliseconds (5 minutes) */
+	DEFAULT_TTL_MS: 5 * 60 * 1000
+} as const;
+
+/**
+ * TTL and size for the model props cache.
+ * Props don't change frequently, so we can cache them longer.
+ */
+export const MODEL_PROPS_CACHE = {
+	/** Maximum number of model props to cache */
+	MAX_ENTRIES: 50,
+	/** TTL for model props cache entries in milliseconds (10 minutes) */
+	TTL_MS: 10 * 60 * 1000
+} as const;
+
+/**
+ * TTL and size for the MCP resource cache.
+ */
+export const MCP_RESOURCE_CACHE = {
+	/** Maximum number of MCP resources to cache */
+	MAX_ENTRIES: 50,
+	/** TTL for MCP resource cache entries in milliseconds (5 minutes) */
+	TTL_MS: 5 * 60 * 1000
+} as const;

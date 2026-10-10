@@ -1,3 +1,31 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:278b8c06c3ac3e65a80400fdb99f91421df67981d636fdb3b578a791149364b1
-size 796
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+#include "types.glsl"
+#include "generic_head.glsl"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer X {A_TYPE data_a[];};
+layout (binding = 1) readonly buffer Y {B_TYPE data_b[];};
+layout (binding = 2) buffer D {D_TYPE data_d[];};
+
+const uint CHUNK_SIZE = 512;
+
+void main() {
+    const uint base = gl_WorkGroupID.x * CHUNK_SIZE;
+    const uint col = gl_LocalInvocationID.x;
+
+    uint count = 0;
+    [[unroll]]
+    for (uint i = 0; i < CHUNK_SIZE; i += gl_WorkGroupSize.x) {
+        const uint idx = base + i + col;
+        if (idx >= p.KX) {
+            break;
+        }
+        count += uint(data_a[idx] == data_b[idx]);
+    }
+
+    atomicAdd(data_d[0], D_TYPE(count));
+}

@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:96b5de03283865df456b6227ea77a02454d02d4579a45005da214360fc8722ec
-size 460
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn('flex items-center px-6 [.border-t]:pt-6', className)}
+	data-slot="card-footer"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

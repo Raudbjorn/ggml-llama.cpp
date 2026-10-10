@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1979ee129a7463a7b36e6cc1ee40e04abbae3ff982a97cf9d50d3e542d1354bb
-size 606
+import { redactValue } from '$lib/utils/redact';
+import { describe, expect, it } from 'vitest';
+
+describe('redactValue', () => {
+	it('returns [redacted] by default', () => {
+		expect(redactValue('secret-token')).toBe('[redacted]');
+	});
+
+	it('shows last N characters when showLastChars is provided', () => {
+		expect(redactValue('session-abc12', 5)).toBe('....abc12');
+	});
+
+	it('handles value shorter than showLastChars', () => {
+		expect(redactValue('ab', 5)).toBe('....ab');
+	});
+
+	it('returns [redacted] when showLastChars is 0', () => {
+		expect(redactValue('secret', 0)).toBe('[redacted]');
+	});
+});

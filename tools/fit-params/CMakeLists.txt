@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c4824a2ee48dfa20009c8ce0f998906427f8d98ba0700b246ea95be8482bce62
-size 724
+# llama-fit-params-impl: fit-params logic, reusable by app
+
+set(TARGET llama-fit-params-impl)
+
+add_library(${TARGET} fit-params.cpp)
+set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(${TARGET} PUBLIC llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} LIBRARY)
+endif()
+
+# llama-fit-params executable
+
+set(TARGET llama-fit-params)
+
+add_executable(${TARGET} main.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-fit-params-impl)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()

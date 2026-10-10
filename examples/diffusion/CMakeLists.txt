@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8c8a32992a7797996c026922d463da85cd1a938c56480484af2704533e871ecf
-size 490
+set(TARGET llama-diffusion)
+add_library(${TARGET} STATIC diffusion.cpp diffusion.h)
+target_link_libraries(${TARGET} PUBLIC llama llama-common ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PUBLIC cxx_std_17)
+
+set(TARGET llama-diffusion-cli)
+add_executable(${TARGET} diffusion-cli.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama-diffusion llama llama-common ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

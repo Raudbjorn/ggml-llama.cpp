@@ -1,3 +1,6 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e3e1fe4e715be12d736f541f2c3029ab85a919339554ed9fa46e8c3c8e198b5d
-size 215
+# header-only: interface target exposing the vendor/ root so consumers
+# can include via <stb/stb_image.h>
+add_library(stb INTERFACE)
+add_library(vendor::stb ALIAS stb)
+
+target_include_directories(stb INTERFACE ..)

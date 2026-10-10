@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:80b546565fe2239d4bc814d203decd861eab8ba178cc8d3c528a6e9d7ccd4768
-size 333
+<script lang="ts">
+	import Page from '../../../src/routes/(chat)/+page.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+</script>
+
+<!--
+	Test wrapper that provides necessary context providers for component testing.
+	This mirrors the providers from +layout.svelte.
+-->
+<Tooltip.Provider>
+	<Page />
+</Tooltip.Provider>

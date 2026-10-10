@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9042eb546329e72a9d92a78727792985337ef9acd1772c46594ddb8376ea951e
-size 413
+<script lang="ts">
+	import { Wrench } from '@lucide/svelte';
+	import { Badge } from '$lib/components/ui/badge';
+
+	interface Props {
+		class?: string;
+	}
+
+	let { class: className = '' }: Props = $props();
+</script>
+
+<Badge
+	class="h-5 bg-orange-100 px-1.5 py-0.5 text-xs text-orange-800 dark:bg-orange-900 dark:text-orange-200 {className}"
+	variant="secondary"
+>
+	<Wrench class="mr-1 h-3 w-3" />
+
+	Custom
+</Badge>

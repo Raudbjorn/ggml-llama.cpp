@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:fd5871666cd128dc6e08defe0ce0b2acb7a81029a948911449356f563a061223
-size 482
+//
+// MIT license
+// Copyright (C) 2024 Intel Corporation
+// SPDX-License-Identifier: MIT
+//
+
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+
+#ifndef GGML_SYCL_ROLL_HPP
+#define GGML_SYCL_ROLL_HPP
+
+#include "common.hpp"
+
+void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst);
+
+#endif // GGML_SYCL_ROLL_HPP

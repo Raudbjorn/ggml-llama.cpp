@@ -1,3 +1,30 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:df7f8030f4469eaa10aac0b70dda8af2a22b2ddfc6af6f41112e03795ed58c77
-size 933
+from __future__ import annotations
+
+from typing import Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from torch import Tensor
+
+from .base import ModelBase, gguf
+
+from .llava import LlavaVisionModel
+
+
+@ModelBase.register("LightOnOCRForConditionalGeneration")
+@ModelBase.example("lightonai/LightOnOCR-1B-1025")
+class LightOnOCRVisionModel(LlavaVisionModel):
+    is_mistral_format = False
+    use_break_tok = False
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.LIGHTONOCR)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        name = name.replace("model.vision_encoder.", "vision_tower.")
+        name = name.replace("model.vision_projection.", "multi_modal_projector.")
+
+        return super().filter_tensors((name, gen))

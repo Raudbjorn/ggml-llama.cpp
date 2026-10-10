@@ -1,3 +1,21 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:68a178a048351b346c96ec96e3c064d98bd8218599fcf55687f8321cdffda1e9
-size 465
+import Content from './tooltip-content.svelte';
+import Trigger from './tooltip-trigger.svelte';
+import { Tooltip as TooltipPrimitive } from 'bits-ui';
+
+const Root = TooltipPrimitive.Root;
+const Provider = TooltipPrimitive.Provider;
+const Portal = TooltipPrimitive.Portal;
+
+export {
+	Root,
+	Trigger,
+	Content,
+	Provider,
+	Portal,
+	//
+	Root as Tooltip,
+	Content as TooltipContent,
+	Trigger as TooltipTrigger,
+	Provider as TooltipProvider,
+	Portal as TooltipPortal
+};

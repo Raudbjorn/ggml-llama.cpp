@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1cf0690e886c25bb3d8ca2570fd7e04f43520867d4f4fc76125ceb42e4f0465c
-size 550
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils';
+	import { Dialog as DialogPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: DialogPrimitive.OverlayProps = $props();
+</script>
+
+<DialogPrimitive.Overlay
+	bind:ref
+	class={cn(
+		'fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:fill-mode-forwards data-[state=open]:animate-in data-[state=open]:fade-in-0',
+		className
+	)}
+	data-slot="dialog-overlay"
+	{...restProps}
+/>

@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:591a4a3a743bad4a812847d1e32d0423f2891e872d95299d1a4f0486af3e7d0b
-size 204
+<script lang="ts">
+	import { LinkPreview as HoverCardPrimitive } from 'bits-ui';
+
+	let { ...restProps }: HoverCardPrimitive.PortalProps = $props();
+</script>
+
+<HoverCardPrimitive.Portal {...restProps} />

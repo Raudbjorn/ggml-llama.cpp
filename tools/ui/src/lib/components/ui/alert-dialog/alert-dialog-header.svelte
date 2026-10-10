@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1d54104d9dab5188be4c96cd49e619321c187542d82739642a2e0b1b16f507f4
-size 476
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn('flex flex-col gap-2 text-center sm:text-left', className)}
+	data-slot="alert-dialog-header"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

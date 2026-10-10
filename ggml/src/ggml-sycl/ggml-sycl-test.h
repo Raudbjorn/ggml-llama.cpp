@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:5dfeedbcc2e20bf953038b600d14bd985130c2612e41310915f570c4e4e0a10c
-size 260
+#pragma once
+
+#include "ggml-backend.h"
+
+// Arms one synthetic synchronization failure for the selected SYCL backend.
+// Defined only when ggml-sycl is built with GGML_SYCL_TESTING.
+bool ggml_backend_sycl_test_inject_sync_failure_once(ggml_backend_t backend);

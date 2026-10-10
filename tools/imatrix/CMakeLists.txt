@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6c0fe64d9aa4a3712f97f24ac2cc58fe64a0aeb5caecc33c4c57473cfdfba0f8
-size 422
+set(TARGET llama-imatrix)
+add_executable(${TARGET} imatrix.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()
+
+if (CMAKE_SYSTEM_NAME MATCHES "AIX")
+    # AIX's flock() function comes from libbsd.a
+    target_link_libraries(${TARGET} PRIVATE -lbsd)
+endif()

@@ -1,3 +1,41 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3d557fb040b4a07d12ec5598b545a379293c59e9c947b57633d06e08a47df57b
-size 1098
+export const API_MODELS = {
+	LIST: '/v1/models',
+	LOAD: '/models/load',
+	SSE: '/models/sse',
+	UNLOAD: '/models/unload'
+};
+
+// chat completion routes, the control route drives realtime inference (e.g. end reasoning)
+export const API_CHAT = {
+	COMPLETIONS: './v1/chat/completions',
+	CONTROL: './v1/chat/completions/control'
+};
+
+// slot introspection, requires the --slots flag on the server
+export const API_SLOTS = {
+	LIST: './slots'
+};
+
+export const API_TOOLS = {
+	EXECUTE: '/tools',
+	LIST: '/tools'
+};
+
+// resumable stream routes, the conv::model identity travels as the conv_id query param
+// because model names can contain slashes that a path segment cannot carry
+// resume retry cadence while the owning model is still loading (server answers 503)
+export const STREAM_RESUME_RETRY_MS = 2000;
+
+export const API_STREAM = {
+	BASE: './v1/stream',
+	LOOKUP: './v1/streams/lookup'
+};
+
+// query params for the resumable stream routes
+export const STREAM_QUERY_PARAMS = {
+	CONV_ID: 'conv_id',
+	FROM: 'from'
+} as const;
+
+/** CORS proxy endpoint path */
+export const CORS_PROXY_ENDPOINT = '/cors-proxy';

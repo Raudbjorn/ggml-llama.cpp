@@ -1,3 +1,29 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2109ae368b4a30c55697f2cd33ae358f2664209e268643e9023199b28f74adb3
-size 586
+#pragma once
+
+#include "decoder.h"
+
+#include <openvino/frontend/input_model.hpp>
+
+namespace ov {
+namespace frontend {
+namespace ggml {
+
+class FrontEnd;
+class GgmlDecoder;
+using ov::frontend::ggml::GgmlDecoder;
+
+class InputModel : public ov::frontend::InputModel {
+    friend class ::ov::frontend::ggml::FrontEnd;
+
+public:
+    explicit InputModel(const std::shared_ptr<GgmlDecoder> & gdecoder);
+
+    const std::shared_ptr<GgmlDecoder> & get_model_decoder() const;
+
+private:
+    std::shared_ptr<GgmlDecoder> m_decoder;
+};
+
+}  // namespace ggml
+}  // namespace frontend
+}  // namespace ov

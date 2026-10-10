@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:053b76b28306670a10df778ffc98ad8bcf2dfee92996a6a426900768c0342dec
-size 683
+import { FileTypeAudio, MimeTypeAudio } from '$lib/enums';
+import type { AudioInputFormat } from '$lib/types/api';
+
+/**
+ * Map a MIME type to the AudioInputFormat expected by the API.
+ */
+export function getAudioInputFormat(mimeType: string): AudioInputFormat {
+	const normalizedMimeType = mimeType.trim().toLowerCase();
+
+	if (
+		normalizedMimeType === MimeTypeAudio.WAV ||
+		normalizedMimeType === MimeTypeAudio.WAVE ||
+		normalizedMimeType === MimeTypeAudio.X_WAV ||
+		normalizedMimeType === MimeTypeAudio.X_WAVE ||
+		normalizedMimeType === MimeTypeAudio.VND_WAVE ||
+		normalizedMimeType === MimeTypeAudio.X_PN_WAV
+	) {
+		return FileTypeAudio.WAV;
+	}
+
+	return FileTypeAudio.MP3;
+}

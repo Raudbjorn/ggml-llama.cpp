@@ -1,3 +1,23 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:755c49ce428223b2ebd781b7df442251960a5053fe9188ba8e61ea099faeb625
-size 769
+import { NEWLINE } from '$lib/constants';
+
+/**
+ * Returns a shortened preview of the provided content capped at the given length.
+ * Appends an ellipsis when the content exceeds the maximum.
+ */
+export function getPreviewText(content: string, max = 150): string {
+	return content.length > max ? content.slice(0, max) + '...' : content;
+}
+
+/**
+ * Generates a single-line title from a potentially multi-line prompt.
+ * Uses the first non-empty line if `useFirstLine` is true.
+ */
+export function generateConversationTitle(content: string, useFirstLine: boolean = false): string {
+	if (useFirstLine) {
+		const firstLine = content.split(NEWLINE).find((line) => line.trim().length > 0);
+
+		return firstLine ? firstLine.trim() : content.trim();
+	}
+
+	return content.trim();
+}

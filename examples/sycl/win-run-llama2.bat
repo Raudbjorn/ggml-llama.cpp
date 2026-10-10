@@ -1,3 +1,11 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:34f1d964b0d16de5e595d7471706e20191e04cef958b73fe6a3f50f1e757bec9
-size 481
+::  MIT license
+::  Copyright (C) 2024 Intel Corporation
+::  SPDX-License-Identifier: MIT
+
+set INPUT2="Building a website can be done in 10 simple steps:\nStep 1:"
+@call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
+
+:: support malloc device memory more than 4GB.
+set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
+set "LOAD_MODE=--load-mode auto"
+.\build\bin\llama-completion.exe -m models\llama-2-7b.Q4_0.gguf -no-cnv -p %INPUT2% -n 400 -e -ngl 99 -s 0 %LOAD_MODE%

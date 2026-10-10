@@ -1,3 +1,32 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:f475b3078ea7082d6afffb0437ffcae5b74781ef517ec263465a3d394d044c23
-size 643
+[environment]
+extra-paths = ["./gguf-py", "./examples/model-conversion/scripts", "./tools/server/tests", "./scripts/snapdragon/qdc/tests"]
+python-version = "3.10"
+
+[rules]
+deprecated = "warn"
+
+[src]
+exclude = [
+    "./tools/mtmd/legacy-models/**",
+]
+
+[[overrides]]
+include = [
+    "./tools/server/tests/**",
+    "./scripts/snapdragon/qdc/**",
+    "./tools/mtmd/tests/**",
+]
+
+[overrides.rules]
+unresolved-reference = "ignore"
+unresolved-import = "ignore"
+unresolved-attribute = "ignore"
+
+[[overrides]]
+include = [
+    "./examples/pydantic_models_to_grammar.py",
+]
+
+[overrides.rules]
+unsupported-operator = "ignore"
+not-subscriptable = "ignore"

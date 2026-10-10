@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:53633d8e2b901b6d4fac494cc316e0f051361a52ef1f70fc8a8f98cb27f73873
-size 680
+import { CONTEXT_KEY_CHAT_MESSAGE_EDIT } from '$lib/constants';
+import type { ChatMessageEditContext } from '$lib/types';
+import { getContext, setContext } from 'svelte';
+
+const CHAT_MESSAGE_EDIT_KEY = Symbol.for(CONTEXT_KEY_CHAT_MESSAGE_EDIT);
+
+/**
+ * Sets the message edit context. Call this in the parent component (ChatMessage.svelte).
+ */
+export function setChatMessageEditContext(ctx: ChatMessageEditContext): ChatMessageEditContext {
+	return setContext(CHAT_MESSAGE_EDIT_KEY, ctx);
+}
+
+/**
+ * Gets the message edit context. Call this in child components.
+ */
+export function getChatMessageEditContext(): ChatMessageEditContext {
+	return getContext(CHAT_MESSAGE_EDIT_KEY);
+}

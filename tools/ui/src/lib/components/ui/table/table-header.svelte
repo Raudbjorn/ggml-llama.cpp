@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6d1de6740e0ca7713d9c4479261faa3c4038ea179e0bde070469c9adbc4acf17
-size 453
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLTableSectionElement>> = $props();
+</script>
+
+<thead
+	bind:this={ref}
+	class={cn('[&_tr]:border-b', className)}
+	data-slot="table-header"
+	{...restProps}
+>
+	{@render children?.()}
+</thead>

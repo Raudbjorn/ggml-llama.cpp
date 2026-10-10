@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:f9dfa89a1b5a6db2c3ed0e47b8a0cbbf1b56117438425810dac485e1659039fa
-size 739
+<script lang="ts">
+	import type { UseProcessingStateReturn } from '$lib/hooks/use-processing-state.svelte';
+	import { fade } from 'svelte/transition';
+
+	interface Props {
+		modelLoadingText: string | null;
+		processingState: UseProcessingStateReturn;
+		position: 'top' | 'bottom';
+	}
+
+	let { modelLoadingText, position, processingState }: Props = $props();
+
+	const marginClass = $derived(position === 'top' ? 'mt-6' : 'mt-4');
+</script>
+
+<div in:fade class="{marginClass} w-full max-w-3xl">
+	<div class="flex flex-col items-start gap-2">
+		<span class="shimmer-text text-sm">
+			{modelLoadingText ??
+				processingState.getPromptProgressText() ??
+				processingState.getProcessingMessage() ??
+				'Processing...'}
+		</span>
+	</div>
+</div>

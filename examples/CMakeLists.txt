@@ -1,3 +1,47 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a28b4ee7ba622103f24aff006cc767e25f6abf74607fe9ea95d8cc1abafa5254
-size 1076
+# dependencies
+
+find_package(Threads REQUIRED)
+
+# third-party
+
+# ...
+
+# flags
+
+llama_add_compile_flags()
+
+# examples
+
+if (EMSCRIPTEN)
+else()
+    add_subdirectory(batched)
+    add_subdirectory(debug)
+    add_subdirectory(embedding)
+    add_subdirectory(eval-callback)
+
+    add_subdirectory(gguf-hash)
+    add_subdirectory(gguf)
+    add_subdirectory(idle)
+    add_subdirectory(lookahead)
+    add_subdirectory(lookup)
+    add_subdirectory(parallel)
+    add_subdirectory(passkey)
+    add_subdirectory(retrieval)
+    add_subdirectory(simple)
+    add_subdirectory(simple-chat)
+    add_subdirectory(speculative)
+    add_subdirectory(speculative-simple)
+    add_subdirectory(gen-docs)
+    add_subdirectory(training)
+    if (NOT WIN32)
+        add_subdirectory(turboanchorkv)
+    endif()
+    add_subdirectory(diffusion)
+    if (NOT GGML_BACKEND_DL)
+        add_subdirectory(convert-llama2c-to-ggml)
+        # these examples use the backends directly and cannot be built with dynamic loading
+        if (GGML_SYCL)
+            add_subdirectory(sycl)
+        endif()
+    endif()
+endif()

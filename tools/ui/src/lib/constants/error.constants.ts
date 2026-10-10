@@ -1,3 +1,23 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1bf2e44a21aa6a8409aeaac2371accf70ce06206d33ae8bee3ba12b49628464c
-size 745
+export const ERROR_MESSAGES = {
+	HTTP: {
+		ACCESS_DENIED: 'Access denied',
+		GENERIC: 'Request failed',
+		INTERNAL_ERROR: 'Server error - check server logs',
+		NOT_FOUND: 'Not found',
+		TEMPORARILY_UNAVAILABLE: 'Server temporarily unavailable'
+	},
+	NETWORK: {
+		GENERIC: 'Failed to connect to server',
+		NXDOMAIN: 'Server not found - check server address',
+		REFUSED: 'Connection refused - server may be offline',
+		TIMEOUT: 'Request timed out',
+		UNREACHABLE: 'Server is not running or unreachable'
+	}
+};
+
+export const HTTP_CODE_TO_STRING: Record<string, string> = {
+	401: ERROR_MESSAGES.HTTP.ACCESS_DENIED,
+	403: ERROR_MESSAGES.HTTP.ACCESS_DENIED,
+	500: ERROR_MESSAGES.HTTP.INTERNAL_ERROR,
+	503: ERROR_MESSAGES.HTTP.TEMPORARILY_UNAVAILABLE
+};

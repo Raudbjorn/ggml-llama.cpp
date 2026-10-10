@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:aad2af752d8cd68ad722f814b1ae6023743ff37e7f65fe80f9f9cb2708cf8bbc
-size 487
+// Control / whitespace / formatting characters that appear literally inside rendered text.
+
+/** Line feed. */
+export const NEWLINE = '\n';
+
+/** Horizontal tab. */
+export const TAB = '\t';
+
+/** Non-breaking space. */
+export const NBSP = '\u00a0';
+
+/** Non-breaking spaces used to render a tab stop that whitespace collapsing would otherwise squash. */
+export const TAB_AS_SPACES = NBSP.repeat(4);
+
+/** Matches a CR-terminated or bare LF line break. */
+export const LINE_BREAK = /\r?\n/;

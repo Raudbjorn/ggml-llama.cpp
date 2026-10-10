@@ -1,3 +1,38 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8a59c532c78921783d749e503060196126a0bda12e6acb72b8c062c0e863cdd4
-size 848
+#pragma once
+
+#include <string>
+#include <vector>
+
+// Ref: https://huggingface.co/docs/hub/local-cache.md
+
+namespace hf_cache {
+
+struct hf_file {
+    std::string path;
+    std::string url;
+    std::string local_path;
+    std::string final_path;
+    std::string oid;
+    std::string repo_id;
+};
+
+using hf_files = std::vector<hf_file>;
+
+// Get files from HF API
+hf_files get_repo_files(
+    const std::string & repo_id,
+    const std::string & token
+);
+
+hf_files get_cached_files(const std::string & repo_id = {});
+
+// Create snapshot path (link or move/copy) and return it
+std::string finalize_file(const hf_file & file);
+
+// Remove the entire cached directory for a repo, returns true if removed
+bool remove_cached_repo(const std::string & repo_id);
+
+// Returns the HuggingFace hub cache path
+std::string get_cache_path();
+
+} // namespace hf_cache

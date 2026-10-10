@@ -1,3 +1,38 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8a4191a9e4f5e437e3b262fe6262f724e708f2e5dfb91faf389dd271c105f880
-size 1232
+// Warns users that this filename was deprecated, and provides a link for more information.
+
+#include <clocale>
+#include <cstdio>
+#include <string>
+#include <unordered_map>
+
+// Main
+int main(int argc, char** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
+    std::string filename = "main";
+    if (argc >= 1) {
+        filename = argv[0];
+    }
+
+    // Get only the program name from the full path
+    auto pos = filename.find_last_of("/\\");
+    if (pos != std::string::npos) {
+        filename = filename.substr(pos+1);
+    }
+
+    // Append "llama-" to the beginning of filename to get the replacemnt filename
+    auto replacement_filename = "llama-" + filename;
+
+    // The exception is if the filename is "main", then our replacement filename is "llama-cli"
+    if (filename == "main") {
+        replacement_filename = "llama-cli";
+    }
+
+    fprintf(stdout, "\n");
+    fprintf(stdout, "WARNING: The binary '%s' is deprecated.\n", filename.c_str());
+    fprintf(stdout, " Please use '%s' instead.\n", replacement_filename.c_str());
+    fprintf(stdout, " See https://github.com/ggml-org/llama.cpp/tree/master/examples/deprecation-warning/README.md for more information.\n");
+    fprintf(stdout, "\n");
+
+    return EXIT_FAILURE;
+}

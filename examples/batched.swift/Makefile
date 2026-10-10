@@ -1,3 +1,6 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:fb84da2c51818364999fb74036930f3a236498fee74373128a00f9abb58bed20
-size 230
+.PHONY: build
+
+build:
+	xcodebuild -scheme llama-batched-swift -destination "generic/platform=macOS" -derivedDataPath build
+	rm -f ./llama-batched-swift
+	ln -s ./build/Build/Products/Debug/llama-batched-swift ./llama-batched-swift

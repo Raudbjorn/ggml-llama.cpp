@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:50cc9867a20702157d92afae756ad8845b5494e9d2d68a71df38e7537b2930fb
-size 143
+aiohttp~=3.9.3
+pytest~=8.3.3
+pytest-xdist~=3.6
+filelock~=3.16
+numpy~=2.2.6
+openai~=2.14.0
+prometheus-client~=0.20.0
+requests~=2.32.3
+wget~=3.2

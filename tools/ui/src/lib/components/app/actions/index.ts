@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c792a0af9140ac5332595621d8c6be619736cc29d03b768ad455d40d3c995b03
-size 351
+/**
+ *
+ * ACTIONS
+ *
+ * Small interactive components for user actions.
+ *
+ */
+
+/** Styled icon button for action triggers with tooltip. */
+export { default as ActionIcon } from './ActionIcon.svelte';
+
+/** Copy-to-clipboard icon button with clipboard logic. */
+export { default as ActionIconCopyToClipboard } from './ActionIconCopyToClipboard.svelte';

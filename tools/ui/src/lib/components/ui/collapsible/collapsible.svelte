@@ -1,3 +1,11 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a0e6302295d86b25f974030996473755b4f9600f023b8f9c1306d15d68f80080
-size 304
+<script lang="ts">
+	import { Collapsible as CollapsiblePrimitive } from 'bits-ui';
+
+	let {
+		open = $bindable(false),
+		ref = $bindable(null),
+		...restProps
+	}: CollapsiblePrimitive.RootProps = $props();
+</script>
+
+<CollapsiblePrimitive.Root bind:open bind:ref data-slot="collapsible" {...restProps} />

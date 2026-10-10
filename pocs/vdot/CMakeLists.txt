@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7aea4bb7bc71605f62c044ef5320cdbb3242a97fb057292b3cb1ef8a45d46c6b
-size 399
+set(TARGET llama-vdot)
+add_executable(${TARGET} vdot.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+set(TARGET llama-q8dot)
+add_executable(${TARGET} q8dot.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7b890a95c953477e825e78ca6089a6f3d7d11d07dd97248c0c1764e4ed25a5de
-size 652
+#include <clocale>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+
+int main(int argc, char** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
+    std::string filename = "main";
+    if (argc >= 1) {
+        filename = argv[0];
+    }
+
+    // Get only the program name from the full path
+    size_t pos = filename.find_last_of("/\\");
+    if (pos != std::string::npos) {
+        filename = filename.substr(pos+1);
+    }
+
+    fprintf(stdout, "\n");
+    fprintf(stdout, "WARNING: The binary '%s' is deprecated.\n", filename.c_str());
+    fprintf(stdout, "Please use 'llama-mtmd-cli' instead.\n");
+    fprintf(stdout, "\n");
+
+    return EXIT_FAILURE;
+}

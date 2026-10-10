@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b09d0df0780b8cdd77af11adfd24ce3f58c0208a228240e8b0121544180571a9
-size 556
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { Label as LabelPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: LabelPrimitive.RootProps = $props();
+</script>
+
+<LabelPrimitive.Root
+	bind:ref
+	class={cn(
+		'flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50',
+		className
+	)}
+	data-slot="label"
+	{...restProps}
+/>

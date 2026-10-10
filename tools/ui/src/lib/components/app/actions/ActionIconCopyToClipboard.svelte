@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:103dbcc2b22e35f2d143423435282a2578cb3934924027b66bb9befabff2179a
-size 486
+<script lang="ts">
+	import ActionIcon from './ActionIcon.svelte';
+	import { Copy } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { copyToClipboard } from '$lib/utils';
+
+	export let ariaLabel: string = 'Copy to clipboard';
+	export let canCopy: boolean = true;
+	export let text: string;
+</script>
+
+<ActionIcon
+	disabled={!canCopy}
+	icon={Copy}
+	iconSize={ICON_CLASS_DEFAULT}
+	onclick={() => canCopy && copyToClipboard(text)}
+	tooltip={ariaLabel}
+/>

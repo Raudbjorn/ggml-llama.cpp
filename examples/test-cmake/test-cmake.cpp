@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:72f80284005db923994b3b8b23b3f5bcc78846462af7f03e02b9abd46ce8e644
-size 562
+#include "llama.h"
+#include <cstdio>
+
+int main(void) {
+#ifdef LLAMA_BUILD_NUMBER
+    printf("[test-cmake] llama.cpp version: %s, build: %d (%s)\n",
+           llama_version(), LLAMA_BUILD_NUMBER, LLAMA_BUILD_COMMIT);
+#else
+    printf("[test-cmake] llama.cpp version: %s\n", llama_version());
+#endif
+    printf("[test-cmake] ggml version: %s, commit: %s\n", ggml_version(), ggml_commit());
+    printf("[test-cmake] Initializing backend...\n");
+    llama_backend_init();
+    printf("[test-cmake] Backend initialized.\n");
+    llama_backend_free();
+    return 0;
+}

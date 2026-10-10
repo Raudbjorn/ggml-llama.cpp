@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3f2f7a4d81d85d9cbcb2a38cd44505a245c445569bc95f9abd5f60dc5242c2dd
-size 615
+#!/usr/bin/env bash
+
+if [ $# -lt 2 ]; then
+    echo "usage: ./scripts/git-bisect.sh <commit_bad> <commit_good> [additional arguments]"
+    echo "  additional arguments: passed to CMake if they start with \"-D\", to llama-results otherwise"
+    exit 1
+fi
+
+set -e
+set -x
+
+commit_bad=$1
+commit_good=$2
+script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+git checkout ${commit_good}
+${script_dir}/git-bisect-run.sh --output results.gguf "${@:3}"
+git bisect start ${commit_bad} ${commit_good}
+git bisect run ${script_dir}/git-bisect-run.sh --output results.gguf --check "${@:3}"
+git bisect reset

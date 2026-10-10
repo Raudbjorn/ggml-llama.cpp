@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:5644a375c7e68e2314c9ddfe86b9ef94b6923da36daa4fa9a0ff0c863a434f56
-size 301
+<script lang="ts">
+	import type { Snippet } from 'svelte';
+
+	interface Props {
+		title: string;
+		children: Snippet;
+	}
+
+	let { children, title }: Props = $props();
+</script>
+
+<div>
+	<h3 class="mb-6 text-base font-semibold">{title}</h3>
+
+	<div class="space-y-8">
+		{@render children()}
+	</div>
+</div>

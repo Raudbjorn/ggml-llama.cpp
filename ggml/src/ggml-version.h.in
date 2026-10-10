@@ -1,3 +1,4 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2b6f26259bfc6768229c90b127fee770f60271e74f4513d7abecb5900fa0b112
-size 95
+#pragma once
+
+#define GGML_VERSION "@GGML_VERSION@"
+#define GGML_COMMIT  "@GGML_BUILD_COMMIT@"

@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:10fdf0647b6ee856681f9bbf8d5eab11f0802411ba77d461e552a03fb7c26e1c
-size 397
+export const MERMAID_WRAPPER_CLASS = 'mermaid-block-wrapper';
+export const MERMAID_SCROLL_CONTAINER_CLASS = 'mermaid-scroll-container';
+export const MERMAID_BLOCK_CLASS = 'mermaid';
+
+export const MERMAID_LANGUAGE = 'mermaid';
+
+export const MERMAID_SYNTAX_ATTR = 'data-mermaid-syntax';
+export const MERMAID_ID_ATTR = 'data-mermaid-id';
+export const MERMAID_RENDERED_ATTR = 'data-mermaid-rendered';

@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:f7bf932125bee73692e51863b8de42bc1e7994a0fc5ae3f2a0e3805c393099e8
-size 394
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { Dialog as SheetPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: SheetPrimitive.DescriptionProps = $props();
+</script>
+
+<SheetPrimitive.Description
+	bind:ref
+	class={cn('text-sm text-muted-foreground', className)}
+	data-slot="sheet-description"
+	{...restProps}
+/>

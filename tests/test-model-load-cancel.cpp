@@ -1,3 +1,27 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:92b561c68b058db20722873c5f9dbced7c240fba37de5ffbda4f4296b111e2b6
-size 783
+#include "llama.h"
+#include "common.h"
+
+#include <cstdlib>
+
+int main(int argc, char *argv[] ) {
+    auto * model_path = common_get_model_or_exit(argc, argv);
+    auto * file = fopen(model_path, "r");
+    if (file == nullptr) {
+        fprintf(stderr, "no model at '%s' found\n", model_path);
+        return EXIT_FAILURE;
+    }
+
+    fprintf(stderr, "using '%s'\n", model_path);
+    fclose(file);
+
+    llama_backend_init();
+    auto params = llama_model_params{};
+    params.load_mode = LLAMA_LOAD_MODE_NONE;
+    params.progress_callback = [](float progress, void * ctx){
+        (void) ctx;
+        return progress > 0.50;
+    };
+    auto * model = llama_model_load_from_file(model_path, params);
+    llama_backend_free();
+    return model == nullptr ? EXIT_SUCCESS : EXIT_FAILURE;
+}

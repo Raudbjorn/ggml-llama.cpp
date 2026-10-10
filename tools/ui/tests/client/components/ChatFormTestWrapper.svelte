@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1d57b559df7f4b568d0ebf6bca80c06229a26282582269cbe11d477d4cf2a395
-size 320
+<script lang="ts">
+	import ChatForm from '$lib/components/app/chat/ChatForm/ChatForm.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+
+	let { onSubmit }: { onSubmit?: () => void } = $props();
+
+	let value = $state('');
+</script>
+
+<Tooltip.Provider>
+	<ChatForm bind:value {onSubmit} />
+</Tooltip.Provider>

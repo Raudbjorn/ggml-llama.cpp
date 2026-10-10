@@ -1,3 +1,15 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:25c09277387f60ab313bb3fcb3245d75c2580be0c2e3c9728c60fc2e2aa4eed9
-size 345
+import unittest
+
+from conversion import get_model_class
+
+
+class ConversionRegistryTest(unittest.TestCase):
+    def test_exaone_moe_transformers_alias(self):
+        self.assertIs(
+            get_model_class("ExaoneMoeForCausalLM"),
+            get_model_class("ExaoneMoEForCausalLM"),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

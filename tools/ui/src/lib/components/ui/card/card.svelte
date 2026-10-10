@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:794970ed727c51fee71c1987a95080c6f0ae101c4cce3eadbef6f5aab7840e37
-size 555
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils';
+	import { BOX_BORDER } from '$lib/constants';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn(
+		'flex flex-col gap-6 rounded-xl bg-card py-6 text-card-foreground shadow-sm',
+		BOX_BORDER,
+		className
+	)}
+	data-slot="card"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

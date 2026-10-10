@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:5fb7bf323516a18fdde58903d41cb6edcf6a43fab01b4809dfba21420008e857
-size 407
+#!/usr/bin/env bash
+
+cmake_args=()
+llama_results_args=()
+
+for arg in "${@}"; do
+    if [[ "$arg" == -D* ]]; then
+        cmake_args+=("$arg")
+    else
+        llama_results_args+=("$arg")
+    fi
+done
+
+dir="build-bisect"
+rm -rf ${dir} > /dev/null
+cmake -B ${dir} -S . ${cmake_args} > /dev/null
+cmake --build ${dir} -t llama-results -j $(nproc) > /dev/null
+${dir}/bin/llama-results "${llama_results_args[@]}"

@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:904e991ac8df4d7a315df0fbabf2459d6cd388f21a4739f467e8f8c427afe188
-size 368
+#ifndef GGML_SYCL_DSV4_HC_HPP
+#define GGML_SYCL_DSV4_HC_HPP
+
+#include "common.hpp"
+
+void ggml_sycl_op_dsv4_hc_pre(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_op_dsv4_hc_comb(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_op_dsv4_hc_post(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#endif // GGML_SYCL_DSV4_HC_HPP

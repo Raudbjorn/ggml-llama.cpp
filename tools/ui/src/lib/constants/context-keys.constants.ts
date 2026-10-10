@@ -1,3 +1,3 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:4f164d107a64e13e7f4d350911811ff7c20adf9b23362f4b89d15cd81436e3b2
-size 204
+export const CONTEXT_KEY_CHAT_MESSAGE_EDIT = 'chat-message-edit';
+export const CONTEXT_KEY_CHAT_MESSAGE_ACTIONS = 'chat-message-actions';
+export const CONTEXT_KEY_CHAT_FORM_ACTIONS = 'chat-form-actions';

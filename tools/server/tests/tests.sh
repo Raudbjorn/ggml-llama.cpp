@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e02bacca7cce38bba4e37e123186aaf3120207e023342041c7a5d4fc5e15c84b
-size 504
+#!/usr/bin/env bash
+
+# make sure we are in the right directory
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd $SCRIPT_DIR
+
+set -eu
+
+WORKERS="${PYTEST_WORKERS:-4}"
+
+if [ $# -lt 1 ]
+then
+    if [[ "${SLOW_TESTS:-0}" == 1 ]]; then
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal
+    else
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal -m "not slow"
+    fi
+else
+    pytest --durations=30 -n "${WORKERS}" --dist=worksteal "$@"
+fi

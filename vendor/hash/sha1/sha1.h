@@ -1,3 +1,48 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:aded220220587c5a409dfa04f4bc2e760bd5bc81ac74af830aceb5bde7bc43e6
-size 689
+#ifndef SHA1_H
+#define SHA1_H
+
+/*
+   SHA-1 in C
+   By Steve Reid <steve@edmweb.com>
+   100% Public Domain
+ */
+
+#include "stdint.h"
+
+namespace vendor_hash {
+
+typedef struct
+{
+    uint32_t state[5];
+    uint32_t count[2];
+    unsigned char buffer[64];
+} SHA1_CTX;
+
+void SHA1Transform(
+    uint32_t state[5],
+    const unsigned char buffer[64]
+    );
+
+void SHA1Init(
+    SHA1_CTX * context
+    );
+
+void SHA1Update(
+    SHA1_CTX * context,
+    const unsigned char *data,
+    uint32_t len
+    );
+
+void SHA1Final(
+    unsigned char digest[20],
+    SHA1_CTX * context
+    );
+
+void SHA1(
+    char *hash_out,
+    const char *str,
+    uint32_t len);
+
+} // namespace vendor_hash
+
+#endif /* SHA1_H */

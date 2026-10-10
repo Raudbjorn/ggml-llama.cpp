@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:f4f881e407177ad86439015975bf57469cbb3b54b750ffcd9a361b44335b4b23
-size 570
+<script lang="ts">
+	// Mounts the real ChatMessages list against the real conversations store, so
+	// the harness exercises `displayMessages` (which rebuilds every message's
+	// toolMessages array) rather than a single message subtree.
+	import ChatMessages from '$lib/components/app/chat/ChatMessages/ChatMessages.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+</script>
+
+<Tooltip.Provider>
+	<ChatMessages messages={conversationsStore.activeMessages} />
+</Tooltip.Provider>

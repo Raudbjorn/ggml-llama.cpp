@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9235a87a3301ea089cd4892849ee4c1f2da026b91e5d14ec341d583af3e795ac
-size 1059
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: DropdownMenuPrimitive.SubContentProps = $props();
+</script>
+
+<DropdownMenuPrimitive.SubContent
+	bind:ref
+	class={cn(
+		'z-50 max-h-(--bits-dropdown-menu-content-available-height) min-w-[8rem] origin-(--bits-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-md border border-border bg-popover p-1.5 text-popover-foreground shadow-md outline-none data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:fill-mode-forwards data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 dark:border-border/20',
+		className
+	)}
+	data-slot="dropdown-menu-sub-content"
+	{...restProps}
+/>

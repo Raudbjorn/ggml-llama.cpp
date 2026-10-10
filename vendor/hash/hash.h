@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:63f7f0f5c1e8f1d98187af2dc37ad938863730fad59bca1f0d0573ad7272b549
-size 216
+#pragma once
+
+// C++ wrapper for the vendored hash functions
+
+#include <cstddef>
+#include <string>
+
+// returns the SHA-256 digest as a lowercase hex string
+std::string hash_sha256_hex(const void * data, size_t len);

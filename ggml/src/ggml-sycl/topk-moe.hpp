@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6482291f3ac7a5fa9f9fa8cf1ee5a6e773d27f6f7ddb9569fcbae309fb0001da
-size 479
+#ifndef GGML_SYCL_TOPK_MOE_HPP
+#define GGML_SYCL_TOPK_MOE_HPP
+
+#include "common.hpp"
+
+// Detect a fusable op subgraph starting at cgraph node `i` and, if found, dispatch the fused
+// kernel. Returns the number of *following* nodes consumed (0 = no fusion applies at i).
+int ggml_sycl_fuse(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i);
+
+int ggml_sycl_fuse_topk_moe(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i);
+
+#endif  // GGML_SYCL_TOPK_MOE_HPP

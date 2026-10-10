@@ -1,3 +1,23 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2b4f1e4c69862e5f631c694d5d7fb205fe556bd36ed38dae876574a4f11affef
-size 582
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn(
+		'@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-1.5 px-6 has-data-[slot=card-action]:grid-cols-[1fr_auto] [.border-b]:pb-6',
+		className
+	)}
+	data-slot="card-header"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

@@ -1,3 +1,18 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:6bc3758d1b951fa82462afa832c9dd1bcf6ed5e16ae24628cedf5bff980667a3
-size 486
+<script lang="ts">
+	import { buttonVariants } from '$lib/components/ui/button/index.js';
+	import { cn } from '$lib/components/ui/utils.js';
+	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: AlertDialogPrimitive.CancelProps = $props();
+</script>
+
+<AlertDialogPrimitive.Cancel
+	bind:ref
+	class={cn(buttonVariants({ variant: 'outline' }), className)}
+	data-slot="alert-dialog-cancel"
+	{...restProps}
+/>

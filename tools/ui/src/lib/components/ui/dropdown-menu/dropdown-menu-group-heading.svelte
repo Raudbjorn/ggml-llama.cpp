@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:005ade5883b0a597e5e3d5948fd427ee12b08a649e09dbd80af9a8701f37ca89
-size 575
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
+	import type { ComponentProps } from 'svelte';
+
+	let {
+		class: className,
+		inset,
+		ref = $bindable(null),
+		...restProps
+	}: ComponentProps<typeof DropdownMenuPrimitive.GroupHeading> & {
+		inset?: boolean;
+	} = $props();
+</script>
+
+<DropdownMenuPrimitive.GroupHeading
+	bind:ref
+	class={cn('px-2 py-1.5 text-sm font-semibold data-[inset]:pl-8', className)}
+	data-inset={inset}
+	data-slot="dropdown-menu-group-heading"
+	{...restProps}
+/>

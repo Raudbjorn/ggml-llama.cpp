@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0d12c5159816abcf12d3203781e202187c84596f3d46918f267f8b8c9fd2c2a3
-size 402
+/**
+ * Creates a base64 data URL from MIME type and base64-encoded data.
+ *
+ * @param mimeType - The MIME type (e.g., 'image/png', 'audio/mp3')
+ * @param base64Data - The base64-encoded data
+ * @returns A data URL string in format 'data:{mimeType};base64,{data}'
+ */
+export function createBase64DataUrl(mimeType: string, base64Data: string): string {
+	return `data:${mimeType};base64,${base64Data}`;
+}

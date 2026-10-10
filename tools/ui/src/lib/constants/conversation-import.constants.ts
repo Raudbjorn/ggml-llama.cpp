@@ -1,3 +1,3 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:4f187d9596aaf4f455837a7912157750351301b771adf134b0dd70441dbab935
-size 201
+// First bytes of every ZIP local file header ("PK"). Import detects an archive
+// from these bytes rather than from the filename, which the OS may not preserve.
+export const ZIP_MAGIC = [0x50, 0x4b];

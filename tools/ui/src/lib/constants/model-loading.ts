@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0b18a6b4eea79be59b97158ed223112e1543921e53f794e3a46e7ba2c96db356
-size 455
+/**
+ * Labels shown while a model loads, keyed by the stage reported on /models/sse.
+ */
+export const MODEL_LOAD_STAGE_LABELS: Record<ApiModelLoadStage, string> = {
+	text_model: 'Loading weights',
+	spec_model: 'Loading draft',
+	mmproj_model: 'Loading projector'
+};
+
+/**
+ * Share of the bar reserved for each load phase after text_model.
+ * text_model fills the rest, so a plain model reaches 100% on its own.
+ */
+export const MODEL_LOAD_TAIL_SHARE = 0.1;

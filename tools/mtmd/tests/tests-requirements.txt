@@ -1,3 +1,3 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:5e6fcf884ee5ee54ed1c03f052c4ab456fb6eda196becadb129b8d7a596d3cfd
-size 26
+jiwer
+sacrebleu
+rapidfuzz

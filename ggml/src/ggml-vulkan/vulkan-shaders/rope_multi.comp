@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:dfe279527c1782fcc0349842b1cda4ac5fcab063ef54489ebdd465abbfbfcec9
-size 467
+#version 450
+
+#include "rope_head.glsl"
+#include "rope_funcs.glsl"
+
+void main() {
+    const uint i0 = 2*gl_GlobalInvocationID.y;
+    const uint row = gl_GlobalInvocationID.x + 32768 * gl_GlobalInvocationID.z;
+    if (row >= pc.nrows) {
+        return;
+    }
+    const uint i3 = row / (pc.ne01*pc.ne02);
+    const uint i2 = (row - i3 * pc.ne01*pc.ne02) / pc.ne01;
+    const uint i1 = (row - i3 * pc.ne01*pc.ne02 - i2 * pc.ne01);
+
+    rope_multi(i0, i1, i2, i3, pc);
+}

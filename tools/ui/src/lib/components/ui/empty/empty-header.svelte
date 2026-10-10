@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3b9e3a04b75a4a06214e68a66590b21dc9bff70e0bb0c720b40503345ef2cc0f
-size 466
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn('gap-2 flex max-w-sm flex-col items-center', className)}
+	data-slot="empty-header"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

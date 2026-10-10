@@ -1,3 +1,35 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8694c613285df6eb61902521f410def5ccbef7362cc77011009836768fa46834
-size 998
+#!/usr/bin/env bash
+#
+# Install git hooks for llama-ui
+# Copies pre-commit and pre-push hooks into the repo's .git/hooks directory.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+HOOKS_DIR="$REPO_ROOT/$(cd "$REPO_ROOT" && git rev-parse --git-path hooks)"
+
+# Verify package.json exists
+if [ ! -f "$REPO_ROOT/tools/ui/package.json" ]; then
+    echo "ERROR: package.json not found in tools/ui"
+    exit 1
+fi
+
+echo "Installing git hooks for llama-ui..."
+
+for hook in pre-commit pre-push; do
+    src="$SCRIPT_DIR/${hook}.sh"
+    dst="$HOOKS_DIR/$hook"
+
+    if cp "$src" "$dst" && chmod +x "$dst"; then
+        echo "  Installed $hook"
+    else
+        echo "  ERROR: Failed to install $hook"
+        exit 1
+    fi
+done
+
+echo ""
+echo "Pre-commit:  format (staged) + type-check"
+echo "Pre-push:    lint + test"
+echo ""
+echo "Hooks stash unstaged changes temporarily and restore them after."
+echo "Skip with:  git commit --no-verify / git push --no-verify"

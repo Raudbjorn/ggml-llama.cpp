@@ -1,3 +1,21 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:dd4a4989ad5cb50f4d69d23b23627dcaf9583b77df9a08b26722405a7c6e70c0
-size 476
+<script lang="ts">
+	interface Props {
+		label: string;
+		value: string;
+		subtitle?: string;
+	}
+
+	let { label, subtitle, value }: Props = $props();
+</script>
+
+<div class="grid gap-1.5">
+	<div class="flex items-baseline justify-between">
+		<span class="text-muted-foreground">{label}</span>
+
+		<span class="font-mono text-muted-foreground">{value}</span>
+	</div>
+
+	{#if subtitle}
+		<div class="text-[10px] leading-tight text-muted-foreground/70">{subtitle}</div>
+	{/if}
+</div>

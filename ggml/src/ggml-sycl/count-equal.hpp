@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3590e0a274c6f95db6d1cb34ab0eea20e991b60694f3f66c160b1bc20cde495f
-size 248
+#ifndef GGML_SYCL_COUNT_EQUAL_HPP
+#define GGML_SYCL_COUNT_EQUAL_HPP
+#include "common.hpp"
+
+#define SYCL_COUNT_EQUAL_CHUNK_SIZE 128
+
+void ggml_sycl_count_equal(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#endif //GGML_SYCL_COUNT_EQUAL_HPP

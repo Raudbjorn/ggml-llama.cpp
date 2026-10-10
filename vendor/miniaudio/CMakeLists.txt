@@ -1,3 +1,6 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9a3543fefb18a888e3da5ef0d4d50a0cb966e6805b3be6dfbfe807bf481ea1ad
-size 245
+# header-only: interface target exposing the vendor/ root so consumers
+# can include via <miniaudio/miniaudio.h>
+add_library(miniaudio INTERFACE)
+add_library(vendor::miniaudio ALIAS miniaudio)
+
+target_include_directories(miniaudio INTERFACE ..)

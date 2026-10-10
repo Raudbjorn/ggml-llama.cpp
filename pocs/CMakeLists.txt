@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b1d670ec043f6bd4b34be41ebaf1042ce670e93db0c9e910d4dc63c90e0df3d3
-size 229
+# dependencies
+
+find_package(Threads REQUIRED)
+
+# third-party
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
+if (EMSCRIPTEN)
+else()
+    if (NOT GGML_BACKEND_DL AND GGML_CPU)
+        add_subdirectory(vdot)
+    endif()
+endif()

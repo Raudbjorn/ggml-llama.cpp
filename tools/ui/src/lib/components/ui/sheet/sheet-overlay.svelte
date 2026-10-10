@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:679d063c4b6d163d3db1ae087a89df1f3683141bbe9932c6ef4cf1abdb6b5cc5
-size 549
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { Dialog as SheetPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: SheetPrimitive.OverlayProps = $props();
+</script>
+
+<SheetPrimitive.Overlay
+	bind:ref
+	class={cn(
+		'fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:fill-mode-forwards data-[state=open]:animate-in data-[state=open]:fade-in-0',
+		className
+	)}
+	data-slot="sheet-overlay"
+	{...restProps}
+/>

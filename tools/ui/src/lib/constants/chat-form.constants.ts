@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:32273ce1a21eec7589c35d58141cdcb159d1f4d82405e5298e17b6ea444d90ef
-size 351
+/** Data attribute that tags ChatFormInputRich code spans and blocks. */
+export const CODE_TOKEN_ATTR = 'data-code-token';
+
+export const INITIAL_FILE_SIZE = 0;
+export const PROMPT_CONTENT_SEPARATOR = '\n\n';
+export const CLIPBOARD_CONTENT_QUOTE_PREFIX = '"';
+export const PROMPT_TRIGGER_PREFIX = '/';
+export const NEW_CHAT_DRAFT_KEY = '__new_chat__';

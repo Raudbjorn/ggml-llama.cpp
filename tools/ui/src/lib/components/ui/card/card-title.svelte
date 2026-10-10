@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7731bf875571589606868796121efd75019cb6ddfeb4f14bd806c92fc4af5e01
-size 446
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn('leading-none font-semibold', className)}
+	data-slot="card-title"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

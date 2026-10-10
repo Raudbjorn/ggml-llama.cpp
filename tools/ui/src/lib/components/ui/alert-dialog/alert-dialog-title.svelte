@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1bd2737aa6a86ded42fa4cfb9314cf9b5f49c80ba2a2760e66608e1d9578b1c6
-size 398
+<script lang="ts">
+	import { cn } from '$lib/components/ui/utils.js';
+	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
+
+	let {
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: AlertDialogPrimitive.TitleProps = $props();
+</script>
+
+<AlertDialogPrimitive.Title
+	bind:ref
+	class={cn('text-lg font-semibold', className)}
+	data-slot="alert-dialog-title"
+	{...restProps}
+/>

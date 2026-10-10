@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:328abb1a7e82834cfa48d818c722d5ec2583b99627704cb46446b919da87f597
-size 458
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn('text-sm font-medium tracking-tight', className)}
+	data-slot="empty-title"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

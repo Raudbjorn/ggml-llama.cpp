@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:43bc484b2c5d978c5f466e59b6548ba0063c84a04637f5e8334af07ee364b085
-size 70
+#version 460
+
+#extension GL_EXT_float_e4m3 : require
+
+void main()
+{
+}

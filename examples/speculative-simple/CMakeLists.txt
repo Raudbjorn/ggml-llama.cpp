@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e8939bcec6e731ce051f7311fe63595d6e1916c543ce4ee9001b9c13a80c6468
-size 261
+set(TARGET llama-speculative-simple)
+add_executable(${TARGET} speculative-simple.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

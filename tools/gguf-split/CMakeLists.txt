@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:82a4bacd338ebb2bf2b1f566e9fa81c6e36c64ad49b91d771e8151aec7830721
-size 282
+set(TARGET llama-gguf-split)
+add_executable(${TARGET} gguf-split.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()

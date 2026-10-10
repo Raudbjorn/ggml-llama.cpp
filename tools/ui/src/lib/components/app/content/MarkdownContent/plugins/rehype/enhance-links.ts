@@ -1,3 +1,33 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9e1cba9c7c1b7ed47c425fcbff139bcd8b0dedc31a6d544b569146ac6ee7d3e7
-size 901
+/**
+ * Rehype plugin to enhance links with security attributes.
+ *
+ * Adds target="_blank" and rel="noopener noreferrer" to all anchor elements,
+ * ensuring external links open in new tabs safely.
+ */
+
+import type { Element, Root } from 'hast';
+import type { Plugin } from 'unified';
+import { visit } from 'unist-util-visit';
+
+/**
+ * Rehype plugin that adds security attributes to all links.
+ * This plugin ensures external links open in new tabs safely by adding:
+ * - target="_blank"
+ * - rel="noopener noreferrer"
+ */
+export const rehypeEnhanceLinks: Plugin<[], Root> = () => {
+	return (tree: Root) => {
+		visit(tree, 'element', (node: Element) => {
+			if (node.tagName !== 'a') return;
+
+			const props = node.properties ?? {};
+
+			// Only modify if href exists
+			if (!props.href) return;
+
+			props.target = '_blank';
+			props.rel = 'noopener noreferrer';
+			node.properties = props;
+		});
+	};
+};

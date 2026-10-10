@@ -1,3 +1,15 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2e42c0f69114716adcefa1b20e05ee95fa334487ba904b3d82fd00818579fbe4
-size 497
+import { TOOL_UI } from '$lib/constants';
+import type { ToolUiEntry } from '$lib/types';
+
+/**
+ * Resolve the UI metadata (label + icon) for a server or browser tool by its
+ * name. Falls back to null for unknown tools so callers can render a generic
+ * chrome instead.
+ */
+export function getToolUi(toolName: string | undefined): ToolUiEntry | null {
+	if (!toolName) return null;
+
+	if (!Object.hasOwn(TOOL_UI, toolName)) return null;
+
+	return (TOOL_UI as Record<string, ToolUiEntry>)[toolName];
+}

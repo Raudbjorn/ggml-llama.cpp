@@ -1,3 +1,27 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:a38019616d26de2bc0023328faa2be5c35f7bbc0b426a6652351848e6170ec7f
-size 570
+/**
+ * Parameter source - indicates whether a parameter uses default or custom value
+ */
+export enum ParameterSource {
+	CUSTOM = 'custom',
+	DEFAULT = 'default'
+}
+
+/**
+ * Syncable parameter type - data types for parameters that can be synced with server
+ */
+export enum SyncableParameterType {
+	BOOLEAN = 'boolean',
+	NUMBER = 'number',
+	STRING = 'string'
+}
+
+/**
+ * Settings field type - defines the input type for settings fields
+ */
+export enum SettingsFieldType {
+	CHECKBOX = 'checkbox',
+	INPUT = 'input',
+	RADIO = 'radio',
+	SELECT = 'select',
+	TEXTAREA = 'textarea'
+}

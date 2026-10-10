@@ -1,3 +1,54 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:400995a60adcbf1633f7949b02909233891090862c91afe33a9a0b48121dcf1c
-size 1221
+//
+// MIT license
+// Copyright (C) 2024 Intel Corporation
+// SPDX-License-Identifier: MIT
+//
+
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+
+#ifndef GGML_SYCL_BACKEND_HPP
+#define GGML_SYCL_BACKEND_HPP
+
+#include "binbcast.hpp"
+#include "col2im-1d.hpp"
+#include "common.hpp"
+#include "concat.hpp"
+#include "conv.hpp"
+#include "conv3d.hpp"
+#include "convert.hpp"
+#include "count-equal.hpp"
+#include "cpy.hpp"
+#include "dequantize.hpp"
+#include "dmmv.hpp"
+#include "element_wise.hpp"
+#include "fattn.hpp"
+#include "fattn-sparse.hpp"
+#include "fusion.hpp"
+#include "gated_delta_net.hpp"
+#include "gla.hpp"
+#include "im2col.hpp"
+#include "mmq.hpp"
+#include "mmvq.hpp"
+#include "norm.hpp"
+#include "outprod.hpp"
+#include "pad.hpp"
+#include "pad_reflect_1d.hpp"
+#include "quantize.hpp"
+#include "quants.hpp"
+#include "roll.hpp"
+#include "rope.hpp"
+#include "set_rows.hpp"
+#include "ssm_conv.hpp"
+#include "softmax.hpp"
+#include "topk-moe.hpp"
+#include "topk-radix.hpp"
+#include "tsembd.hpp"
+#include "upscale.hpp"
+#include "wkv.hpp"
+
+
+#endif  // GGML_SYCL_BACKEND_HPP

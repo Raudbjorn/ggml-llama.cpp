@@ -1,3 +1,23 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:65729a651f1aca1c264e5990325479b9f0cd5c4cb7e137b5128a1f3cfc262bff
-size 542
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLTableRowElement>> = $props();
+</script>
+
+<tr
+	bind:this={ref}
+	class={cn(
+		'border-b transition-colors data-[state=selected]:bg-muted hover:[&,&>svelte-css-wrapper]:[&>th,td]:bg-muted/50',
+		className
+	)}
+	data-slot="table-row"
+	{...restProps}
+>
+	{@render children?.()}
+</tr>

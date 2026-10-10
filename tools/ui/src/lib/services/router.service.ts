@@ -1,3 +1,13 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:ef38361076f8b910a943f358bb3805ffa876bce7512bd69dac18634da1e4f563
-size 278
+/**
+ * RouterService - Builds app route paths
+ *
+ * Returns chat route strings from a single source of truth (ROUTES). No state.
+ */
+
+import { ROUTES } from '$lib/constants';
+
+export class RouterService {
+	static chat(id: string): string {
+		return `${ROUTES.CHAT}/${id}`;
+	}
+}

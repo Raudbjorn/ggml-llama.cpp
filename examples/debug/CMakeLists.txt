@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:71624de72a3fc484849b4f2b696d5429cdff31468a805484d7ad6ad7ec88f80f
-size 235
+set(TARGET llama-debug)
+add_executable(${TARGET} debug.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

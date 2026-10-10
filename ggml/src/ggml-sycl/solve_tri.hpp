@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:f1de5f8c8ec721e75e134cfe781608fd797f94afc85e021bd3a662d0869b6e0f
-size 180
+#pragma once
+
+#include "common.hpp"
+
+#define SYCL_SOLVE_TRI_MAX_N 64
+#define SYCL_SOLVE_TRI_MAX_K 64
+
+void ggml_sycl_solve_tri(ggml_backend_sycl_context & ctx, ggml_tensor * dst);

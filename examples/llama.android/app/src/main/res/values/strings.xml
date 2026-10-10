@@ -1,3 +1,3 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:4cd3c1052adb43c3c613de994407876da799b8c938a26914baab625c5e8a318a
-size 83
+<resources>
+    <string name="app_name">AI Chat basic sample</string>
+</resources>

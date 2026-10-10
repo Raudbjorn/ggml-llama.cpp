@@ -1,3 +1,22 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c2b0223ae2dcb8392d27eef94f66e17157c848c51b8dc53a61723df2dd1ed06a
-size 512
+/**
+ * @param fn - The function to debounce
+ * @param delay - The delay in milliseconds
+ * @returns A debounced version of the function
+ */
+export function debounce<T extends (...args: Parameters<T>) => void>(
+	fn: T,
+	delay: number
+): (...args: Parameters<T>) => void {
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+	return (...args: Parameters<T>) => {
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
+
+		timeoutId = setTimeout(() => {
+			fn(...args);
+			timeoutId = null;
+		}, delay);
+	};
+}

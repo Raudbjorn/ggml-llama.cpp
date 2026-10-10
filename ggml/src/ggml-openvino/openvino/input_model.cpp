@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c591645a0c9ea0831a12d2b8ff08dbbe304fb2648785c8c644a1a0a213b853e1
-size 365
+#include "input_model.h"
+
+#include "decoder.h"
+
+namespace ov {
+namespace frontend {
+namespace ggml {
+
+InputModel::InputModel(const std::shared_ptr<GgmlDecoder> & gdecoder) : m_decoder(gdecoder) {}
+
+const std::shared_ptr<GgmlDecoder> & InputModel::get_model_decoder() const {
+    return m_decoder;
+}
+
+}  // namespace ggml
+}  // namespace frontend
+}  // namespace ov

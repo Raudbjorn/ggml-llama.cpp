@@ -1,3 +1,11 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:9c20594977b598c3768f2e6978d8728825b7d15fb20b780d23fe67eaab42f9e2
-size 200
+#version 450
+
+#include "glu_head.glsl"
+
+const float GELU_QUICK_COEF = -1.702f;
+
+float op(float a, float b) {
+    return a * (1.0f / (1.0f + exp(GELU_QUICK_COEF * a))) * b;
+}
+
+#include "glu_main.glsl"

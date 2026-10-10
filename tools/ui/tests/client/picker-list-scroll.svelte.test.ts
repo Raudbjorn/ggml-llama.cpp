@@ -1,3 +1,32 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:339bacfa740eda1a390c5a8be4393f2fc5fd752fbe6ab97f6b288ed61dcef6e0
-size 1084
+// Regression test: opening a chat-form picker must not scroll the
+// conversation to the top. Root cause: the list's scroll effect fired
+// scrollIntoView on the initial mount, before the popover was positioned,
+// so the browser scrolled every scrollable ancestor to reveal the row.
+
+import PickerListScrollHarness from './components/PickerListScrollHarness.svelte';
+import { tick } from 'svelte';
+import { describe, expect, it } from 'vitest';
+import { render } from 'vitest-browser-svelte';
+
+describe('ChatFormPickerList mount scroll', () => {
+	it('does not scroll documentElement when the picker mounts', async () => {
+		const screen = render(PickerListScrollHarness);
+
+		await tick();
+
+		document.documentElement.scrollTop = document.documentElement.scrollHeight;
+		await tick();
+		const before = document.documentElement.scrollTop;
+
+		expect(before).toBeGreaterThan(0);
+
+		screen.component.openPicker();
+		await tick();
+		await new Promise((r) => setTimeout(r, 100));
+		await tick();
+
+		const after = document.documentElement.scrollTop;
+
+		expect(after).toBe(before);
+	});
+});

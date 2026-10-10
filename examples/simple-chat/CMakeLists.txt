@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d938b71d4de5058258d71b1c3264f476a9786195bd0bc84fd9ac1e840b51f3d2
-size 234
+set(TARGET llama-simple-chat)
+add_executable(${TARGET} simple-chat.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

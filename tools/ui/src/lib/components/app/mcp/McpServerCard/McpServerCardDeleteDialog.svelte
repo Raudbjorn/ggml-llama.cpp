@@ -1,3 +1,36 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:25281a2b84cca51f635f5f29b9469d495c736312d67e300296abb63581a0bdc2
-size 953
+<script lang="ts">
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+
+	interface Props {
+		open: boolean;
+		displayName: string;
+		onOpenChange: (open: boolean) => void;
+		onConfirm: () => void;
+	}
+
+	let { displayName, onConfirm, onOpenChange, open = $bindable() }: Props = $props();
+</script>
+
+<AlertDialog.Root bind:open {onOpenChange}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Delete Server</AlertDialog.Title>
+
+			<AlertDialog.Description>
+				Are you sure you want to delete <strong>{displayName}</strong>? This action cannot be
+				undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+
+			<AlertDialog.Action
+				class="text-destructive-foreground bg-destructive hover:bg-destructive/90"
+				onclick={onConfirm}
+			>
+				Delete
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

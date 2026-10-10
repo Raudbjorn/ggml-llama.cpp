@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:42efe2695f25b499a14cffb92c5e19f7959501dc27e70a041fc535a2ec0ec2e5
-size 575
+#!/bin/bash
+
+set -e
+
+rm -rf llama-build-install install
+
+cmake --fresh -S ../../. -B llama-build-install -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=ON \
+  -DGGML_BACKEND_DL=ON \
+  -DGGML_CPU_ALL_VARIANTS=ON \
+  -DLLAMA_TESTS_INSTALL=OFF \
+  -DCMAKE_INSTALL_PREFIX="${PWD}/install" \
+  -DGGML_BACKEND_DIR="${PWD}/install/lib/llama.cpp" \
+  -DGGML_LIB_INSTALL_DIR="${PWD}/install/lib/llama.cpp" \
+  -DLLAMA_LIB_INSTALL_DIR="${PWD}/install/lib/llama.cpp" \
+  -DLLAMA_TOOLS_INSTALL=OFF
+
+cmake --build llama-build-install --parallel 12
+cmake --install llama-build-install

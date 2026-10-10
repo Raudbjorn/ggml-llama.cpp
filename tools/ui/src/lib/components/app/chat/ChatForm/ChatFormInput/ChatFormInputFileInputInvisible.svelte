@@ -1,3 +1,31 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:84cab0f2d71d9ad8a4acb2e1bf1eec38850a4e7135fdbaaadb312ec05b4c8a62
-size 619
+<script lang="ts">
+	interface Props {
+		class?: string;
+		multiple?: boolean;
+		onFileSelect?: (files: File[]) => void;
+	}
+
+	let { class: className = '', multiple = true, onFileSelect }: Props = $props();
+
+	let fileInputElement: HTMLInputElement | undefined;
+
+	export function click() {
+		fileInputElement?.click();
+	}
+
+	function handleFileSelect(event: Event) {
+		const input = event.target as HTMLInputElement;
+
+		if (input.files) {
+			onFileSelect?.(Array.from(input.files));
+		}
+	}
+</script>
+
+<input
+	bind:this={fileInputElement}
+	class="hidden {className}"
+	{multiple}
+	onchange={handleFileSelect}
+	type="file"
+/>

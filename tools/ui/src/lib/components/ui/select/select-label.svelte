@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:0be6b49a5fe571fffb26f4c11a5b641b0ab1d1e2274c6fb38e132a3acd7bf277
-size 471
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> & {} = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn('px-2 py-1.5 text-xs text-muted-foreground', className)}
+	data-slot="select-label"
+	{...restProps}
+>
+	{@render children?.()}
+</div>

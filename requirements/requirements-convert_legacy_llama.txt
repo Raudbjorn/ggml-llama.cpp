@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8e462f800429e87972ad4ecbf06a30c5e38bc381cda5597d0a36fb5110ca3cc8
-size 101
+numpy~=2.2.6
+sentencepiece>=0.1.98,<0.3.0
+
+transformers==4.57.6
+
+gguf>=0.1.0
+protobuf>=4.21.0,<5.0.0

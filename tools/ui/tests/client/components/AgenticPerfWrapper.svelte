@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:21b7c6285a9cd1295af6b6f9388badd60fa0b5f9c3e28c641860b4007bc10991
-size 499
+<script lang="ts">
+	import { perfState } from './agentic-perf-state.svelte';
+	import ChatMessageAgenticContent from '$lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+</script>
+
+<Tooltip.Provider>
+	{#if perfState.message}
+		<ChatMessageAgenticContent
+			isLastAssistantMessage
+			isStreaming={perfState.isStreaming}
+			message={perfState.message}
+			toolMessages={perfState.toolMessages}
+		/>
+	{/if}
+</Tooltip.Provider>

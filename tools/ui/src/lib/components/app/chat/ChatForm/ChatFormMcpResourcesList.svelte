@@ -1,3 +1,38 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3fc1e2776fe20eed8abe44a40b392eca400ec58d2c433547ea2fe15093a25aa9
-size 1084
+<script lang="ts">
+	import { ChatAttachmentsListItemMcpResource, ScrollCarousel } from '$lib/components/app';
+	import { ScrollCarouselVariant } from '$lib/enums';
+	import { mcpStore } from '$lib/stores';
+
+	interface Props {
+		class?: string;
+		onResourceClick?: (uri: string) => void;
+	}
+
+	let { class: className, onResourceClick }: Props = $props();
+
+	const attachments = $derived(mcpStore.resources.attachments);
+	const hasAttachments = $derived(mcpStore.resources.hasAttachments);
+
+	function handleRemove(attachmentId: string) {
+		mcpStore.removeResourceAttachment(attachmentId);
+	}
+
+	function handleResourceClick(uri: string) {
+		onResourceClick?.(uri);
+	}
+</script>
+
+{#if hasAttachments}
+	<div class={className}>
+		<ScrollCarousel gapSize="2" variant={ScrollCarouselVariant.CENTER}>
+			{#each attachments as attachment, i (attachment.id)}
+				<ChatAttachmentsListItemMcpResource
+					{attachment}
+					class={i === 0 ? 'ml-3' : ''}
+					onRemove={handleRemove}
+					onclick={() => handleResourceClick(attachment.resource.uri)}
+				/>
+			{/each}
+		</ScrollCarousel>
+	</div>
+{/if}

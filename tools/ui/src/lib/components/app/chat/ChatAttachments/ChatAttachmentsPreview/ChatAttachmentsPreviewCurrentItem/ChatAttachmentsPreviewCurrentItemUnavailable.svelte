@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:614620f59a3c41203b7232c57f53af58e8ad5aa0ab76e92d22efced365f0ba1f
-size 404
+<script lang="ts">
+	import type { Component } from 'svelte';
+
+	interface Props {
+		IconComponent: Component;
+	}
+
+	let { IconComponent }: Props = $props();
+</script>
+
+<div class="flex flex-1 items-center justify-center p-8">
+	<div class="text-center">
+		<IconComponent class="mx-auto mb-4 h-16 w-16 text-white/50" />
+
+		<p class="text-white/70">Preview not available for this file type</p>
+	</div>
+</div>

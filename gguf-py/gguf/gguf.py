@@ -1,3 +1,15 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:f0c0eeedad0911784b52ffed8e162a0eb5ae6d535ce35705bc16196e46597a72
-size 478
+# This file left for compatibility. If you want to use the GGUF API from Python
+# then don't import gguf/gguf.py directly. If you're looking for examples, see the
+# examples/ directory for gguf-py
+
+import importlib
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Compatibility for people trying to import gguf/gguf.py directly instead of as a package.
+importlib.invalidate_caches()
+import gguf  # noqa: E402
+
+importlib.reload(gguf)

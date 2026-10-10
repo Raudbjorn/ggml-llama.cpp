@@ -1,3 +1,17 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:dd519f35d82e0c8f27b486033115f47ef66ac359fd0680cfe2a7691152dcb853
-size 458
+import type { SidebarAction } from '$lib/enums';
+import type { Component } from 'svelte';
+
+/**
+ * A single clickable action in the desktop sidebar icon strip.
+ */
+export interface DesktopIconStripItem {
+	icon: Component;
+	tooltip: string;
+	route?: string;
+	/** Custom action handled by the sidebar, e.g. opening a new-chat tab */
+	action?: SidebarAction;
+	activeRouteId?: string;
+	activeRoutePrefix?: string;
+	activeUrlIncludes?: string;
+	keys?: string[];
+}

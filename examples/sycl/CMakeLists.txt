@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d2705afee47e2d677f7c7f89645bb4b42b65d11cb7e45ef6b16c0bc8cd2bc177
-size 341
+#  MIT license
+#  Copyright (C) 2024 Intel Corporation
+#  SPDX-License-Identifier: MIT
+
+set(TARGET llama-ls-sycl-device)
+add_executable(${TARGET} ls-sycl-device.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

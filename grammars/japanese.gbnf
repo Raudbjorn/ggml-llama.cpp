@@ -1,3 +1,7 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:69fc177180f2b15d085d811aa41e360bb85c962d424d7c17dc936c04ca668e00
-size 249
+# A probably incorrect grammar for Japanese
+root        ::= jp-char+ ([ \t\n] jp-char+)*
+jp-char     ::= hiragana | katakana | punctuation | cjk
+hiragana    ::= [ぁ-ゟ]
+katakana    ::= [ァ-ヿ]
+punctuation ::= [、-〾]
+cjk         ::= [一-鿿]

@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:887a86a844156f450d859d1d04db6aeeee5ff716db78ba4c767acbf17d8f6a7b
-size 678
+<script lang="ts">
+	import { Music } from '@lucide/svelte';
+
+	interface Props {
+		currentItem: { name?: string } | null;
+		audioSrc: string | null;
+	}
+
+	let { audioSrc, currentItem }: Props = $props();
+</script>
+
+<div class="flex flex-1 items-center justify-center p-8">
+	<div class="w-full max-w-md text-center">
+		<Music class="mx-auto mb-4 h-16 w-16 text-white/50" />
+
+		{#if audioSrc}
+			<audio class="mb-4 w-full" controls src={audioSrc}>
+				Your browser does not support the audio element.
+			</audio>
+		{:else}
+			<p class="mb-4 text-white/70">Audio preview not available</p>
+		{/if}
+
+		<p class="text-sm text-white/50">{currentItem?.name || 'Audio'}</p>
+	</div>
+</div>

@@ -1,3 +1,6 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:96a248f563c5780af621b63d59c64e8d4823cb3b9b3e7f487eb8f8b3d11b0dcf
-size 242
+# note: this might be incomplete, mostly an example
+root        ::= en-char+ ([ \t\n] en-char+)*
+en-char     ::= letter | digit | punctuation
+letter      ::= [a-zA-Z]
+digit       ::= [0-9]
+punctuation ::= [!"#$%&'()*+,-./:;<=>?@[\\\]^_`{|}~]

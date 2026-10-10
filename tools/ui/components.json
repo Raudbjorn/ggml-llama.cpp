@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:27a9b84e4e065634e504813b9296d6cf2dd0cbab1844f7213ee12e001ea51a25
-size 359
+{
+	"$schema": "https://shadcn-svelte.com/schema.json",
+	"tailwind": {
+		"css": "src/app.css",
+		"baseColor": "neutral"
+	},
+	"aliases": {
+		"components": "$lib/components",
+		"utils": "$lib/components/ui/utils",
+		"ui": "$lib/components/ui",
+		"hooks": "$lib/hooks",
+		"lib": "$lib"
+	},
+	"typescript": true,
+	"registry": "https://shadcn-svelte.com/registry"
+}

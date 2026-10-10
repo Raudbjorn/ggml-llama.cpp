@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:c056593aa1c502c3db7c761bf86ba3e2c3d47e33ea7079a3e9b400ba2734f8ca
-size 529
+<script lang="ts">
+	import ChatFormActionAddButton from './ChatFormActionAddButton.svelte';
+	import ChatFormActionAddDropdown from './ChatFormActionAddDropdown.svelte';
+	import ChatFormActionAddSheet from './ChatFormActionAddSheet.svelte';
+	import { deviceStore } from '$lib/stores';
+</script>
+
+{#if deviceStore.isMobile}
+	<ChatFormActionAddSheet>
+		{#snippet trigger({ disabled, onclick })}
+			<ChatFormActionAddButton {disabled} {onclick} />
+		{/snippet}
+	</ChatFormActionAddSheet>
+{:else}
+	<ChatFormActionAddDropdown />
+{/if}

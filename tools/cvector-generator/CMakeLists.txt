@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:40b16b58e0ab662efc5089a4e5a6e72ef79f9adbb8e3dda892561788385b88c0
-size 304
+set(TARGET llama-cvector-generator)
+add_executable(${TARGET} cvector-generator.cpp pca.hpp)
+target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()

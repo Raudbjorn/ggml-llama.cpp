@@ -1,3 +1,23 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1579bf37f42f97014ea7eb858adad32acfdf80a0e969e2fbe3a6dd5dd5e58b30
-size 794
+<script lang="ts">
+	import ChatMessageCwdChange from './ChatMessageCwdChange.svelte';
+	import type { DatabaseMessage } from '$lib/types';
+	import { parseCwdMessage } from '$lib/utils';
+
+	interface Props {
+		class?: string;
+		message: DatabaseMessage;
+	}
+
+	let { class: className = '', message }: Props = $props();
+
+	// Synthetic messages render a dedicated UI, never a user bubble. The only
+	// kind today is the working-directory change; parse the content so the
+	// row reuses the exact synthetic text (and future kinds slot in here).
+	let isCwdChange = $derived(parseCwdMessage(message.content) !== null);
+</script>
+
+{#if isCwdChange}
+	<ChatMessageCwdChange class={className} {message} />
+{:else}
+	<span class="text-muted-foreground block text-sm {className}">{message.content}</span>
+{/if}

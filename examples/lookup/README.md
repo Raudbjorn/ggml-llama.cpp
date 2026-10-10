@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b9335947cf75a1774f4cde40e11811076d313f0059cf15020e5c9bc35402d922
-size 485
+# llama.cpp/examples/lookup
+
+Demonstration of Prompt Lookup Decoding
+
+https://github.com/apoorvumang/prompt-lookup-decoding
+
+The key parameters for lookup decoding are `ngram_min`, `ngram_max` and `n_draft`. The first two determine the size of the ngrams to search for in the prompt for a match. The latter specifies how many subsequent tokens to draft if a match is found.
+
+More info:
+
+https://github.com/ggml-org/llama.cpp/pull/4484
+https://github.com/ggml-org/llama.cpp/issues/4226

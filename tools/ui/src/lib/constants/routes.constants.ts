@@ -1,3 +1,20 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7a02d15309a0fd0987ef4dcceb9255d03d9f7b8bcbb7a1a62beb8fe99faf40cf
-size 573
+/** Query params the chat routes read from the URL. */
+export const URL_PARAMS = {
+	/** Load the selected model instead of waiting for the first message. */
+	LOAD: 'load',
+	/** Model to select. */
+	MODEL: 'model',
+	/** Prompt to send on arrival. */
+	QUERY: 'q'
+} as const;
+
+export const ROUTES = {
+	/** Chat base — for dynamic chat URLs use RouterService. */
+	CHAT: '#/chat',
+	/** MCP servers. */
+	MCP_SERVERS: '#/mcp-servers',
+	/** Search — mobile-only full-page conversation search. */
+	SEARCH: '#/search',
+	/** Root — start of the app. */
+	START: '#/'
+} as const;

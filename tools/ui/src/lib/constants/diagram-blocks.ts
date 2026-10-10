@@ -1,3 +1,9 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8b346645f2f81349fd8b13666626244d0de65f0f20e8794b6d147f856f25a77c
-size 491
+// Shared constants for diagram blocks (mermaid and svg) that toggle between a
+// rendered view and a source view. The wrapper carries the active mode, css
+// drives the visibility, the click handler only flips the attribute.
+
+export const DIAGRAM_VIEW_MODE_ATTR = 'data-view-mode';
+export const DIAGRAM_VIEW_RENDERED = 'rendered';
+export const DIAGRAM_VIEW_SOURCE = 'source';
+export const DIAGRAM_SOURCE_CLASS = 'diagram-source';
+export const TOGGLE_SOURCE_BTN_CLASS = 'toggle-source-btn';

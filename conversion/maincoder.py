@@ -1,3 +1,15 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7ce3968578f4dfd62e6b1639d1ab4aa012b9a3f33b78063a7692be79a682e715
-size 453
+from __future__ import annotations
+
+from .base import ModelBase, TextModel, gguf
+
+
+@ModelBase.register("MaincoderForCausalLM")
+@ModelBase.example("Maincode/Maincoder-1B")
+class MaincoderModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.MAINCODER
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        if (head_dim := self.hparams.get("head_dim")) is not None:
+            self.gguf_writer.add_rope_dimension_count(head_dim)

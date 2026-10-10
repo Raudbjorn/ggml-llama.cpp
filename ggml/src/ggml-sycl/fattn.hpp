@@ -1,3 +1,59 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b7a70dc68647f9d33b530af1f9da4dea56e2d05329530e91348071b45820d5aa
-size 2757
+//
+// MIT license
+// Copyright (C) 2025 Intel Corporation
+// SPDX-License-Identifier: MIT
+//
+
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+
+#ifndef GGML_SYCL_FATTN_HPP
+#define GGML_SYCL_FATTN_HPP
+
+#include "common.hpp"
+#include "fattn-grf.hpp"
+
+void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+// GGML_SYCL_FA_LARGE_GRF (rationale, modes and the pure parse/decision in fattn-grf.hpp).
+// The environment value, parsed once with ggml_sycl_fa_large_grf_parse(); INVALID and
+// NO_VARIANTS results warn once and give OFF.
+ggml_sycl_fa_grf_mode ggml_sycl_fa_large_grf_mode();
+// True when the 256-GRF FA instantiations were compiled (CMake GGML_SYCL_FA_LARGE_GRF).
+bool ggml_sycl_fa_large_grf_variants();
+// True when the device's architecture has a 256-GRF mode (Xe-HPG, Xe-HPC, Xe2); warns
+// once per device otherwise. Call only when a large-GRF launch is wanted.
+bool ggml_sycl_fa_large_grf_supported(int device);
+// Work-groups per Xe-core to plan a 256-GRF launch with: half the device value, unless
+// GGML_SYCL_MAX_WG_PER_CU was set and accepted by its parser, which is then used as is.
+int ggml_sycl_fa_large_grf_max_wg_per_cu(int device_max_wg_per_cu);
+
+bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst);
+
+// Reports if flash attention runs this node with oneDNN or oneMKL
+bool ggml_sycl_flash_attn_ext_uses_library(int device, const ggml_tensor * dst);
+
+// Scratch that flash attention needs beyond the output tensor
+struct ggml_sycl_fattn_extra {
+    uintptr_t K_buffer_ptr     = 0;   // F16 copy of the K cache
+    uintptr_t V_buffer_ptr     = 0;   // F16 copy of the V cache
+    uintptr_t Q_buffer_ptr     = 0;   // dense F16 copy of Q, oneDNN only
+    uintptr_t scale_buffer_ptr = 0;   // the softmax scale as an F16 scalar, oneDNN only
+    uintptr_t out_buffer_ptr   = 0;   // F16 SDPA output before conversion to F32, oneDNN only
+    uintptr_t end              = 0;   // one past the last reserved byte; sizes the allocation
+};
+
+// ggml_sycl_fattn_get_extra() is the single source of truth for the layout: it both sizes
+// the reservation and hands out the pointers, so the two cannot disagree.
+// Each field is the address of one reserved block, or 0 if that block was not reserved,
+// in which case the caller allocates from the scratch pool instead.
+ggml_sycl_fattn_extra ggml_sycl_fattn_get_extra(const ggml_tensor * dst);
+
+size_t ggml_sycl_flash_attn_ext_get_alloc_size(const ggml_tensor * dst);
+
+void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+#endif // GGML_SYCL_FATTN_HPP

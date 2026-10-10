@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3eaf094e578e978ceadf50cb72fb42bb70ba393f053a13b76adac5f458a28f74
-size 432
+import TestWrapper from './components/TestWrapper.svelte';
+import { describe, expect, it } from 'vitest';
+import { render } from 'vitest-browser-svelte';
+
+describe('/+page.svelte', () => {
+	it('should render page without throwing', async () => {
+		// Basic smoke test - page should render without throwing errors.
+		// API calls are mocked in vitest-setup-client.ts.
+		await render(TestWrapper);
+		expect(true).toBe(true);
+	});
+});

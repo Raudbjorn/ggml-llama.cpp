@@ -1,3 +1,21 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b36e2b6e26c545e7e827d3f4b5956e6c6e97b6e6908c3203a5cc8001b31e981d
-size 622
+<script lang="ts">
+	import CollapsibleContentBlock from '$lib/components/app/content/CollapsibleContentBlock.svelte';
+	import CollapsibleTerminalBlock from '$lib/components/app/content/CollapsibleTerminalBlock.svelte';
+
+	interface Props {
+		variant: 'content' | 'terminal';
+		open: boolean;
+	}
+
+	let { open, variant }: Props = $props();
+</script>
+
+{#if variant === 'content'}
+	<CollapsibleContentBlock {open} title="Block">
+		<span>collapsible-body-marker</span>
+	</CollapsibleContentBlock>
+{:else}
+	<CollapsibleTerminalBlock {open} title="Block">
+		<span>collapsible-body-marker</span>
+	</CollapsibleTerminalBlock>
+{/if}

@@ -1,3 +1,3 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:fb8c422d22813d25da593ed59404e46b8a980f5d55b9e45ec60320e5d83fcc0d
-size 77
+#include "../fattn-tile.hpp"
+
+DECL_FATTN_TILE_CASE(128, 128, GGML_TYPE_F16);

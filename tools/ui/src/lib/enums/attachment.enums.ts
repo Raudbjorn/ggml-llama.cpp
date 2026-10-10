@@ -1,3 +1,54 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:2486f9c0576707b665609897b13d062229f7fef3b624fca9e02c2306942c19c1
-size 1313
+/**
+ * Attachment type enum for database message extras
+ */
+export enum AttachmentType {
+	AUDIO = 'AUDIO',
+	IMAGE = 'IMAGE',
+	LEGACY_CONTEXT = 'context', // Legacy attachment type for backward compatibility
+	MCP_PROMPT = 'MCP_PROMPT',
+	MCP_RESOURCE = 'MCP_RESOURCE',
+	PDF = 'PDF',
+	TEXT = 'TEXT',
+	VIDEO = 'VIDEO'
+}
+
+/**
+ * Unique identifiers for attachment menu items in the chat form action dropdowns.
+ * Used to select which file upload or attachment action is triggered.
+ */
+export enum AttachmentMenuItemId {
+	AUDIO = 'audio',
+	IMAGES = 'images',
+	PDF = 'pdf',
+	SYSTEM_MESSAGE = 'system-message',
+	TEXT = 'text',
+	VIDEO = 'video'
+}
+
+/**
+ * Defines when an attachment menu item should be enabled.
+ */
+export enum AttachmentItemEnabledWhen {
+	ALWAYS = 'always',
+	HAS_AUDIO_MODALITY = 'hasAudioModality',
+	HAS_VIDEO_MODALITY = 'hasVideoModality',
+	HAS_VISION_MODALITY = 'hasVisionModality'
+}
+
+/**
+ * Defines the callback action triggered when an attachment menu item is clicked.
+ */
+export enum AttachmentAction {
+	FILE_UPLOAD = 'onFileUpload',
+	SYSTEM_PROMPT_CLICK = 'onSystemPromptClick'
+}
+
+/**
+ * Human-readable labels used when embedding attachments in outgoing messages.
+ */
+export enum AttachmentLabel {
+	FILE = 'File',
+	MCP_PROMPT = 'MCP Prompt',
+	MCP_RESOURCE = 'MCP Resource',
+	PDF_FILE = 'PDF File'
+}

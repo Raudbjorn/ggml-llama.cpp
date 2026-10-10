@@ -1,3 +1,26 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:52ebb967feae3aec877a1d3cb1c509b2598a9c799e60401a82253a5d4844038b
-size 624
+#include <cstdlib>
+#include <string>
+#include <iostream>
+
+#include "peg-parser/tests.h"
+
+int main(int argc, char *argv[]) {
+    testing t(std::cout);
+    if (argc >= 2) {
+        t.set_filter(argv[1]);
+    }
+
+    const char * verbose = getenv("LLAMA_TEST_VERBOSE");
+    if (verbose) {
+        t.verbose = std::string(verbose) == "1";
+    }
+
+    t.test("basic", test_basic);
+    t.test("unicode", test_unicode);
+    t.test("json", test_json_parser);
+    t.test("gbnf", test_gbnf_generation);
+    t.test("serialization", test_json_serialization);
+    t.test("python-dict", test_python_dict_parser);
+
+    return t.summary();
+}

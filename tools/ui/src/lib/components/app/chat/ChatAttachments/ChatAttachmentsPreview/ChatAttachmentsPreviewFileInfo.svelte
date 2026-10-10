@@ -1,3 +1,16 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:d18bd502bb584998bb41923ff855bf7890054a9c030a7a4f04f210650a0cbb32
-size 380
+<script lang="ts">
+	interface Props {
+		displayName: string;
+		fileSize: string;
+	}
+
+	let { displayName, fileSize }: Props = $props();
+</script>
+
+<div class="sticky top-0 z-[20] mb-4 rounded-lg bg-black/5 px-4 py-2 text-center backdrop-blur-md">
+	<p class="font-medium text-white">{displayName}</p>
+
+	{#if fileSize}
+		<p class="text-xs text-white/60">{fileSize}</p>
+	{/if}
+</div>

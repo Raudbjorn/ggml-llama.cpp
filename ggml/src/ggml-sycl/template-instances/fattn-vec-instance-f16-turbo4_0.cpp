@@ -1,3 +1,5 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:7b770e78d87f0768ca6beb6060495c9f1f68bccd91dc64ab3feef9f8692aedfc
-size 212
+#include "../fattn-vec.hpp"
+
+DECL_FATTN_VEC_CASE(128, GGML_TYPE_F16, GGML_TYPE_TURBO4_0);
+DECL_FATTN_VEC_CASE(256, GGML_TYPE_F16, GGML_TYPE_TURBO4_0);
+DECL_FATTN_VEC_CASE(512, GGML_TYPE_F16, GGML_TYPE_TURBO4_0);

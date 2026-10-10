@@ -1,3 +1,25 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:8788590edb516c2e46a3d63bcfbce6c8ed7f6c0235c9e0988df46574fcc15292
-size 555
+#pragma once
+
+// Common includes for all test files
+#include "json.h"
+#include <string>
+#include <vector>
+
+#include "../testing.h"
+#include "peg-parser.h"
+#include "chat-peg-parser.h"
+#include "simple-tokenize.h"
+
+struct bench_tool_call {
+    std::string id;
+    std::string name;
+    common_json args;
+};
+
+// Test function declarations
+void test_basic(testing &t);
+void test_json_parser(testing &t);
+void test_gbnf_generation(testing &t);
+void test_unicode(testing &t);
+void test_json_serialization(testing &t);
+void test_python_dict_parser(testing &t);

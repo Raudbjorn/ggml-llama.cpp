@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:97a690ded7a75a9a3e7dec8be18b80cb4a52082a9dee9546db55f843433dbd6d
-size 220
+#version 450
+
+#include "glu_head.glsl"
+
+float op(float a, float b) {
+    float gate = min(a, p.limit);
+    float up = clamp(b, -p.limit, p.limit);
+
+    return gate / (1.0f + exp(-gate)) * up;
+}
+
+#include "glu_main.glsl"

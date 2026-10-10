@@ -1,3 +1,35 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:007857b321fda9316e77d816c2d99254e256b29c97e8ef1ec85a375b42b7ad3e
-size 868
+<script lang="ts">
+	import { Button } from '$lib/components/ui/button';
+	import * as Card from '$lib/components/ui/card';
+
+	let { forceReload, needRefresh: needRefreshProp, updateServiceWorker } = $props();
+	let needRefresh = $derived(needRefreshProp ?? false);
+</script>
+
+{#if needRefresh}
+	<Card.Root class="overflow-hidden gap-1 py-5">
+		<Card.Header class="px-5">
+			<Card.Title class="text-sm font-medium">Update available</Card.Title>
+		</Card.Header>
+
+		<Card.Content class="gap-6 grid px-5">
+			<p class="text-xs text-muted-foreground">A new version is available. Reload to update.</p>
+
+			<Button
+				class="justify-self-end-safe"
+				onclick={() => {
+					updateServiceWorker();
+
+					if (forceReload) {
+						window.location.reload();
+					}
+
+					needRefresh = false;
+				}}
+				size="sm"
+			>
+				Reload
+			</Button>
+		</Card.Content>
+	</Card.Root>
+{/if}

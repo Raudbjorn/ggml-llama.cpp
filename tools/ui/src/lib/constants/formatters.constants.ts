@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:611f2c02c65d457d9db04551c7052b904ef709c0fad4ce7e56d8b9107f8b65d3
-size 313
+export const MS_PER_SECOND = 1000;
+export const SECONDS_PER_MINUTE = 60;
+export const SECONDS_PER_HOUR = 3600;
+export const SHORT_DURATION_THRESHOLD = 1;
+export const MEDIUM_DURATION_THRESHOLD = 10;
+
+/** Default display value when no performance time is available */
+export const DEFAULT_PERFORMANCE_TIME = '0s';

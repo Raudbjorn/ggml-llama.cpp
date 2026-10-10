@@ -1,3 +1,62 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:1abbef6b5523169c5600112cba6a7bced023a1485873041882a2f28f3b0d6833
-size 1217
+# https://EditorConfig.org
+
+# Top-most EditorConfig file
+root = true
+
+# Unix-style newlines with a newline ending every file, utf-8 charset
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8
+indent_style = space
+indent_size = 4
+
+[Makefile]
+indent_style = tab
+
+[scripts/*.mk]
+indent_style = tab
+
+[prompts/*.txt]
+insert_final_newline = unset
+
+[tools/server/deps_*]
+trim_trailing_whitespace = unset
+indent_style = unset
+indent_size = unset
+
+[examples/llama.swiftui/llama.swiftui.xcodeproj/*]
+indent_style = tab
+
+[tools/cvector-generator/*.txt]
+trim_trailing_whitespace = unset
+insert_final_newline = unset
+
+[models/templates/*.jinja]
+indent_style = unset
+indent_size = unset
+end_of_line = unset
+charset = unset
+trim_trailing_whitespace = unset
+insert_final_newline = unset
+
+[vendor/miniaudio/miniaudio.h]
+trim_trailing_whitespace = unset
+insert_final_newline = unset
+
+[tools/ui/**]
+indent_style = unset
+indent_size = unset
+end_of_line = unset
+charset = unset
+trim_trailing_whitespace = unset
+insert_final_newline = unset
+
+[benches/**]
+indent_style = unset
+indent_size = unset
+end_of_line = unset
+charset = unset
+trim_trailing_whitespace = unset
+insert_final_newline = unset

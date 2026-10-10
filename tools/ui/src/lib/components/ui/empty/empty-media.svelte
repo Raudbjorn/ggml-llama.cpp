@@ -1,3 +1,41 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e1b7a5620195102a14c0c0fc84d7a5be1ee727bb2d2e6d9bd8ce8d4785824f12
-size 1115
+<script lang="ts" module>
+	import { tv, type VariantProps } from 'tailwind-variants';
+
+	export const emptyMediaVariants = tv({
+		base: 'mb-2 flex shrink-0 items-center justify-center [&_svg]:pointer-events-none [&_svg]:shrink-0',
+		defaultVariants: {
+			variant: 'default'
+		},
+		variants: {
+			variant: {
+				default: 'bg-transparent',
+				icon: "bg-muted text-foreground flex size-8 shrink-0 items-center justify-center rounded-lg [&_svg:not([class*='size-'])]:size-4"
+			}
+		}
+	});
+
+	export type EmptyMediaVariant = VariantProps<typeof emptyMediaVariants>['variant'];
+</script>
+
+<script lang="ts">
+	import { cn, type WithElementRef } from '$lib/components/ui/utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		variant = 'default',
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> & { variant?: EmptyMediaVariant } = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn(emptyMediaVariants({ variant }), className)}
+	data-slot="empty-icon"
+	data-variant={variant}
+	{...restProps}
+>
+	{@render children?.()}
+</div>

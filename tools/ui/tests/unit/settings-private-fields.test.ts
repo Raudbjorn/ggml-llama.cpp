@@ -1,3 +1,12 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:07f35948358ffc2c2647db3cbe473f1f56138f81c56f332788da821baa48fead
-size 460
+import { SETTINGS_CHAT_SECTIONS, SETTINGS_KEYS } from '$lib/constants';
+import { describe, expect, it } from 'vitest';
+
+describe('checkApiKeyField', () => {
+	it('should have isPrivate set to true', () => {
+		const fields = SETTINGS_CHAT_SECTIONS.flatMap((section) => section.fields);
+		const apiKeyField = fields.find((field) => field?.key === SETTINGS_KEYS.API_KEY);
+
+		expect(apiKeyField).toBeDefined();
+		expect(apiKeyField?.isPrivate).toBe(true);
+	});
+});

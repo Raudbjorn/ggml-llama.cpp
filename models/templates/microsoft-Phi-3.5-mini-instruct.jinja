@@ -1,3 +1,8 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:78d976a442bcde2f0be15aafbb8e3050e1104f86732266f68403251b89982a90
-size 430
+{% for message in messages %}{% if message['role'] == 'system' and message['content'] %}{{'<|system|>
+' + message['content'] + '<|end|>
+'}}{% elif message['role'] == 'user' %}{{'<|user|>
+' + message['content'] + '<|end|>
+'}}{% elif message['role'] == 'assistant' %}{{'<|assistant|>
+' + message['content'] + '<|end|>
+'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|assistant|>
+' }}{% else %}{{ eos_token }}{% endif %}

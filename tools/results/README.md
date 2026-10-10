@@ -1,3 +1,11 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:e91afff9a7188b8ddef89d834e4918e23e10617acaa7040e5c9350199bbd13b7
-size 551
+# Results
+
+The `llama-results` tool can be used to `--check` the outputs of a model vs. a previous commit to detect whether they have changed.
+Example usage:
+
+``` sh
+llama-results --model model.gguf --output results.gguf --prompt "People die when they are killed."  # writes results to file
+llama-results --model model.gguf --output results.gguf --prompt "People die when they are killed." --check  # compares results vs file
+```
+
+The metric by which the results are compared is the normalized mean squared error (NMSE) with a tolerance of $10^{-6}$.
