@@ -45,7 +45,7 @@ stop. P100 threshold values are not defaults for the A770.
 - **R10.11 (State-driven):** WHILE a negative setting is used with EAGLE3, DFlash, or DFlash2, the cumulative-probability rule shall remain disabled for that drafter.
 - **R10.12 (Ubiquitous):** The cumulative-probability extractor shall use the declared probability domain for each eligible drafter.
 - **R10.13 (State-driven):** WHILE DSpark is active, cumulative-probability drafting shall preserve the existing path without a cumulative stop.
-- **R10.14 (Unwanted behaviour):** IF negative MTP mode lacks a valid calibration artifact matching the active target model, draft model, route, build, and driver, THEN the speculative initializer shall fail before drafting.
+- **R10.14 (Unwanted behaviour):** IF negative MTP mode lacks a valid calibration artifact matching the active target model, draft model, backend devices, route, build, and driver, THEN the speculative initializer shall fail before drafting.
 
 ## Approach
 
@@ -55,12 +55,17 @@ stop. P100 threshold values are not defaults for the A770.
 2. Have `verify-spec-pcum.py --phase calibrate --ramp-output <path>` write a
    version-1 JSON artifact alongside the human-readable report only after the
    paired measurements qualify. Store `schema_version`, `drafter=draft-mtp`,
-   target/draft model SHA-256 identities, route, build identity, driver identity,
+   target/draft model SHA-256 identities, backend device identities and their
+   target/draft assignments, route, build identity, driver identity,
    and exactly three ordered `(position,threshold)` knots at 0, 4096, and 16384.
    Build identity includes hashes of the server and loaded backend libraries;
-   driver identity includes kernel driver and compute-runtime versions. The
-   common speculative initializer reads `LLAMA_SPEC_P_CUM_RAMP` once, with a
-   64 KiB input limit, only for negative non-chained MTP mode. Require version 1,
+   driver identity includes kernel driver and compute-runtime versions. GPU
+   identity includes vendor/device ID, architecture, VRAM capacity, and device
+   UUID from the active backend. Match the complete assigned device set, not
+   just the default GPU name; missing identity or a different GPU/topology fails
+   initialization. Calibration records the devices that actually executed it.
+   The common speculative initializer reads `LLAMA_SPEC_P_CUM_RAMP` once, with
+   a 64 KiB input limit, only for negative non-chained MTP mode. Require version 1,
    all fields, exact identity matches, and finite thresholds in `[0,1]`; missing,
    unreadable, oversized, malformed, or mismatched artifacts fail initialization.
    Keep the validated knots immutable for the run and record the artifact hash
@@ -127,8 +132,9 @@ adaptive caps, complete numeric parsing, and every included/excluded drafter.
 Add artifact-loader fixtures for the three knots, interpolation and endpoint
 clamping, missing path/file, malformed/oversized data, unsupported schema,
 missing/duplicate/out-of-order positions, non-finite/out-of-range thresholds,
-and each identity mismatch. Unset, constant, and excluded modes must perform no
-artifact I/O. Replacing the artifact after initialization must not change the
+and each identity mismatch, including another GPU with the same driver and a
+changed target/draft device assignment. Unset, constant, and excluded modes must
+perform no artifact I/O. Replacing the artifact after initialization must not change the
 in-memory knots or recorded hash.
 DFlash2 fixtures vary selector scores with `p_min` on/off; DSpark fixtures
 prove both confidence-head and sampler-probability changes leave P10 disabled.
@@ -165,7 +171,7 @@ Expected evidence:
 - DFlash/DFlash2 report unchanged block decode separately from target-row savings;
 - negative mode consumes the recorded artifact only for matching MTP, fails on
   missing/invalid/mismatched artifacts, and is disabled on EAGLE3/DFlash;
-- calibration and validation record identical binary/model/route/driver
+- calibration and validation record identical binary/model/device/route/driver
   identities, and every negative-mode cycle carries the validated artifact hash;
 - DSpark, chained MTP, draft-simple, and P09 remain unchanged;
 - the post-run two-driver fault gate passes and the service is restarted.
@@ -181,6 +187,7 @@ Expected evidence:
 - The negative ramp is MTP-only until another eligible drafter/model/route
   receives its own probability dataset and real A770 A/B.
 - If no MTP ramp improves the objective, leave P10 disabled and record it.
-- A changed binary, backend library, model, route, or driver invalidates the
-  artifact and requires calibration plus validation again; there is no built-in
+- A changed binary, backend library, model, backend device/assignment, route, or
+  driver invalidates the artifact and requires calibration plus validation again;
+  there is no built-in
   ramp or silent fallback for negative MTP mode.
