@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Checks for archive inventory coverage and byte-identity semantics."""
 
+import csv
 import hashlib
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -40,6 +42,42 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertTrue(all(row["kind"] == "symlink" and not row["sha256"] for row in rows))
             self.assertEqual(rows[1]["link_target"], "/does/not/exist")
+
+
+REPO = Path(__file__).resolve().parent.parent
+LFS_POINTER = "version https://git-lfs.github.com/spec/v1"
+
+
+def git(*args: str, stdin: str = "") -> list[str]:
+    done = subprocess.run(["git", "-C", str(REPO), *args], input=stdin, capture_output=True,
+                          text=True, check=True)
+    return done.stdout.splitlines()
+
+
+class CommittedArchiveTests(unittest.TestCase):
+    """The committed inventory and LFS pointers must be reproducible from a clone."""
+
+    def setUp(self) -> None:
+        try:
+            self.tracked = set(git("ls-files", "docs/benchmarks"))
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("not a git checkout")
+        if not self.tracked:
+            self.skipTest("benchmark archive is not tracked")
+
+    def test_every_inventory_path_is_tracked(self) -> None:
+        with (REPO / "docs/benchmarks/FILES.tsv").open(newline="") as stream:
+            paths = [row["path"] for row in csv.DictReader(stream, delimiter="\t")]
+        missing = [p for p in paths if f"docs/benchmarks/{p}" not in self.tracked]
+        self.assertEqual(missing[:5], [], f"{len(missing)} FILES.tsv paths are not in the Git tree")
+
+    def test_every_lfs_pointer_has_the_lfs_attribute(self) -> None:
+        pointers = [line.split(":", 2)[1] for line in git(
+            "grep", "-l", "-e", f"^{LFS_POINTER}$", "HEAD", "--", ".", ":!*.md")]
+        self.assertTrue(pointers)
+        attrs = git("check-attr", "filter", "--stdin", stdin="\n".join(pointers) + "\n")
+        bad = [line for line in attrs if not line.endswith(": lfs")]
+        self.assertEqual(bad[:5], [], f"{len(bad)} LFS pointers lack filter=lfs in .gitattributes")
 
 
 if __name__ == "__main__":

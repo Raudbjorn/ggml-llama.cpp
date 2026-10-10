@@ -25,7 +25,7 @@ host conditions; they do not establish the behavior of today's checkout.
 | Compare speculative decoding on actual text | [HTTP harness](../../scripts/perf/bench_spec.py), [method/example](../research/speculative/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md) | Fixed [prompt fixture](../../scripts/perf/prompts.jsonl), `MODE=ab` for two builds | Compatible `llama-server`, model, available port, device and readable kernel logs. Ordinary `llama-bench` does not exercise server drafting. |
 | Measure cold startup or MMVQ geometry | [Harness registry](../../scripts/README.md) | [Cold JIT](../../scripts/bench-sycl-cold-jit.py), [geometry sweep](../../scripts/sweep-a770-mmvq-geometry.py) | Cold JIT disables the persistent cache; the geometry sweep also builds variants and requires matching correctness evidence. |
 | Establish correctness or quality | [Testing map](../GUIDE.md), [quality guide](../turboquant/quality-benchmarks.md) | [SYCL oracle](../../tests/test-sycl-turbo-correctness.cpp), [quality gate](../../scripts/turbo-quality-gate.sh), [perplexity tool](../../tools/perplexity/README.md) | Synthetic op correctness, corpus perplexity and application output are different checks. Throughput alone establishes none of them. |
-| Find a log, trace or missing dependency | [FILES.tsv](FILES.tsv), then the relevant campaign guide | Filter `path`, compare `sha256`, inspect `link_target` | Read-only. All paths in the TSV are relative to this directory, including ignored and hidden files. |
+| Find a log, trace or missing dependency | [FILES.tsv](FILES.tsv), then the relevant campaign guide | Filter `path`, compare `sha256`, inspect `link_target` | Read-only. All paths in the TSV are relative to this directory and exist in the Git tree. |
 
 There is no universal campaign duration: model load, cold compilation, context
 depth, repetition count and timeouts dominate it. Read the selected runner's
@@ -38,19 +38,26 @@ Snapshot: 2026-10-08, checkout `strata` at
 `d2f1f98348269a35e203c0dd01f3e588afa33d04`. The archive was **untracked** at
 curation time, so that Git revision identifies the surrounding source, not
 the origin or contents of these artifacts. [FILES.tsv](FILES.tsv) identifies
-the individual bytes. The four new root guide/index files are excluded from
-the inventory to avoid indexing the index itself.
+the individual bytes. The root guide/index files (`README.md`, `CAMPAIGNS.md`,
+`MATRIX-GUIDE.md`, `AGENTS.md`) and the inventories themselves are excluded to
+avoid indexing the index itself.
+
+[FILES-unarchived.tsv](FILES-unarchived.tsv) keeps the size and SHA-256 of 432
+artifacts (390 files, 42 symlinks) that existed when the archive was curated but
+are not in Git: Git-ignored runner `*.log` files (330), `*.so` entries (94: 42
+symlinks and 52 ignored library files), `*.pyc` and `*.bin` files. They are recorded only so a reader can tell that evidence once existed;
+the bytes are not available, and the guides mark links to them "(not archived)".
 
 | Inventory property | Observed value |
 | --- | ---: |
-| Archived entries | 9,121 |
-| Regular files | 9,037 |
-| Symlinks, recorded without following targets | 84 |
-| Sum of regular-file lengths | 5,852,066,133 bytes |
-| Distinct regular-file SHA-256 values | 3,543 |
-| Regular files repeating an earlier digest | 5,494 |
-| Zero-byte regular files | 502 |
-| Entries in the primary `matrix-1006/` | 3,394 |
+| Archived entries | 8,689 |
+| Regular files | 8,647 |
+| Symlinks, recorded without following targets | 42 |
+| Sum of regular-file lengths | 5,785,324,341 bytes |
+| Distinct regular-file SHA-256 values | 3,359 |
+| Regular files repeating an earlier digest | 5,288 |
+| Zero-byte regular files | 498 |
+| Entries in the primary `matrix-1006/` | 3,276 |
 
 Lengths are logical file sizes, not filesystem space usage. Symlink targets
 are not counted as additional library contents. Equal hashes include repeated
@@ -206,6 +213,8 @@ Run from the repository root:
 
 ```bash
 python3 -m unittest discover -s scripts -p test_index_benchmarks.py
+# The script walks the checkout, including ignored files. Run it on a clean
+# checkout, or drop rows for paths that `git ls-files` does not list.
 inventory_tmp=$(mktemp)
 if python3 scripts/index_benchmarks.py docs/benchmarks > "$inventory_tmp"; then
   mv "$inventory_tmp" docs/benchmarks/FILES.tsv
@@ -216,6 +225,17 @@ fi
 ```
 
 The temporary output prevents a failed scan from replacing the old index.
+`FILES.tsv` rows for regular files end in an empty `link_target` field, so the
+file ends lines with a tab; the root pre-commit config excludes
+`docs/benchmarks/FILES*.tsv` from `trailing-whitespace` for that reason.
+The unit tests also check that every `FILES.tsv` path is tracked and that every
+committed Git LFS pointer has `filter=lfs` in `.gitattributes`.
+
+Raw artifacts over the 500 KiB `check-added-large-files` limit are stored with
+Git LFS only when a path rule in `.gitattributes` names them (the `libggml*.so`
+snapshots, `perf.data`, the largest `bench.stdout` files). 167 other archived
+files exceed the limit as ordinary blobs (largest about 10 MB) and are
+intentionally exempt; add an LFS rule for anything larger.
 The script checks each regular file for size, modification-time and inode
 changes during its read; it does not create a filesystem-wide snapshot.
 Run it while artifacts are not being written. `bytes` for a symlink is its
