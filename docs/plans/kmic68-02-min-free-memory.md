@@ -42,7 +42,8 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    but return provider provenance and exact/fallback/failure status to P02. In the
    SYCL provider, propagate success from Level Zero or
    `ext_intel_free_memory`; identify the line 145-150 total-as-free path as
-   fallback, never exact telemetry.
+   fallback, never exact telemetry. Use existing backend procedure lookup for
+   the status provider; preserve backend vtable layouts and the old void API.
 2. Add a small `server_memory_sampler` owned by `llama_server` in
    `tools/server/server.cpp`, not by `server_context_impl`. For non-router
    servers, resolve the configured SYCL device and start after

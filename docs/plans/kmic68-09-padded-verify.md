@@ -50,8 +50,9 @@ drafting is intentionally excluded.
    `n_ubatch`, and combined `n_batch`, or the entire target batch is unpadded.
 3. Append per-slot padding rows with an internal
    `LLAMA_BATCH_ROW_PAD_VERIFY` flag. Carry a row-validity sidecar through
-   `common_batch`, optional `llama_batch`, `llama_batch_allocr`, and
-   `llama_ubatch`; null means all rows valid and preserves disabled behavior.
+   `common_batch`, opaque/internal batch metadata, `llama_batch_allocr`, and
+   `llama_ubatch`; absent metadata means all rows valid. Use additive staging
+   entry points where needed; preserve the public by-value `llama_batch` layout.
 4. Keep graph output topology fixed. For every padded verification segment,
    allocate output capacity for all fixed rows and provide a same-shape dynamic
    `verify_output_valid` input. Real rows map to normal output positions;
@@ -113,10 +114,13 @@ On A770, stop the service, verify sole tenancy, name the driver/build/model, and
 run identical MTP requests with padding off, automatic, width 8, and oversized:
 
 ```bash
-timeout 1800 python3 scripts/perf/verify-padded-verify.py --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --seed 123 --repeats 2 --modes off,auto,width:8,oversize --spec-args='--spec-type draft-mtp --spec-draft-n-max 7' --report /tmp/p09-padded-verify.json
+timeout 1800 python3 scripts/perf/verify-padded-verify.py --server ./build-sycl/bin/llama-server --model /mnt/mrgr/models/Qwen3-1.7B-Q8_0.gguf --draft-model /mnt/mrgr/models/Qwen3-1.7B-Q8_0.gguf --prompts scripts/perf/prompts.jsonl --seed 123 --repeats 2 --modes off,auto,width:8,oversize --spec-args='--spec-type draft-simple --spec-draft-n-max 7' --report /tmp/p09-padded-verify.json
 ```
 
 Expected evidence:
+
+- the positive fixture executes padded rows and tagged verification steps;
+  exact Qwen4Exp is a separate recurrent-target fallback fixture;
 
 - off, auto, and width-8 modes emit identical target tokens and accepted/drafted
   totals;

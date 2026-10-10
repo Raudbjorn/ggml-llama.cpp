@@ -45,6 +45,10 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 
 ## Approach
 
+Audit `common_sampler_sample_and_accept_n_rejection` and all callers first.
+Reuse compatible shared arithmetic; the existing function does not establish
+the transactional preflight, proposal identity, or RNG guarantees below.
+
 1. Parse both environment variables once during speculative initialization.
    Unset top-p becomes 1.0; malformed, non-finite, negative temperature, or top-p
    outside `(0,1]` is a startup error.

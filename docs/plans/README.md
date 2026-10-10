@@ -103,3 +103,24 @@ independently executable document once its named dependencies are complete.
 - Every recorded A770 result names the kernel driver, complete command, build,
   model, repetition count, and observed output. A plan may not copy a P100
   threshold as an A770 default.
+
+## Parallel implementation contract
+
+Start from `2f623c6607c078d1069dac23e9d8af9cb146e771` on
+`codex/kmic68-integration`, with at most three agents in exclusively owned
+worktrees. The coordinator integrates logical changes serially. All dependency
+and acceptance gates remain mandatory; blocked/rejected work is recorded.
+
+- P04 owns proposal identity. P06 attaches single-use distributions. P10 trims
+  finalized tokens/distributions together, preserving attempted diagnostics.
+  P06 sampled tokens remain distinct from P10 top-1 confidence.
+- Integrate P09 before P12. Padded microbatches use materialized masks.
+- Preserve stable public batch/context and backend-vtable layouts, using
+  internal/opaque state and additive experimental entry points.
+- Complete or record P11's outcome before integrating P12 VEC changes; blocked
+  P03/P11 work is not a hard P12 dependency.
+- Calibrate P10 against final binaries and matching sampling/acceptance settings.
+- Serialize GPU runs with the shared lock. Restore initial service state;
+  initially inactive services remain inactive.
+- Exact Qwen4Exp weights remain required for real MTP campaigns. Other
+  architectures and synthetic tests do not replace that evidence.
