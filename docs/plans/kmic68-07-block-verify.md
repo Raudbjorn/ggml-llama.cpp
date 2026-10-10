@@ -92,7 +92,11 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    after successful emission. These fields exclude the always-emitted
    correction/bonus token `y`.
 9. Inherit every P06 fallback for the whole block and keep unset/default mode 0.
-   A future default change requires non-negative diagnostics and P06 parity.
+   A 256-proposal record is descriptive and cannot authorize a default change.
+   Any future default proposal needs P06 parity and repeated fixed-corpus runs
+   with independent predeclared seeds and a confidence bound over run-level gain,
+   as well as A770 throughput evidence. Conditional expectations remove the
+   acceptance-draw noise for a given proposal, not variation in sampled proposals.
 
 ## Critical files & anchors
 
@@ -156,9 +160,11 @@ Expected evidence:
   `blocks=256` record; sampler replacement starts a fresh bucket even on the
   same slot with the same seed, and separate acceptors never combine counters;
 - mode 1 and mode 2 make identical decisions, but only mode 2 emits diagnostics;
-- `expected_gain_draft_tokens` is non-negative before a future default change
-  is considered, its P07/P06 operands exclude the always-emitted correction or
-  bonus token, and `drafted_tokens_total` is the matching denominator;
+- `expected_gain_draft_tokens` is reported with its sampled proposal identity
+  regardless of sign; its P07/P06 operands exclude correction/bonus tokens and
+  `drafted_tokens_total` is the matching denominator. Exact enumeration over a
+  tiny proposal distribution checks the unconditional expectation separately;
+  no single 256-proposal sign is a default-eligibility gate;
 - actual accepted/drafted counts and the post-run two-driver fault gate are
   recorded.
 
@@ -171,7 +177,8 @@ Run the exact README regression floor before and after the feature.
 - Mode 2 changes diagnostics only and consumes no additional RNG draws.
 - Diagnostic state survives reset of the same acceptor and sequence, not sampler
   replacement; it never mixes slots, sequences, or sampler generations.
-- The expected-gain record is a noiseless eligibility gate, not a throughput
-  claim; a future default change also needs an A770 throughput A/B.
+- Expected gain is exact conditional on the recorded proposals, whose selection
+  remains stochastic. These diagnostic records are neither an unconditional
+  expectation nor a confidence bound; P07 makes no default or throughput claim.
 - P07 never reconstructs missing P06 distributions or handles state dependent
   on a previously accepted token.
