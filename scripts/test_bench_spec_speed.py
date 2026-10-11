@@ -14,6 +14,7 @@ SPEC = importlib.util.spec_from_file_location("speed", Path(__file__).parent / "
 SPEED = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SPEED)
 BENCH = SPEED.bench
+SAMPLING_QUALIFICATION = {"suppressed_token_ids": [], "unreported_settings": {}}
 
 
 def response(payload, speculative=False):
@@ -39,10 +40,45 @@ def records():
 
 
 class StochasticTests(unittest.TestCase):
+    def test_real_response_masks_and_unserialized_reasoning_require_qualification(self):
+        payload = BENCH.stochastic_payload([1] * 512, 3)
+        resp = response(payload)
+        settings = resp["generation_settings"]
+        del settings["reasoning_budget_tokens"], settings["reasoning_control"]
+        # Actual Qwen3 responses duplicate these EOG masks from CLI and request settings.
+        ids = [128247, 151643, 151645, 151662, 151663, 151664]
+        settings["logit_bias"] = [{"token": token, "bias": None} for token in ids] * 2
+        qualified = {"suppressed_token_ids": ids,
+                     "unreported_settings": {"reasoning_budget_tokens": -1, "reasoning_control": False}}
+        self.assertTrue(BENCH.analyze_stochastic_response(resp, payload, False, qualified)["fixed_work_valid"])
+        for masks in ([], settings["logit_bias"] + [{"token": 123, "bias": None}],
+                      settings["logit_bias"] + [{"token": ids[0], "bias": 0}],
+                      [{"token": True, "bias": None}], [{"token": ids[0]}]):
+            broken = copy.deepcopy(resp)
+            broken["generation_settings"]["logit_bias"] = masks
+            with self.subTest(masks=masks), self.assertRaisesRegex(ValueError, "logit_bias"):
+                BENCH.analyze_stochastic_response(broken, payload, False, qualified)
+        for missing in ("reasoning_budget_tokens", "reasoning_control"):
+            broken = copy.deepcopy(qualified)
+            del broken["unreported_settings"][missing]
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, missing):
+                BENCH.analyze_stochastic_response(resp, payload, False, broken)
+        for key, value in (("reasoning_budget_tokens", 0), ("reasoning_control", True)):
+            broken = copy.deepcopy(resp)
+            broken["generation_settings"][key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                BENCH.analyze_stochastic_response(broken, payload, False, qualified)
+        for broken in ({**qualified, "suppressed_token_ids": ids + ids},
+                       {**qualified, "suppressed_token_ids": [True]},
+                       {**qualified, "unreported_settings": {"grammar": ""}},
+                       {**qualified, "unreported_settings": {"reasoning_control": 0}}):
+            with self.assertRaisesRegex(ValueError, "sampling qualification"):
+                BENCH.analyze_stochastic_response(resp, payload, False, broken)
+
     def test_non_argmax_sample_is_valid_only_in_explicit_stochastic_path(self):
         payload = BENCH.stochastic_payload([1] * 512, 3)
         resp = response(payload, True)
-        result = BENCH.analyze_stochastic_response(resp, payload, True)
+        result = BENCH.analyze_stochastic_response(resp, payload, True, SAMPLING_QUALIFICATION)
         self.assertTrue(result["fixed_work_valid"])
         self.assertFalse(result["distribution_equality_proven"])
         resp["completion_probabilities"] = [{"id": token, "logprob": -.5,
@@ -63,13 +99,13 @@ class StochasticTests(unittest.TestCase):
             resp = response(payload, True)
             resp[parent][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
-                BENCH.analyze_stochastic_response(resp, payload, True)
+                BENCH.analyze_stochastic_response(resp, payload, True, SAMPLING_QUALIFICATION)
         for key, value in (("tokens", [True] * 512), ("stop_type", "eos"), ("truncated", True),
                            ("tokens_predicted", True), ("tokens", [1] * 511)):
             resp = response(payload)
             resp[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
-                BENCH.analyze_stochastic_response(resp, payload, False)
+                BENCH.analyze_stochastic_response(resp, payload, False, SAMPLING_QUALIFICATION)
 
     def test_payload_and_fixture_are_exact(self):
         for count in (0, 511, 513, 4095):
@@ -162,7 +198,8 @@ class StochasticTests(unittest.TestCase):
                 return {"path": str(path), "sha256": SPEED.digest(path)}
             for model in SPEED.MODELS:
                 cells = [{"id": cell, "tokens": [1] * int(cell.rsplit("-", 1)[1])} for cell in SPEED.CELLS]
-                fixtures[model] = {"fixtures": store(model + "-fixture.json", {"model": model, "round": "initial", "cells": cells})}
+                fixtures[model] = {"fixtures": store(model + "-fixture.json", {"model": model, "round": "initial", "cells": cells}),
+                                   "sampling_qualification": {**SAMPLING_QUALIFICATION, "report": store(model + "-sampling.json", {"scope": "unit fixture"})}}
             manifest = store("manifest.json", {"round": "initial", "models": fixtures})
             for model in SPEED.MODELS:
                 launches = []
@@ -251,6 +288,7 @@ class StochasticTests(unittest.TestCase):
                                  "cells": [{"id": c, "tokens": [1] * int(c.rsplit("-", 1)[1])} for c in SPEED.CELLS]})
                 build = {"server": artifact, "artifacts": [artifact], "source_commit": "candidate", "placement_args": []}
                 configs[model] = {"context": 8192, "threads": 12, "model_files": [artifact], "fixtures": fixtures,
+                                  "sampling_qualification": {**SAMPLING_QUALIFICATION, "report": artifact},
                                   "draft_model": artifact["path"], "arms": {"A": {**build, "source_commit": "2f623c6607c078d1069dac23e9d8af9cb146e771"},
                                   "B": build, "C": build}}
             platform = {"kernel": SPEED.os.uname().release, "driver": "xe", "runtime_files": [artifact]}

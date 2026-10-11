@@ -188,6 +188,7 @@ def validate_manifest(manifest: dict, model: str) -> tuple[dict, list[dict]]:
         file_identity(item)
     require(config["context"] == protocol["context"] and config["threads"] == protocol["threads"], "context/thread setting differs from protocol")
     require(qualification["models"][model] == config, "qualification does not cover model/build/placement/fixtures")
+    file_identity(config["sampling_qualification"]["report"])
     require(config["arms"]["A"]["placement_args"] == config["arms"]["B"]["placement_args"],
             "placement arguments differ across arms")
     require(config["model_files"], "missing model files")
@@ -324,7 +325,7 @@ def run_launch(manifest: dict, model: str, config: dict, prompts: list[dict], bl
                         "elapsed_s": elapsed, "payload": payload, "response": response}
                 state["responses"].append(item)
                 write_json(output, state)
-                item.update(bench.analyze_stochastic_response(response, payload, speculative))
+                item.update(bench.analyze_stochastic_response(response, payload, speculative, config["sampling_qualification"]))
                 distribution.owned_tenancy(bench, proc, state["tenancy"])
                 write_json(output, state)
         state["maps_after"] = capture_maps(proc, images)
@@ -379,6 +380,8 @@ def main() -> int:
             require(summary["manifest_sha256"] == summary["manifest"]["sha256"], "manifest hash mismatch")
             require(summary["round"] == frozen["round"], "round mismatch")
             fixture = json.loads(file_identity(frozen["models"][summary["model"]]["fixtures"]).read_text())
+            sampling_qualification = frozen["models"][summary["model"]]["sampling_qualification"]
+            file_identity(sampling_qualification["report"])
             require(fixture["model"] == summary["model"] and fixture["round"] == summary["round"], "fixture model/round mismatch")
             require([p["id"] for p in fixture["cells"]] == list(CELLS), "fixture cells differ from frozen suite")
             tokens_by_cell = {p["id"]: p["tokens"] for p in fixture["cells"]}
@@ -397,7 +400,8 @@ def main() -> int:
                             row["arm"] == launch["arm"], "response identity mismatch")
                     require(row["payload"]["seed"] == request_seed(summary["round"], row["block"], CELLS.index(row["cell"]), row["warmup"]), "request seed mismatch")
                     require(row["payload"]["prompt"] == tokens_by_cell[row["cell"]], "request prompt differs from frozen fixture")
-                    bench.analyze_stochastic_response(row["response"], row["payload"], row["model"] == "qwen4exp")
+                    bench.analyze_stochastic_response(row["response"], row["payload"], row["model"] == "qwen4exp",
+                                                     sampling_qualification)
                     if not row["warmup"]:
                         records.append(row)
         require(len(manifests) == 1 and models == set(MODELS), "mixed manifests/incomplete suite")

@@ -338,7 +338,7 @@ def stochastic_payload(tokens: list[int], seed: int) -> dict[str, Any]:
 
 
 def analyze_stochastic_response(resp: dict[str, Any], payload: dict[str, Any],
-                                speculative: bool) -> dict[str, Any]:
+                                speculative: bool, sampling_qualification: dict[str, Any]) -> dict[str, Any]:
     """Validate fixed work/settings, not equality in law; qualification is an external gate."""
     if payload != stochastic_payload(payload["prompt"], payload["seed"]):
         raise ValueError("noncanonical stochastic payload")
@@ -351,11 +351,27 @@ def analyze_stochastic_response(resp: dict[str, Any], payload: dict[str, Any],
             resp.get("stop_type") != "limit"):
         raise ValueError("stochastic request did not finish at the fixed token limit")
     settings = resp.get("generation_settings", {})
+    suppressed = sampling_qualification.get("suppressed_token_ids")
+    unreported = sampling_qualification.get("unreported_settings")
+    if (not isinstance(suppressed, list) or any(type(t) is not int or t < 0 for t in suppressed) or
+            len(set(suppressed)) != len(suppressed) or not isinstance(unreported, dict) or
+            set(unreported) - {"reasoning_budget_tokens", "reasoning_control"} or
+            any(type(value) is not type(payload[key]) or value != payload[key]
+                for key, value in unreported.items())):
+        raise ValueError("invalid stochastic sampling qualification")
+    biases = settings.get("logit_bias")
+    # Server JSON represents qualified negative-infinity masks as null; equivalent duplicates are harmless.
+    if (not isinstance(biases, list) or
+            any(not isinstance(row, dict) or set(row) != {"token", "bias"} or
+                type(row["token"]) is not int or row["token"] < 0 or row["bias"] is not None for row in biases) or
+            {row["token"] for row in biases} != set(suppressed)):
+        raise ValueError("effective stochastic logit_bias mismatch")
     for key in ("seed", "temperature", "samplers", "top_k", "top_p", "min_p", "dynatemp_range",
                 "repeat_penalty", "presence_penalty", "frequency_penalty", "dry_multiplier", "mirostat",
-                "grammar", "logit_bias", "backend_sampling", "reasoning_budget_tokens", "reasoning_control",
+                "grammar", "backend_sampling", "reasoning_budget_tokens", "reasoning_control",
                 "n_predict", "stream", "ignore_eos"):
-        expected, actual = payload[key], settings.get(key)
+        # Only source/route-qualified, nonserialized reasoning fields may use external evidence.
+        expected, actual = payload[key], settings[key] if key in settings else unreported.get(key)
         if type(expected) is float:
             valid = type(actual) in (float, int) and math.isfinite(actual) and abs(actual - expected) <= 1e-6
         else:
