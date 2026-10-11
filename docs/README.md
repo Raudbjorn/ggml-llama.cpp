@@ -7,6 +7,7 @@ the fork's own; [development/upstream-merge.md](development/upstream-merge.md) l
 
 - [GUIDE.md](GUIDE.md) - condensed repository field guide, task routes, source map and evidence boundaries
 - [benchmarks/README.md](benchmarks/README.md) - separate inventory and guide to the local benchmark campaign collection
+- [history/README.md](history/README.md) - fork history, benchmark/functionality progression, Hindsight evidence, dead ends, integration mistakes, and the pinned upstream comparison
 
 ## build/ - building and installing
 

@@ -1,0 +1,14 @@
+Review validation 2026-10-11; pinned fork 2f623c660, upstream 5c8854fd8
+PASS deterministic regeneration: 10 generated files byte-identical
+PASS Python syntax and generator built-in coverage/diff consistency assertions
+PASS relative links: 113, including referenced Markdown anchors
+PASS linked commit identities: 652 unique hash strings resolve
+PASS ASCII and trailing whitespace: 21 files, including untracked contents
+PASS commit populations: 3528 total = 2393 shared-upstream + 1135 fork-only; 1135 = 516 first-parent + 619 side ancestry
+PASS current delta: 11629 unique paths; A=9968 M=517 D=1144; +1753795/-531880 text lines
+PASS git diff --check
+PASS bash scripts/check-upstream-sync-invariants.sh: upstream-sync invariant gate: passed
+PASS three exact candidate/revert affected-file tree comparisons
+PASS stale snapshot repair and ancestry-only repair trees equal e519a4833
+NOT RUN: builds, model/GPU runs, benchmarks, live server/browser, historical test suites, ACC or old-GGUF execution
+NO CLAIM: complete semantic certification, numerical parity, current performance gain, or remote exploitability

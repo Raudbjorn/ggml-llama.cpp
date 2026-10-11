@@ -1,0 +1,25 @@
+Performance/functionality extension review, 2026-10-11
+Pinned fork: 2f623c6607c078d1069dac23e9d8af9cb146e771
+Branch: docs/fork-history-2026-10-11
+PASS: 32 unique preserved Hindsight IDs; each has document/chunk IDs, timestamp and query membership
+PASS: five parent-session recall result counts 58/59/54/41/48; 260 occurrences, 228 distinct IDs
+PASS: all 16 primary root-level grf*/product.json files inspected; 10 all_cells_valid=true, 6 false
+PASS: rejected GRF products have invalid_cell_count=0 but global binary/repository mismatch diagnostics
+PASS: 40 unique ordered register IDs: D01-D28, H01-H12
+PASS: early chapter ASCII/link/commit checks and independent August occupancy/turbo4 arithmetic review reported by chapter author
+PASS: late-phase independent consistency review; memory-only dense driver comparison and MKL shape qualification corrected
+PASS: git diff --check before final extension validation
+SCOPE: historical report/raw-artifact review; selected measurements, not every archived row reaggregated
+SCOPE: Hindsight excerpts are secondary testimony; no memory mutation or source-transcript replay
+NOT RUN: builds, CPU/GPU correctness tests, model inference, benchmarks, services, archived executables
+NO CLAIM: cumulative speedup, current production settings/performance, or repair of historical implementation defects
+PASS: final ASCII/trailing-whitespace scan: 27 history files
+PASS: final relative links 212, Markdown anchors 5, unique commit/blob revision strings 675
+PASS: every preserved Hindsight record is cited in the crosswalk
+PASS: final git diff --check
+
+Publication validation, 2026-10-11 (methodology chapter added)
+PASS: 10 generated files byte-identical after fresh regeneration; generator assertions and Python syntax passed
+PASS: ASCII/trailing whitespace: 28 history files plus docs/README.md
+PASS: 224 relative links, 5 Markdown anchors, 675 linked revision strings
+PASS: 32 unique Hindsight records cited and 40 consolidated register entries
