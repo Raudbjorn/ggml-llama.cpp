@@ -10,6 +10,7 @@
 #include <utility>
 
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__) && \
+    !defined(_GLIBCXX_DEBUG) && \
     ((!defined(__clang__) && defined(__GNUC__)) || defined(__INTEL_LLVM_COMPILER))
 #include <dlfcn.h>
 
@@ -30,6 +31,7 @@ static void require(bool ok, const char * message) {
 
 static void exported_ngram_vector_destructors() {
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBCXX__) && \
+    !defined(_GLIBCXX_DEBUG) && \
     ((!defined(__clang__) && defined(__GNUC__)) || defined(__INTEL_LLVM_COMPILER))
     const struct { const char * symbol; void (*destroy)(void *); } destructors[] = {
 #if !defined(__INTEL_LLVM_COMPILER)
