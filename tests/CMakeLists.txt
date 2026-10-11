@@ -399,6 +399,7 @@ endif()
 if (NOT LLAMA_USE_SYSTEM_GGML)
     llama_build(test-moe-cache.cpp)
     llama_test(test-moe-cache LABEL "main;backend")
+    llama_test(test-moe-cache NAME test-moe-cache-invalidation ARGS --invalidation-only LABEL "main;backend")
     # The test exits 77 when no supported cache provider is present. ctest only treats that
     # as a skip when SKIP_RETURN_CODE says so; without it, every CPU-only
     # runner records the skip as a failure.
@@ -484,6 +485,7 @@ if (NOT LLAMA_USE_SYSTEM_GGML)
     llama_build_and_test(test-gguf.cpp)
     # Needs non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-alloc.cpp)
+    llama_build_and_test(test-backend-buffer.cpp)
 endif()
 
 llama_build(test-export-graph-ops.cpp)

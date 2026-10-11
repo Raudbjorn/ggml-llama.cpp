@@ -1,5 +1,6 @@
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "../ggml/src/ggml-backend-moe-cache.h"
 
@@ -226,16 +227,40 @@ static bool run_invalidation_hook_coverage(ggml_backend_t cpu) {
     ggml_backend_buffer_clear(buffer, 0);
     check("buffer clear", {{buffer_base, buffer_size}});
 
+    const size_t alias_size = ggml_backend_buffer_get_alignment(buffer);
+    ggml_backend_buffer_t alias = ggml_backend_buffer_view(buffer, 0, alias_size);
+    ggml_backend_buffer_t sibling = ggml_backend_buffer_view(buffer, 0, alias_size);
+    GGML_ASSERT(alias && sibling);
+    GGML_ASSERT(ggml_backend_buffer_get_usage(alias) == GGML_BACKEND_BUFFER_USAGE_ANY);
+    ggml_tensor * alias_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
+    GGML_ASSERT(ggml_backend_tensor_alloc(alias, alias_tensor, buffer_base) == GGML_STATUS_SUCCESS);
+    ggml_backend_tensor_set(alias_tensor, data.data(), 0, 16);
+    check("non-weight alias of weights tensor set", {{buffer_base, 16}});
+    ggml_backend_buffer_clear(alias, 0);
+    check("non-weight alias of weights clear", {{buffer_base, alias_size}});
+
     ggml_backend_buffer_set_usage(
             buffer, GGML_BACKEND_BUFFER_USAGE_COMPUTE);
     check("weight usage removal", {{buffer_base, buffer_size}});
+    ggml_backend_buffer_set_usage(alias, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    check("alias weight usage", {{buffer_base, alias_size}});
+    ggml_backend_buffer_clear(buffer, 0);
+    check("non-weight parent of weights clear", {{buffer_base, buffer_size}});
+    ggml_backend_buffer_clear(sibling, 0);
+    check("non-weight sibling of weights clear", {{buffer_base, alias_size}});
+    ggml_backend_buffer_free(alias);
+    check("weight alias free", {{buffer_base, alias_size}});
+    ggml_backend_buffer_free(sibling);
+    check("non-weight alias free", {{buffer_base, alias_size}});
 
     ggml_backend_tensor_set(dst, data.data(), 0, 16);
-    check("non-weight tensor set", {});
+    // Non-weight buffers can overlap weight aliases, so usage cannot suppress invalidation.
+    check("non-weight tensor set", {{dst_base, 16}});
 
     ggml_backend_buffer_set_usage(
             buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    check("weight usage restoration", {});
+    // Classification changes notify by address even when the previous usage was non-weight.
+    check("weight usage restoration", {{buffer_base, buffer_size}});
 
     ggml_backend_buffer_reset(buffer);
     check("buffer reset without callback", {});
@@ -249,6 +274,8 @@ static bool run_invalidation_hook_coverage(ggml_backend_t cpu) {
             &reset_context, sizeof(reset_context.data));
     ggml_backend_buffer_set_usage(
             reset_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    // The initial ANY classification may also have weight aliases.
+    check("reset buffer weight usage", {{reset_context.data, sizeof(reset_context.data)}});
     ggml_backend_buffer_reset(reset_buffer);
     check("buffer reset", {
             {reset_context.data, sizeof(reset_context.data)}});
@@ -3046,7 +3073,21 @@ static bool run_optional(
 
 } // namespace
 
-int main() {
+int main(int argc, char ** argv) {
+    if (argc == 2 && strcmp(argv[1], "--invalidation-only") == 0) {
+        ggml_backend_t cpu = ggml_backend_cpu_init();
+        if (!cpu) {
+            fprintf(stderr, "failed to initialize CPU backend\n");
+            return 1;
+        }
+        const bool ok = run_invalidation_hook_coverage(cpu);
+        ggml_backend_free(cpu);
+        return ok ? 0 : 1;
+    }
+    if (argc != 1) {
+        fprintf(stderr, "usage: test-moe-cache [--invalidation-only]\n");
+        return 1;
+    }
     log_capture capture;
     ggml_log_set(log_callback, &capture);
 
