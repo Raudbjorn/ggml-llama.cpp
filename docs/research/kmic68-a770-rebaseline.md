@@ -6,8 +6,9 @@ Campaign start: 2026-10-10. Source baseline:
 Status (2026-10-11): the bounded depth-16384 AOT calibration and the P02
 8%-fill/full-fill memory pair completed with clean run gates. P01 is accepted
 after independent review reproduced the statistics and checked the raw gates,
-source/library manifests, historical records and R01.1-R01.7. P02 remains
-unaccepted pending independent real sleep/wake verification. Historical values have not been replaced.
+source/library manifests, historical records and R01.1-R01.7. P02 is accepted
+after independent lifecycle verification and source/evidence review. Historical
+values have not been replaced.
 This is one depth, one Llama model and one Qwen model, not a complete depth sweep.
 
 ## Long-depth comparison
@@ -237,53 +238,86 @@ remained afterward. Pair data is in `p02-pair.json`; the original fixtures and
 preparation provenance remain unchanged, with observed counts recorded here
 and in the launch summaries.
 
+## Independent P02 lifecycle and compatibility verification
+
+The verification-runner used the same frozen AOT artifacts and local Qwen model.
+Raw evidence, commands, source/binary hashes and requirement outcomes are under
+`/home/svnbjrn/wt/kmic68-evidence/p02-lifecycle-verification/`. Both normal SYCL
+oracles reported zero gate failures and XPASS. Focused sampler tests and seven
+Python telemetry/cancellation tests passed. An unsampled control completed with
+no sampler record, and interval `-50` failed before model allocation.
+
+One actual server process completed a 16352-token prompt and 16 verified decoded
+tokens, slept/unloaded, then woke for an 11-token prompt and 16 verified decoded
+tokens, and slept again. PID and process start time were unchanged. A separate
+observation library forwarded the real memory query unchanged and recorded all
+1136 exact SYCL responses. Exactly one valid terminal record matched their
+count, minimum 13714350080 bytes, and final 16975257600 bytes, with zero query
+failures. Both sleep transitions freed model memory. All fault gates were clean
+and no owned process or render-node holder remained.
+
+The original scratch driver additionally required the first epoch's minimum to
+be lower than every later sample. That extra assertion failed: first minimum
+14008356864 bytes exceeded the later minimum 13714350080 bytes. Its wrapper
+exit 1 and traceback are retained, not relabeled as a passing wrapper. The
+server exited zero; separate validation reproduced the required aggregate from
+the unchanged query log. This hardware run cannot independently distinguish
+retention from a hypothetical minimum reset at wake. Retention is supported by
+the source's process-owned sampler without an epoch reset and the deterministic
+real-class sequence 100,60,100,80, which emits one minimum/final record 60/80.
+Independent review accepted this combined evidence against R02.1-R02.11; the
+plan does not require the earliest epoch to be the global minimum.
+
+The observation library and concurrent P04 compilation make this lifecycle run
+unsuitable for performance claims. Live exact Level Zero selection was not
+exercised; provider/failure tests and source inspection cover that branch.
+The API/ABI comparison in `kmic68-evidence/apiabi-p02/compare.log` found no
+source compatibility problems or removed/changed symbols, and one additive
+`ggml_backend_dev_memory_status` symbol. Tools were provisioned locally under
+`kmic68-evidence/apiabi-tools`. Release binaries lack rich debug type information,
+so the binary comparison primarily checks symbols; it is not an exhaustive
+layout proof. The unchanged public by-value structures and backend vtables were
+also reviewed in source.
+
 ## Requirement and gate outcomes
 
-These are this campaign's observations, not independent acceptance decisions.
-Earlier CPU tests, source review and the API/ABI comparison were supplied as
-prerequisites by the coordinator; they were not rerun or independently certified
-by this measurement task.
+The original measurement task produced the pair data. The subsequent independent
+verification and review above completed acceptance; their evidence categories
+remain separate in the table.
 
 | Requirement | Outcome in this bounded campaign |
 | --- | --- |
-| R01.1 | Existing uncommitted AGENTS product/depth examples both use n=512; inspected and preserved. |
+| R01.1 | Integrated AGENTS product/depth examples both use n=512; remaining options preserved. |
 | R01.2 | Both current depth-16384 turbo rows and every raw repetition retain n. |
 | R01.3 | Retained long-depth n=128 records are labeled superseded in token-count contract and not directly comparable. No full multi-depth rerun is claimed. |
 | R01.4 | Ordinary C128/C512 paired delta is null; historical cross-driver deltas are excluded. |
 | R01.5 | Original H1-H3 commands, raw links and numeric values are preserved; incomplete historical turbo ratios remain identified as incomplete. |
 | R01.6 | Ordinary comparison explicitly records token-count-mismatch. |
 | R01.7 | Same-setup calibration completed; both n values and +0.107398% calibration-only delta are recorded. |
-| R02.1 | Both real launch records satisfy sampled minimum <= final. Preservation across genuine sleep/wake epochs is still unverified. |
+| R02.1 | Real pair and lifecycle records satisfy minimum <= final. Source lifetime, deterministic retention and actual query-log agreement support retention with the limitation above. |
 | R02.2 | Exactly one matching completed terminal row observed after each request loop and graceful shutdown. |
 | R02.3 | Actual expected prompt counts and positive verified decode were required and observed. Negative pre-decode-only rejection was not injected here. |
-| R02.4 | Source inspection confirms pre-model start and pre-cleanup finish. Real sleep/wake lifecycle remains pending verification-runner. |
+| R02.4 | Source confirms pre-model start and pre-cleanup finish; actual same-process unload/reload and continuous query observation passed. |
 | R02.5 | One process record per fixture with identity, SYCL0, interval, sample count, minimum/final, exact provider and failure count is preserved. |
-| R02.6 | Both observed launches had zero query failures and successful terminal writes. Failure injection was not rerun. |
-| R02.7 | Unsampled server control was not run in this task; earlier CPU evidence is not a current hardware observation. |
+| R02.6 | Real launches had zero query failures; independent fake-query and write-failure tests passed. |
+| R02.7 | Independent unsampled AOT control completed with no memory record or observation preload. |
 | R02.8 | exact_sycl was observed. Exact Level Zero, fallback and failure outcomes were not hardware-exercised here. |
-| R02.9 | Actual valid records pass the strict parser. Invalid-record injection was not rerun here. |
-| R02.10 | Interval 50 ms was observed in both records. Malformed/overflow interval startup cases were not rerun. |
-| R02.11 | Normal shutdown left no owned process. SIGINT/SIGTERM cancellation and forced-escalation fixtures were not rerun here. |
-
-The real sleep/wake requirement is an explicit remaining gate, not replaced by
-the fake lifecycle unit test. `sleep-wake-handoff.txt` in the evidence directory
-specifies the local model/server, sleep-safe `/props` polling, genuine unload and
-reload observations, same-process identity, one terminal record, and the need
-for evidence that the minimum survives the load epochs. The coordinator must
-dispatch that pass/fail work to verification-runner after transferring the GPU
-lease. The worker used no nested agents and did not run that out-of-domain gate.
+| R02.9 | Actual valid records pass the parser; independent invalid-record and sticky-failure fixtures passed. |
+| R02.10 | Actual interval 50 ms observed; real -50 rejected before allocation. Deterministic malformed/overflow parser cases passed. |
+| R02.11 | Real shutdown left no owned process; independent cancellation, orphan and forced-escalation fixtures passed. |
 
 ## Not claimed
 
 No throughput improvement, cross-driver speed comparison, independent-launch
 performance CI, complete depth sweep, P10 calibration acceptance, or P02 safe
-instantaneous headroom floor is established. P02's real sleep/wake gate,
-independent verification and review remain outstanding. Correctness or quality
+instantaneous headroom floor is established. Hardware-only discrimination of
+earlier-epoch retention remains unproved as described above. Correctness or quality
 of generated model text is not established by the benchmark; the P02 response
 check establishes the requested token/argmax invariants only.
 
-No build, service change, source/header/backend/server edit, commit, push, PR,
-model download, API/ABI rerun, or production deployment occurred in this task.
+The measurement and lifecycle agents made no production source changes, service
+changes, model downloads, pushes, PRs or deployments. The coordinator separately
+built, reviewed and integrated the implementation and compatibility checks.
 The coordinator retains service restoration responsibility. The new state is
 this report and the external raw evidence directory with its bounded launchers;
 no dependency was added. Periodic 50 ms sampling can miss shorter memory peaks.
