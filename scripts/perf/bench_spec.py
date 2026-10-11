@@ -321,6 +321,68 @@ def analyze_native_response(resp: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def stochastic_payload(tokens: list[int], seed: int) -> dict[str, Any]:
+    """Explicit fixed-work experiment; never used by the deterministic benchmark modes."""
+    if len(tokens) not in (512, 4096) or any(type(t) is not int or t < 0 for t in tokens):
+        raise ValueError("stochastic fixture must contain 512 or 4096 token IDs")
+    if type(seed) is not int or not 0 <= seed < 2**32 - 1:
+        raise ValueError("invalid stochastic experiment seed")
+    return {"prompt": tokens, "n_predict": 512, "seed": seed, "temperature": 0.8,
+            "samplers": ["temperature"], "top_k": 0, "top_p": 1.0, "min_p": 0.0,
+            "dynatemp_range": 0.0, "repeat_penalty": 1.0, "presence_penalty": 0.0,
+            "frequency_penalty": 0.0, "dry_multiplier": 0.0, "mirostat": 0,
+            "grammar": "", "logit_bias": [], "backend_sampling": False,
+            "reasoning_budget_tokens": -1, "reasoning_control": False,
+            "cache_prompt": False, "stream": False, "ignore_eos": True,
+            "return_tokens": True, "n_probs": 0}
+
+
+def analyze_stochastic_response(resp: dict[str, Any], payload: dict[str, Any],
+                                speculative: bool) -> dict[str, Any]:
+    """Validate fixed work/settings, not equality in law; qualification is an external gate."""
+    if payload != stochastic_payload(payload["prompt"], payload["seed"]):
+        raise ValueError("noncanonical stochastic payload")
+    tokens = resp.get("tokens")
+    if (not isinstance(tokens, list) or len(tokens) != 512 or
+            any(type(t) is not int or t < 0 for t in tokens)):
+        raise ValueError("stochastic response must contain 512 integer token IDs")
+    if (type(resp.get("tokens_predicted")) is not int or resp["tokens_predicted"] != 512 or
+            resp.get("stop") is not True or resp.get("truncated") is not False or
+            resp.get("stop_type") != "limit"):
+        raise ValueError("stochastic request did not finish at the fixed token limit")
+    settings = resp.get("generation_settings", {})
+    for key in ("seed", "temperature", "samplers", "top_k", "top_p", "min_p", "dynatemp_range",
+                "repeat_penalty", "presence_penalty", "frequency_penalty", "dry_multiplier", "mirostat",
+                "grammar", "logit_bias", "backend_sampling", "reasoning_budget_tokens", "reasoning_control",
+                "n_predict", "stream", "ignore_eos"):
+        expected, actual = payload[key], settings.get(key)
+        if type(expected) is float:
+            valid = type(actual) in (float, int) and math.isfinite(actual) and abs(actual - expected) <= 1e-6
+        else:
+            valid = type(actual) is type(expected) and actual == expected
+        if not valid:
+            raise ValueError(f"effective stochastic {key} mismatch")
+    types = settings.get("speculative.types")
+    if types not in ({"draft-mtp", "none,draft-mtp"} if speculative else {"none", ""}):
+        raise ValueError("effective speculative route mismatch")
+    timings = resp.get("timings", {})
+    if (type(timings.get("prompt_n")) is not int or timings["prompt_n"] != len(payload["prompt"]) or
+            type(timings.get("predicted_n")) is not int or timings["predicted_n"] != 512):
+        raise ValueError("server timing token counts do not match fixed work")
+    for key in ("predicted_per_second", "prompt_per_second"):
+        value = timings.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"invalid stochastic {key}")
+    if speculative:
+        drafted, accepted = timings.get("draft_n"), timings.get("draft_n_accepted")
+        if (type(drafted) is not int or type(accepted) is not int or
+                drafted <= 0 or not 0 <= accepted <= drafted):
+            raise ValueError("missing positive speculative execution evidence")
+    return {"token_sha256": hashlib.sha256(json.dumps(tokens, separators=(",", ":")).encode()).hexdigest(),
+            "fixed_work_valid": True, "distribution_equality_proven": False,
+            "sampling_mode": "stochastic-qualified", "timings": timings}
+
+
 def run_prompt(prompt: dict[str, Any], repeats: int | None = None) -> dict[str, Any]:
     n_predict = int(prompt.get("n_predict", 256))
     messages = prompt.get("messages") or [{"role": "user", "content": prompt.get("prompt", "")}]
