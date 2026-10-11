@@ -40,7 +40,7 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 - **R06.12 (Ubiquitous):** The `common_sampler` clone, copy, and reset operations shall maintain deterministic distribution-acceptance RNG state.
 - **R06.13 (Event-driven):** WHEN all `G` draft tokens are accepted, the distribution acceptor shall append one terminal target token sampled from `p_G`.
 - **R06.14 (State-driven):** WHILE P04 cycle logging and P06 are enabled, the cycle artifact shall serialize the proposal identity, drafted token IDs, and every sparse token/probability pair in `q`.
-- **R06.15 (State-driven):** WHILE a proposal is consumed, invalidated, or replaced by checkpoint replay, speculative acceptance shall use the existing exact-match path.
+- **R06.15 (State-driven):** WHILE a new speculative acceptance attempt references a consumed, invalidated, or checkpoint-replaced proposal, it shall use the existing exact-match path. Cache repair of an already completed distribution decision shall preserve its selected tokens and committed sampler/RNG state without repeating acceptance or reusing proposal distributions.
 - **R06.16 (Event-driven):** WHEN distribution-recording acceptance begins, the acceptor shall prevalidate every proposal distribution and target row before mutating the live sampler or RNG.
 
 ## Approach
@@ -93,8 +93,12 @@ the transactional preflight, proposal identity, or RNG guarantees below.
    ignore-EOG policy retains its existing behavior.
 9. Mark a proposal consumed after one acceptance attempt. When replay replaces
    `slot.spec_draft` with an accepted prefix plus correction, clear/invalidate
-   its distributions even if vector length happens to match. Replayed rounds
-   always use exact-match until a fresh proposal ID and distributions are made.
+   its distributions even if vector length happens to match. A new acceptance
+   attempt uses exact-match until a fresh proposal ID and distributions are made.
+   Cache repair of a completed distribution decision instead materializes its
+   already selected prefix and correction without another draw, preserving the
+   committed sampler/RNG state. Repair-only passes may record actual verification
+   work but do not increment exact-match attempts without actual sampling.
 10. Extend the P04 selected cycle row with versioned `q_records`: proposal ID,
    draft index/token, sparse token/probability pairs, probability sum, and schema
    version. The verifier rejects missing, duplicate, corrupt, or cross-proposal
