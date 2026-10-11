@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "common.h"
+#include "speculative-cycle.h"
 
 struct common_speculative;
 
@@ -98,6 +99,8 @@ struct common_speculative_draft_params {
     // the target's temp and seed, read only when the drafter samples probabilistically
     float    temp = 1.0f;
     uint32_t seed = LLAMA_DEFAULT_SEED;
+
+    int64_t request_id = -1; // server task identity, independent of slot reuse
 };
 
 common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
@@ -120,6 +123,14 @@ void common_speculative_draft(common_speculative * spec);
 
 // informs the speculative context that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
+
+// Immutable MTP snapshot; null when cycle instrumentation is disabled or this sequence has no proposal.
+const common_speculative_cycle_record * common_speculative_cycle_get(const common_speculative * spec, llama_seq_id seq);
+void common_speculative_cycle_finish(common_speculative * spec, llama_seq_id seq, uint64_t proposal, size_t accepted);
+void common_speculative_cycle_cancel(common_speculative * spec, llama_seq_id seq);
+std::shared_ptr<common_speculative_cycle_phase> common_speculative_verify_begin(
+        common_speculative * spec, const std::vector<common_speculative_cycle_participant> & participants);
+void common_speculative_verify_end(common_speculative * spec, const std::shared_ptr<common_speculative_cycle_phase> & phase);
 
 // (optional) get/set internal state
 bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data);

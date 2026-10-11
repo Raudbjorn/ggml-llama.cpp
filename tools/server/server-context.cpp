@@ -439,6 +439,7 @@ struct server_slot {
     common_speculative_checkpoint_place spec_ckpt_place_tgt;
     common_speculative_checkpoint_place spec_ckpt_place_dft;
     bool spec_is_replay = false;
+    uint64_t spec_proposal_id = 0;
     std::mt19937 spec_synth_rng;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
@@ -574,6 +575,7 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         spec_is_replay = false;
+        spec_proposal_id = 0;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -1658,6 +1660,7 @@ private:
             };
 
             slot.callback_on_reset = [this](const server_slot & slot) {
+                common_speculative_cycle_cancel(spec.get(), slot.id);
                 // flush the generated token stats before reset()
                 if (slot.stats.n_gen > 0) {
                     metrics_on_prediction(slot);
@@ -3467,11 +3470,27 @@ private:
         int32_t n_batch = llama_n_batch(ctx_tgt);
         for (int32_t off = 0; off < batch.size(); off = off_next) {
             const int32_t n_tokens = std::min(n_batch, batch.size() - off);
+            std::shared_ptr<common_speculative_cycle_phase> verify_phase;
             try {
                 scoped_timer t(t_decode, n_decode);
                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
 
                 batch.render(off, n_tokens);
+                std::vector<common_speculative_cycle_participant> participants;
+                const bool has_cycle = std::any_of(slots.begin(), slots.end(),
+                        [](const auto & slot) { return slot.spec_proposal_id != 0; });
+                if (has_cycle) {
+                    for (const auto & slot : slots) {
+                        bool in_batch = false;
+                        for (int i = off; i < off + n_tokens; ++i) {
+                            in_batch |= batch.tokens[i].id_slot == slot.id;
+                        }
+                        if (in_batch) {
+                            participants.push_back({slot.spec_proposal_id, slot.id});
+                        }
+                    }
+                }
+                verify_phase = common_speculative_verify_begin(spec.get(), participants);
                 bool ok = decode(n_batch, off);
 #ifdef DEBUG_TIMINGS
                 llama_synchronize(ctx_tgt);
@@ -3485,9 +3504,11 @@ private:
                     n_batch = llama_n_batch(ctx_tgt);
                 } else {
                     // try again with the updated n_batch
+                    common_speculative_verify_end(spec.get(), verify_phase);
                     continue;
                 }
             } catch (const std::exception & e) {
+                common_speculative_verify_end(spec.get(), verify_phase);
                 SRV_ERR("decode() failed: %s\n", e.what());
                 abort_all_slots("decode() failed: " + std::string(e.what()));
                 break; // stop any further processing
@@ -3496,7 +3517,9 @@ private:
             try {
                 scoped_timer t(t_post_decode, n_post_decode);
                 post_decode(n_tokens, off);
+                common_speculative_verify_end(spec.get(), verify_phase);
             } catch (const std::exception & e) {
+                common_speculative_verify_end(spec.get(), verify_phase);
                 SRV_ERR("post_decode() failed: %s\n", e.what());
                 abort_all_slots("post_decode() failed: " + std::string(e.what()));
                 break; // stop any further processing
@@ -3651,6 +3674,7 @@ private:
                             /* .result_q = */ spec_reject ? &slot.spec_draft_q : nullptr,
                             /* .temp     = */ slot.task->params.sampling.temp,
                             /* .seed     = */ slot.task->params.sampling.seed,
+                            /* .request_id = */ slot.task->id,
                         };
 
                         drafting.push_back(&slot);
@@ -3671,6 +3695,8 @@ private:
             auto & draft = slot.spec_draft;
             auto & ckpt  = slot.spec_ckpt;
 
+            const auto * cycle = common_speculative_cycle_get(spec.get(), slot.id);
+            slot.spec_proposal_id = cycle && cycle->selected ? cycle->proposal_id : 0;
             slot.stats.n_draft_tokens += draft.size();
 
             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
@@ -4745,6 +4771,8 @@ private:
             // update how many tokens out of those tested were accepted
             slot.stats.n_draft_accepted += n_accepted;
             slot.stats.n_draft_verif_steps += 1;
+            common_speculative_cycle_finish(spec.get(), slot.id, slot.spec_proposal_id, n_accepted);
+            slot.spec_proposal_id = 0;
 
             auto & n_accepted_per_pos = slot.n_accepted_per_pos;
             if (n_accepted_per_pos.empty()) {

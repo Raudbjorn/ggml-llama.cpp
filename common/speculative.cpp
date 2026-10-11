@@ -198,6 +198,8 @@ struct common_speculative_impl {
 
     common_speculative_impl(common_speculative_type type, uint32_t n_seq, int32_t n_max) : type(type), n_seq(n_seq), n_max(n_max) {}
 
+    common_speculative_cycle_recorder * cycles = nullptr;
+
     virtual ~common_speculative_impl() = default;
 
     // add a row with an optional paired embedding to a draft batch; false when the draft cannot
@@ -2088,6 +2090,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
+        if (cycles && cycles->enabled()) {
+            draft_record<true>(dparams);
+        } else {
+            draft_record<false>(dparams);
+        }
+    }
+
+    template<bool record>
+    void draft_record(common_speculative_draft_params_vec & dparams) {
         auto & ctx_dft = params.ctx_dft;
 
         batch.clear();
@@ -2218,6 +2229,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                             seq_one, j, id, p,
                             common_token_to_piece(ctx_dft, id).c_str());
 
+                    if constexpr (record) {
+                        cycles->attempt(seq_one, id, p, p >= params.p_min);
+                    }
                     if (p < params.p_min) {
                         break;
                     }
@@ -2358,6 +2372,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 // add drafted token for each sequence
                 const llama_token id = cur_p->data[0].id;
+
+                if constexpr (record) {
+                    cycles->attempt(seq_id, id, cur_p->data[0].p, cur_p->data[0].p >= params.p_min);
+                }
 
                 // only collect very high-confidence draft tokens
                 if (cur_p->data[0].p < params.p_min) {
@@ -2904,6 +2922,7 @@ struct common_speculative {
 
     // the target context, used to convert legacy llama_batch inputs
     llama_context * ctx_tgt = nullptr;
+    llama_context * ctx_dft = nullptr;
 
     // list of implementations to use and their states
     std::vector<std::unique_ptr<common_speculative_impl>> impls;
@@ -2912,6 +2931,7 @@ struct common_speculative {
     std::vector<common_speculative_impl *> impl_last;
 
     std::vector<double> synth_probs;
+    std::unique_ptr<common_speculative_cycle_recorder> cycles;
 };
 
 static common_ngram_map get_common_ngram_map(
@@ -3545,10 +3565,25 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     common_speculative_ptr result(new common_speculative {
         /* .dparams     = */ common_speculative_draft_params_vec(n_seq),
         /* .ctx_tgt     = */ params.draft.ctx_tgt,
+        /* .ctx_dft     = */ params.draft.ctx_dft,
         /* .impls       = */ std::move(impls),
         /* .impl_last   = */ std::vector<common_speculative_impl *>(n_seq, nullptr),
         /* .synth_probs = */ {},
+        /* .cycles      = */ {},
     });
+
+    const char * log_path = std::getenv("LLAMA_SPEC_LOG");
+    const char * profile_env = std::getenv("LLAMA_SPEC_PROFILE");
+    const bool profile = profile_env && std::strcmp(profile_env, "0") != 0;
+    if ((log_path && *log_path) || profile) {
+        result->cycles.reset(new common_speculative_cycle_recorder(n_seq, log_path, profile));
+        for (auto & impl : result->impls) {
+            if (impl->type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || impl->type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) {
+                impl->cycles = result->cycles.get();
+                SPC_INF("%s", "cycle implementation=common_speculative_impl_draft_mtp\n");
+            }
+        }
+    }
 
     const int32_t n_max_configured = common_speculative_n_max(&params);
     const int32_t n_max_effective  = common_speculative_n_max(result.get());
@@ -3660,12 +3695,28 @@ void common_speculative_draft(common_speculative * spec) {
     }
 
     for (auto & impl : spec->impls) {
+        std::vector<common_speculative_cycle_participant> participants;
+        if (impl->cycles) {
+            for (llama_seq_id seq = 0; seq < (llama_seq_id) dparams.size(); ++seq) {
+                const auto & dp = dparams[seq];
+                if (dp.drafting) {
+                    participants.push_back({impl->cycles->begin(seq, dp.request_id, dp.pos0), seq});
+                }
+            }
+        }
+        auto phase = impl->cycles ? impl->cycles->phase_begin(spec->ctx_dft, participants) : nullptr;
+        for (const auto & participant : participants) {
+            impl->cycles->attach_draft(participant.sequence_id, phase);
+        }
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
             impl->draft(dparams);
             impl->n_call_draft++;
         }
 
+        if (impl->cycles) {
+            impl->cycles->phase_end(spec->ctx_dft, phase, true);
+        }
         int n_drafting = 0;
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
@@ -3706,6 +3757,10 @@ void common_speculative_draft(common_speculative * spec) {
             }
         }
 
+        for (const auto & participant : participants) {
+            const auto seq = participant.sequence_id;
+            impl->cycles->finalize(seq, *dparams[seq].result, spec->impl_last[seq] == impl.get() && !dparams[seq].drafting);
+        }
         if (n_drafting == 0) {
             break;
         }
@@ -3825,5 +3880,53 @@ void common_speculative_print_stats(const common_speculative * spec) {
                 impl->n_acc_tokens,
                 str_stats.c_str(),
                 str_perf.c_str());
+    }
+}
+
+const common_speculative_cycle_record * common_speculative_cycle_get(const common_speculative * spec, llama_seq_id seq) {
+    return spec && spec->cycles ? spec->cycles->get(seq) : nullptr;
+}
+
+void common_speculative_cycle_finish(common_speculative * spec, llama_seq_id seq, uint64_t proposal, size_t accepted) {
+    if (spec && spec->cycles && proposal) {
+        spec->cycles->finish(seq, proposal, accepted);
+    }
+}
+
+void common_speculative_cycle_cancel(common_speculative * spec, llama_seq_id seq) {
+    if (spec && spec->cycles) {
+        spec->cycles->cancel(seq);
+    }
+}
+
+std::shared_ptr<common_speculative_cycle_phase> common_speculative_verify_begin(
+        common_speculative * spec, const std::vector<common_speculative_cycle_participant> & participants) {
+    if (!spec || !spec->cycles) {
+        return {};
+    }
+    if (std::none_of(participants.begin(), participants.end(), [](const auto & item) { return item.proposal_id != 0; })) {
+        return {};
+    }
+    for (const auto & participant : participants) {
+        if (!participant.proposal_id) {
+            continue;
+        }
+        const auto * record = spec->cycles->get(participant.sequence_id);
+        if (!record || record->proposal_id != participant.proposal_id) {
+            GGML_ABORT("spec verify: proposal identity mismatch");
+        }
+    }
+    auto phase = spec->cycles->phase_begin(spec->ctx_tgt, participants);
+    for (const auto & participant : participants) {
+        if (participant.proposal_id) {
+            spec->cycles->attach_verify(participant.sequence_id, phase);
+        }
+    }
+    return phase;
+}
+
+void common_speculative_verify_end(common_speculative * spec, const std::shared_ptr<common_speculative_cycle_phase> & phase) {
+    if (spec && spec->cycles) {
+        spec->cycles->phase_end(spec->ctx_tgt, phase, false);
     }
 }
