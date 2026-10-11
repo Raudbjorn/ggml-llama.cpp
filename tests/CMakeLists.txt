@@ -394,6 +394,13 @@ endif()
 llama_build_and_test(test-speculative-adaptive.cpp)
 llama_build_and_test(test-server-memory.cpp)
 llama_build_and_test(test-speculative-cycle.cpp)
+llama_build_and_test(test-speculative-logits.cpp ARGS --self-test)
+
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+    llama_test_cmd(${Python3_EXECUTABLE} NAME test-spec-distribution-oracle LABEL python
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} ARGS -m unittest scripts.test_spec_distribution_oracle)
+endif()
 
 # Synthetic checks always run; absent GPU traces are explicitly skipped.
 llama_build_and_test(test-spec-adaptive-curve.cpp)
