@@ -20,6 +20,16 @@ reports and their retained raw artifacts; source reviews remain distinct from
 runtime evidence. Repository links are relative to this report. Absolute paths
 identify retained host-local evidence and are not portable repository fixtures.
 
+## Subsequent proof follow-up
+
+The [proof follow-up](kmic68-proof-follow-up-2026-10-11.md) repairs the identified
+C++ parameter-layout and vector-export breaks and two sampling defects. Its
+bounded old-client checks and conditional mathematical theorem supersede those
+specific limitations of this historical campaign. Exhaustive ABI compatibility,
+universal runtime distribution equality and overall speedup remain unestablished.
+The twelve original dispositions below are unchanged; rejected code remains
+excluded and prior GPU results retain their original binary identities.
+
 ## Plan dispositions
 
 | Plan | Outcome | Requirement-linked reason and retained evidence | Integration commits |
