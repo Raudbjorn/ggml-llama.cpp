@@ -16,6 +16,7 @@ Baselines and A/B runs:
 - [kmic68-a770-sampler-prefilter.md](kmic68-a770-sampler-prefilter.md) - P05 real-model token-identity rejection; candidate excluded
 - [kmic68-a770-pcum-ramp.md](kmic68-a770-pcum-ramp.md) - P10 calibration protocol blocker; offline replay preserved, no runtime ramp
 - [kmic68-a770-padded-verify.md](kmic68-a770-padded-verify.md) - P09 dense padding passes, recurrent parity rejection and OFF repeat variability; candidate excluded
+- [kmic68-a770-block-verify.md](kmic68-a770-block-verify.md) - P07 synthetic passes and trained mode-identity rejection; candidate excluded
 - [standard-sycl-baseline-2026-07-11.md](sycl/standard-sycl-baseline-2026-07-11.md) - f16/q8_0 KV baseline
 - [standard-sycl-upstream-ab-2026-07-11.md](sycl/standard-sycl-upstream-ab-2026-07-11.md) - fork vs upstream A/B
 - [2026-07-09-fork-vs-upstream-overview.md](sycl/2026-07-09-fork-vs-upstream-overview.md) - first fork vs upstream overview
