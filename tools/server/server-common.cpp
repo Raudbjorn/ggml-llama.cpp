@@ -5,6 +5,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "chat.h"
+#include "unicode.h"
 #include "base64.hpp"
 
 #include "server-common.h"
@@ -939,6 +940,35 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
     }
 
     return prompt_tokens;
+}
+
+bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) {
+    size_t pos = std::min(first_unsent, text.size());
+    while (pos < text.size()) {
+        const auto parsed = common_parse_utf8_codepoint(text, pos);
+        // The shared parser checks byte structure, but permits non-scalar and overlong encodings.
+        const uint32_t min_codepoint[] = { 0, 0, 0x80, 0x800, 0x10000 };
+        if (parsed.status == utf8_parse_result::SUCCESS &&
+                parsed.codepoint >= min_codepoint[parsed.bytes_consumed] &&
+                parsed.codepoint <= 0x10ffff && !(parsed.codepoint >= 0xd800 && parsed.codepoint <= 0xdfff)) {
+            pos += parsed.bytes_consumed;
+            continue;
+        }
+        if (parsed.status == utf8_parse_result::INCOMPLETE) {
+            if (!final) return false;
+            text.replace(pos, text.size() - pos, "\xEF\xBF\xBD");
+            return true;
+        }
+
+        const size_t expected = common_utf8_sequence_length(static_cast<unsigned char>(text[pos]));
+        size_t end = pos + 1;
+        while (end < text.size() && end - pos < expected && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) {
+            ++end;
+        }
+        text.replace(pos, end - pos, "\xEF\xBF\xBD");
+        pos += 3;
+    }
+    return true;
 }
 
 size_t validate_utf8(const std::string& text) {

@@ -93,6 +93,59 @@ def test_completion_stream_vs_non_stream():
     assert content_stream == res_non_stream.body["content"]
 
 
+
+@pytest.mark.parametrize("return_tokens", [False, True])
+@pytest.mark.parametrize("spec_type", [None, "ngram-mod"])
+@pytest.mark.parametrize("n_predict,stop,stop_type", [
+    (1, [], "limit"),
+    (12, [], "limit"),
+    (12, ["\U00010348" * 2], "word"),
+    (12, ["\U00010348" * 20], "limit"),
+])
+def test_completion_stream_utf8_tokens(return_tokens, spec_type, n_predict, stop, stop_type, record_property):
+    server.n_slots = 1
+    server.spec_type = spec_type
+    server.start()
+    char = "\U00010348"
+    tokenized = server.make_request("POST", "/tokenize", data={"content": char})
+    assert tokenized.status_code == 200
+    assert len(tokenized.body["tokens"]) > 1  # Exercise a character split across generated tokens.
+    request = {
+        "prompt": char * 20,
+        "grammar": 'root ::= "' + char + '"+',
+        "ignore_eos": True,
+        "temperature": 0,
+        "n_predict": n_predict,
+        "stop": stop,
+        "cache_prompt": False,
+    }
+    reference = server.make_request("POST", "/completion", data={**request, "return_tokens": True})
+    assert reference.status_code == 200
+    assert reference.body["stop_type"] == stop_type
+    # Repeat on the same slot to catch a token cursor left over from the previous request.
+    for _ in range(2):
+        chunks = list(server.make_stream_request("POST", "/completion", data={
+            **request,
+            "stream": True,
+            "return_tokens": return_tokens,
+            "return_progress": True,
+        }))
+        assert chunks[-1]["stop_type"] == stop_type
+        assert "".join(chunk["content"] for chunk in chunks) == reference.body["content"]
+        tokens = [token for chunk in chunks for token in chunk["tokens"]]
+        assert tokens == reference.body["tokens"]
+        assert len(tokens) == chunks[-1]["timings"]["predicted_n"]
+        for chunk in chunks:
+            if "prompt_progress" in chunk:
+                assert chunk["tokens"] == []
+        if spec_type:
+            accepted = chunks[-1]["timings"].get("draft_n_accepted", 0)
+            record_property("ngram_draft_n_accepted", accepted)
+            print(f"ngram-mod accepted tokens: {accepted}")
+        if n_predict == 1:
+            assert reference.body["content"] == "\ufffd"
+
+
 def test_completion_with_openai_library():
     global server
     server.start()

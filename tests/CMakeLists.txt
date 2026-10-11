@@ -121,6 +121,7 @@ function(llama_build_chat_test)
         llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
         target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
         target_link_libraries(test-chat PRIVATE server-context)
+        llama_test(test-chat NAME test-chat-utf8-repair ARGS --utf8-repair-only)
     endif()
 endfunction()
 

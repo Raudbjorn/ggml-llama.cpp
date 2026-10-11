@@ -8,6 +8,7 @@
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
 #include "../tools/server/server-chat.h"
+#include "../tools/server/server-common.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
@@ -7636,6 +7637,42 @@ static void test_reasoning_effort_caps() {
     assert_supports_effort("models/templates/Qwen-Qwen3-0.6B.jinja", false);
 }
 
+static void test_generated_utf8_repair() {
+    std::string split = "one \xE2\x81";
+    GGML_ASSERT(!repair_generated_utf8(split, 4));
+    GGML_ASSERT(split == "one \xE2\x81");
+    split += "\x84";
+    GGML_ASSERT(repair_generated_utf8(split, 4));
+    GGML_ASSERT(split == "one \xE2\x81\x84");
+
+    std::string malformed = "one \xE2\x81" "\n<think>";
+    GGML_ASSERT(repair_generated_utf8(malformed, 4));
+    GGML_ASSERT(malformed == "one \xEF\xBF\xBD" "\n<think>");
+    GGML_ASSERT(validate_utf8(malformed) == malformed.size());
+
+    std::string orphan = "x\x80" "y";
+    GGML_ASSERT(repair_generated_utf8(orphan, 0));
+    GGML_ASSERT(orphan == "x\xEF\xBF\xBD" "y");
+
+    std::string terminal = "x\xE2\x81";
+    GGML_ASSERT(repair_generated_utf8(terminal, 0, true));
+    GGML_ASSERT(terminal == "x\xEF\xBF\xBD");
+    for (const auto & invalid : { "\xC0\xAF", "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xF8" }) {
+        std::string text = invalid;
+        GGML_ASSERT(repair_generated_utf8(text, 0, true));
+        GGML_ASSERT(text == "\xEF\xBF\xBD");
+    }
+
+    std::string sent = "\x80sent";
+    const std::string prefix = sent;
+    sent += "\x80";
+    GGML_ASSERT(repair_generated_utf8(sent, prefix.size()));
+    GGML_ASSERT(sent == prefix + "\xEF\xBF\xBD");
+    GGML_ASSERT(repair_generated_utf8(sent, sent.size() + 1));
+    std::string empty;
+    GGML_ASSERT(repair_generated_utf8(empty, 0));
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -7721,6 +7758,11 @@ int main(int argc, char ** argv) {
     // Check for --template and --detailed flags
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
+        if (arg == "--utf8-repair-only") {
+            test_generated_utf8_repair();
+            std::cout << "[chat] UTF-8 repair tests passed!" << '\n';
+            return 0;
+        }
         if (arg == "--template" && i + 1 < argc) {
             g_template_filter = argv[++i];
             // Only run PEG parser tests with the filter
@@ -7786,6 +7828,7 @@ int main(int argc, char ** argv) {
     } else
 #endif
     {
+        test_generated_utf8_repair();
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
         test_msg_token_delimiters_split();
