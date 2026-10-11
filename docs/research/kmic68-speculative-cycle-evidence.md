@@ -68,6 +68,17 @@ idle tenancy on the xe A770. The successful campaign observed no concurrent
 builds or new GPU faults. Earlier failed placement and LLVM initialization
 attempts remain preserved, including their nonzero statuses.
 
+Earlier CPU preparation in `p04-verification/` was not fully offline. Its build
+downloaded prebuilt UI assets, and the server test preset loader downloaded
+Stories and BERT fixtures contrary to the local-only constraint. The coordinator
+stopped that suite, inventoried and removed the downloaded model cache, and
+excluded its incomplete server run from acceptance. The retained
+`progress.txt`, `excluded-download-inventory.txt` and `build.log` record this
+exception. The later accepted AOT verification explicitly disabled both
+`LLAMA_BUILD_UI` and `LLAMA_USE_PREBUILT_UI`; its real-model campaign used the
+local Qwen4Exp target and head described above. This report does not claim that
+every preparation attempt avoided downloads.
+
 The process-local `OCL_ICD_VENDORS` directory in
 `p04-stack-diagnosis/icd-intel` contains only Intel's ICD. Together with
 `ONEAPI_DEVICE_SELECTOR=level_zero:0`, this avoided the independently reproduced
