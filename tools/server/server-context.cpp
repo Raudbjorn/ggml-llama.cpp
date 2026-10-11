@@ -3677,8 +3677,8 @@ private:
                             /* .result_q = */ spec_reject ? &slot.spec_draft_q : nullptr,
                             /* .temp     = */ slot.task->params.sampling.temp,
                             /* .seed     = */ slot.task->params.sampling.seed,
-                            /* .request_id = */ slot.task->id,
                         };
+                        common_speculative_set_request_id(spec.get(), slot.id, slot.task->id);
 
 #ifdef LLAMA_TEST_SPEC_CONSUMER
                         slot.spec_fixture.fresh_draft();

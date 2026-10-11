@@ -163,6 +163,12 @@ bool common_speculative_are_compatible(
 
 using common_speculative_draft_params_vec = std::vector<common_speculative_draft_params>;
 
+struct common_speculative_sequence_state {
+    int64_t request_id = -1;
+    uint64_t proposal_id = 0;
+    std::vector<std::vector<llama_token_data>> dists;
+};
+
 // state of an implementation of speculative decoding
 //
 // each implementation has a unique type and a state that is implementation-specific
@@ -224,6 +230,7 @@ struct common_speculative_impl {
     common_speculative_impl(common_speculative_type type, uint32_t n_seq, int32_t n_max) : type(type), n_seq(n_seq), n_max(n_max) {}
 
     common_speculative_cycle_recorder * cycles = nullptr;
+    std::vector<common_speculative_sequence_state> * sequence_states = nullptr;
 
     virtual ~common_speculative_impl() = default;
 
@@ -2463,7 +2470,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 auto & result = *dp.result;
 
                 result.push_back(id);
-                if (sample_host) { dp.dists.push_back(std::move(q)); }
+                if (sample_host) { sequence_states->at(seq_id).dists.push_back(std::move(q)); }
 
                 if (n_cap[seq_id] <= (int) result.size()) {
                     drafting[seq_id] = false;
@@ -2992,6 +2999,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
 
 struct common_speculative {
     common_speculative_draft_params_vec dparams;
+    std::vector<common_speculative_sequence_state> sequence_states;
 
     // the target context, used to convert legacy llama_batch inputs
     llama_context * ctx_tgt = nullptr;
@@ -3644,6 +3652,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
     common_speculative_ptr result(new common_speculative {
         /* .dparams     = */ common_speculative_draft_params_vec(n_seq),
+        /* .sequence_states = */ std::vector<common_speculative_sequence_state>(n_seq),
         /* .ctx_tgt     = */ params.draft.ctx_tgt,
         /* .ctx_dft     = */ params.draft.ctx_dft,
         /* .impls       = */ std::move(impls),
@@ -3651,6 +3660,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         /* .synth_probs = */ {},
         /* .cycles      = */ {},
     });
+
+    for (auto & impl : result->impls) {
+        impl->sequence_states = &result->sequence_states;
+    }
 
     const char * log_path = std::getenv("LLAMA_SPEC_LOG");
     const char * profile_env = std::getenv("LLAMA_SPEC_PROFILE");
@@ -3712,6 +3725,16 @@ common_speculative_draft_params & common_speculative_get_draft_params(
     return spec->dparams[seq_id];
 }
 
+void common_speculative_set_request_id(common_speculative * spec, llama_seq_id seq_id, int64_t request_id) {
+    GGML_ASSERT(spec);
+    spec->sequence_states.at(seq_id).request_id = request_id;
+}
+
+uint64_t common_speculative_get_proposal_id(const common_speculative * spec, llama_seq_id seq_id) {
+    GGML_ASSERT(spec);
+    return spec->sequence_states.at(seq_id).proposal_id;
+}
+
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt) {
     if (spec == nullptr) {
         return;
@@ -3764,12 +3787,14 @@ void common_speculative_draft(common_speculative * spec) {
     {
         int n_drafting = 0;
 
-        for (auto & dp : dparams) {
+        for (llama_seq_id seq = 0; seq < (llama_seq_id) dparams.size(); ++seq) {
+            auto & dp = dparams[seq];
+            auto & state = spec->sequence_states[seq];
             GGML_ASSERT(!dp.drafting || dp.result->empty());
 
             if (dp.drafting) {
-                dp.proposal_id = 0;
-                dp.dists.clear();
+                state.proposal_id = 0;
+                state.dists.clear();
                 if (dp.result_q) { dp.result_q->clear(); }
                 n_drafting++;
             }
@@ -3786,9 +3811,10 @@ void common_speculative_draft(common_speculative * spec) {
             for (llama_seq_id seq = 0; seq < (llama_seq_id) dparams.size(); ++seq) {
                 const auto & dp = dparams[seq];
                 if (dp.drafting) {
-                    dparams[seq].proposal_id = impl->cycles->begin(seq, dp.request_id, dp.pos0);
-                    dparams[seq].dists.clear();
-                    participants.push_back({dparams[seq].proposal_id, seq});
+                    auto & state = spec->sequence_states[seq];
+                    state.proposal_id = impl->cycles->begin(seq, state.request_id, dp.pos0);
+                    state.dists.clear();
+                    participants.push_back({state.proposal_id, seq});
                 }
             }
         }
@@ -3848,12 +3874,13 @@ void common_speculative_draft(common_speculative * spec) {
         for (const auto & participant : participants) {
             const auto seq = participant.sequence_id;
             auto & dp = dparams[seq];
+            auto & state = spec->sequence_states[seq];
             const bool selected = spec->impl_last[seq] == impl.get() && !dp.drafting;
-            if (dp.result->empty()) { dp.dists.clear(); }
-            if (dp.dists.size() > dp.result->size()) { dp.dists.resize(dp.result->size()); }
-            if (dp.result_q) { *dp.result_q = dp.dists; }
-            impl->cycles->finalize(seq, *dp.result, selected, selected ? dp.dists : std::vector<std::vector<llama_token_data>>{});
-            if (!selected) { dp.proposal_id = 0; dp.dists.clear(); }
+            if (dp.result->empty()) { state.dists.clear(); }
+            if (state.dists.size() > dp.result->size()) { state.dists.resize(dp.result->size()); }
+            if (dp.result_q) { *dp.result_q = state.dists; }
+            impl->cycles->finalize(seq, *dp.result, selected, selected ? state.dists : std::vector<std::vector<llama_token_data>>{});
+            if (!selected) { state.proposal_id = 0; state.dists.clear(); }
         }
         if (n_drafting == 0) {
             break;
@@ -4023,7 +4050,7 @@ void common_speculative_invalidate(common_speculative * spec, llama_seq_id seq) 
     if (spec && spec->cycles) { spec->cycles->invalidate(seq); }
     if (spec) {
         auto & dp = spec->dparams.at(seq);
-        dp.dists.clear();
+        spec->sequence_states.at(seq).dists.clear();
         if (dp.result_q) { dp.result_q->clear(); }
     }
 }

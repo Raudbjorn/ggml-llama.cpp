@@ -211,7 +211,7 @@ int main(int argc, char ** argv) {
             fixture.fresh_draft();
 #endif
             common_speculative_draft(spec);
-            proposal_id = dp.proposal_id;
+            proposal_id = common_speculative_get_proposal_id(spec, seq_id);
             replay = false;
 
             // save a checkpoint of the target context before evaluating the draft

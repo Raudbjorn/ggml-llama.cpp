@@ -99,14 +99,13 @@ struct common_speculative_draft_params {
     // the target's temp and seed, read only when the drafter samples probabilistically
     float    temp = 1.0f;
     uint32_t seed = LLAMA_DEFAULT_SEED;
-
-    int64_t request_id = -1; // server task identity, independent of slot reuse
-    uint64_t proposal_id = 0;
-    std::vector<std::vector<llama_token_data>> dists;
-
 };
 
 common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
+
+// Request/proposal metadata stays behind the opaque context, outside the legacy parameter layout.
+void common_speculative_set_request_id(common_speculative * spec, llama_seq_id seq_id, int64_t request_id);
+uint64_t common_speculative_get_proposal_id(const common_speculative * spec, llama_seq_id seq_id);
 
 // optionally call once at the beginning of a new generation
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);

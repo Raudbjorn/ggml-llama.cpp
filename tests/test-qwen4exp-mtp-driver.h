@@ -286,6 +286,7 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
         params.draft.backend_sampling = true; // P06 must explicitly suppress offload
         common_speculative_ptr spec(common_speculative_init(params, 1));
         llama_tokens prompt{3, 4}, tokens;
+        std::vector<std::vector<llama_token_data>> compatibility_q;
         common_batch batch(target.get());
         batch.add(3, 0, 0, true);
         batch.add(4, 1, 0, true);
@@ -294,17 +295,19 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
         common_speculative_begin(spec.get(), 0, prompt);
         auto & dp = common_speculative_get_draft_params(spec.get(), 0);
         dp.drafting = true; dp.pos0 = 2; dp.id_last = 5; dp.prompt = &prompt;
-        dp.result = &tokens; dp.seed = 1201; dp.n_max = 2; dp.request_id = 17;
+        dp.result = &tokens; dp.seed = 1201; dp.n_max = 2; dp.result_q = &compatibility_q;
+        common_speculative_set_request_id(spec.get(), 0, 17);
         common_speculative_draft(spec.get());
         const auto * record = common_speculative_cycle_get(spec.get(), 0);
-        require(record && record->proposal_id == dp.proposal_id && record->proposal == tokens && tokens.size() == 2,
+        const uint64_t proposal_id = common_speculative_get_proposal_id(spec.get(), 0);
+        require(record && record->request_id == 17 && record->proposal_id == proposal_id && record->proposal == tokens && tokens.size() == 2,
                 "P06 has finalized P04 identity without logging and honors the final cap");
         require(!record->draft_phase && record->attempts.empty() && record->verify_phases.empty(),
                 "identity-only mode records no timing/attempt instrumentation");
         if (chained) {
             require(record->dists.empty() && record->sampling_reason == "chained_draft", "chained argmax is ineligible");
         } else {
-            require(record->dists.size() == tokens.size() && dp.dists.size() == tokens.size(), "q and tokens clamp together");
+            require(record->dists.size() == tokens.size() && compatibility_q.size() == tokens.size(), "q and tokens clamp together");
             for (size_t i = 0; i < tokens.size(); ++i) {
                 require(record->dists[i].size() <= LLAMA_DRAFT_TOP_K &&
                         common_sampler_dist_valid(record->dists[i], n_vocab, tokens[i]), "recorded sampled q is normalized and keyed");
@@ -331,27 +334,27 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
         const std::vector<int> indices{0, 1, 2};
         bool used_distribution = false;
         const auto result = common_speculative_sample_and_accept(spec.get(), 0, smpl.get(), target.get(), indices,
-                tokens, dp.proposal_id, false, true, &used_distribution);
+                tokens, proposal_id, false, true, &used_distribution);
         require(used_distribution == !chained, "repair eligibility follows this actual acceptance attempt");
         require(!result.empty() && result.size() <= 3 && record->sampling_consumed, "P06 production acceptance consumes identity");
         require(record->sampling_mode == (chained ? "exact_match" : "distribution"), "explicit effective sampling mode");
         common_sampler_copy(smpl.get(), clone.get());
         const auto replayed = common_speculative_sample_and_accept(spec.get(), 0, smpl.get(), target.get(), indices,
-                tokens, dp.proposal_id, false, true, &used_distribution);
+                tokens, proposal_id, false, true, &used_distribution);
         require(!used_distribution, "new consumed-proposal attempt remains exact, not cache repair");
         require(replayed == common_sampler_sample_and_accept_n(clone.get(), target.get(), indices, tokens, true),
                 "consumed identity falls back with grammar_first preserved");
         auto replaced = tokens;
         replaced.back() = (replaced.back() + 1) % n_vocab;
         common_speculative_invalidate(spec.get(), 0);
-        require(dp.dists.empty() && record->proposal == tokens, "replay invalidation keeps immutable snapshot");
+        require(compatibility_q.empty() && record->proposal == tokens, "replay invalidation keeps immutable snapshot");
         common_sampler_copy(smpl.get(), clone.get());
         require(common_speculative_sample_and_accept(spec.get(), 0, smpl.get(), target.get(), indices,
-                    replaced, dp.proposal_id, true, true, &used_distribution) ==
+                    replaced, proposal_id, true, true, &used_distribution) ==
                 common_sampler_sample_and_accept_n(clone.get(), target.get(), indices, replaced, true),
                 "same-length replay uses exact match");
         require(!used_distribution, "new invalidated-proposal attempt cannot start distribution repair");
-        common_speculative_cycle_finish(spec.get(), 0, dp.proposal_id, 0);
+        common_speculative_cycle_finish(spec.get(), 0, proposal_id, 0);
         require(!common_speculative_cycle_get(spec.get(), 0), "identity-only completion releases proposal");
     }
     fprintf(stderr, "PASS P06 synthetic production MTP sampling, chained fallback, ownership and replay\n");
