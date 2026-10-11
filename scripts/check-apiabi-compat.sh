@@ -206,7 +206,11 @@ drop = yes
 EOF
 
     # In abidw 2.5, handling of undefined stuff was changed a bit
-    abidw_version="$(abidw --version | sed -r 's/^abidw: ([0-9]+\.[0-9]+).*$/\1/')"
+    abidw_version="$(abidw --version | sed -nr 's/^abidw:?[[:space:]]+([0-9]+\.[0-9]+).*$/\1/p')"
+    if [ -z "$abidw_version" ]; then
+        echo "Cannot parse abidw version." >&2
+        exit 1
+    fi
     abidw_major="${abidw_version%.*}"
     abidw_minor="${abidw_version#*.}"
     if [ "$abidw_major" -gt 2 ] || [ "$abidw_minor" -gt 4 ]; then
