@@ -1,20 +1,25 @@
 # P06 distribution-recording speculative acceptance: candidate evidence
 
-Date: 2026-10-11. Status: **Candidate accepted after independent review; integration checks pending**.
+Date: 2026-10-11. Status: **Accepted and integrated; fresh CPU integration checks passed**.
 Scope: [P06 requirements](../../plans/kmic68-06-speculative-sampling.md).
 
 The required optimized statistical corpus, synthetic consumer fixtures, trained
 exact-Qwen4Exp OFF/ON campaign and regression floors passed. The fresh final
 campaign records actual distribution acceptance in all 287 enabled cycles and
 1984 proposal-bound q records, including 369 sampled tokens distinct from top-1.
-An independent [acceptance review](/home/svnbjrn/wt/kmic68-evidence/p06-acceptance-review.md) cleared the candidate. Integration and affected post-integration checks remain pending.
+An independent [acceptance review](/home/svnbjrn/wt/kmic68-evidence/p06-acceptance-review.md) cleared the candidate. Integration commit
+`09b203c4744198dd66f72cf6a29bf5fd31cc5164` passed the fresh CPU checks below.
+Final combined AOT and P07 interaction checks remain pending.
 
 ## Candidate and behavior
 
-The candidate is `codex/kmic68-speculative-sampling` at
+The original tested candidate was `codex/kmic68-speculative-sampling` at
 `1cd063604d08b2a322a56b4897265e60d45602a2` plus 19 changed files in
-`/home/svnbjrn/wt/kmic68-speculative-sampling`. It is not a clean committed
-implementation revision. The normal CPU builds use GCC and Ninja; the separate
+`/home/svnbjrn/wt/kmic68-speculative-sampling`. That tested snapshot was uncommitted.
+The reviewed implementation and three documentation files were subsequently
+committed as `c303c6c5898eba82bbfcfcf9cf433e7266ae1d70` and integrated as
+`09b203c4744198dd66f72cf6a29bf5fd31cc5164`; all 19 source/test/harness files
+match the accepted snapshot byte for byte. The normal CPU builds use GCC and Ninja; the separate
 consumer fixture build is CPU Debug. The normal AOT continuation ran on the
 Intel Arc A770 with the xe driver and captured actual executable/project-library
 mappings. The completed reports below retain those identities. Sampling itself
@@ -221,10 +226,19 @@ Final release found no render holders, surviving payloads, llama processes,
 builders or new GPU faults. Kernel, xe driver and boot identities stayed fixed.
 Services remained inactive/inactive/failed; restoration belongs to the coordinator.
 
-## Remaining integration checks
+## Integration checks
 
-Record the final logical commit and affected post-integration tests after the
-candidate is integrated. P06/P07 combined coverage remains dependent on P07.
+The [fresh CPU integration report](/home/svnbjrn/wt/kmic68-evidence/p06-integration-verification/report.md)
+records a successful 152-step Release build at `09b203c47`, with both UI options
+disabled and production `NDEBUG` preserved while tests enable assertions.
+Cycle/adaptive/parser tests passed 3/3; sampling passed all 77 cases and 231
+Holm hypotheses in 51.05 seconds; MTP default and Q8 passed; Python suites
+passed 40, 8 and 29 tests with zero skips. Source, index, HEAD and binary
+identities stayed unchanged. These checks used fresh CPU artifacts and did
+not repeat the 19 injected consumer cases or GPU/model execution. Runtime
+mapping samples do not guarantee capture of every short-lived fixture.
+
+Final combined AOT regression remains pending. P06/P07 combined coverage remains dependent on P07.
 P06/P10 is blocked by P10's recorded calibration protocol blocker; P05 was
 rejected and is excluded. No combined pass is claimed for excluded features.
 
