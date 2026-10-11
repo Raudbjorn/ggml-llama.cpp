@@ -1,5 +1,9 @@
 # Plan set: adopt Kmic-68/llama.cpp findings
 
+For the separate RaymondHuang210129 source and its own readiness criteria, see
+[Adaptive KV fork: future adoption](raymond-adaptive-kv-adoption.md).
+The Kmic-68 provenance and requirements below apply only to this plan set.
+
 Source of findings: `Kmic-68/llama.cpp`, branch `p100-optimizations` at tip
 `ae35056eba07a52dc85c91b035170013d5e46220`, compared at merge base
 `f46bc30cb6a7f68a67e34a00061e20a4ad1eff43`. The twelve plans select findings
