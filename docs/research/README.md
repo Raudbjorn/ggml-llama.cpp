@@ -13,6 +13,7 @@ Baselines and A/B runs:
 - [kmic68-a770-fa-memory-floor.md](kmic68-a770-fa-memory-floor.md) - P03 readiness rejection and P11 prerequisite blocker; no proxy timings
 - [kmic68-draft-capacity-blockers.md](kmic68-draft-capacity-blockers.md) - P08 mandatory real-fixture blockers and P12 dependency outcome
 - [kmic68-speculative-cycle-evidence.md](kmic68-speculative-cycle-evidence.md) - Accepted P04 proposal lifecycle and 391-cycle exact-model evidence
+- [kmic68-a770-sampler-prefilter.md](kmic68-a770-sampler-prefilter.md) - P05 real-model token-identity rejection; candidate excluded
 - [standard-sycl-baseline-2026-07-11.md](sycl/standard-sycl-baseline-2026-07-11.md) - f16/q8_0 KV baseline
 - [standard-sycl-upstream-ab-2026-07-11.md](sycl/standard-sycl-upstream-ab-2026-07-11.md) - fork vs upstream A/B
 - [2026-07-09-fork-vs-upstream-overview.md](sycl/2026-07-09-fork-vs-upstream-overview.md) - first fork vs upstream overview
