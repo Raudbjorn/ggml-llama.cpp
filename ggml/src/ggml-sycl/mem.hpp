@@ -2,6 +2,7 @@
 #define GGML_SYCL_MEM_HPP
 
 #include <sycl/sycl.hpp>
+#include "ggml-backend.h"
 
 enum MemoryAPIType {
     MEMORY_API_TYPE_LEVEL_ZERO = 0,
@@ -9,6 +10,9 @@ enum MemoryAPIType {
 };
 
 const char* mem_api_int2str(int mem_api);
+
+ggml_backend_memory_status get_memory_size_status(sycl::device dev,
+    size_t & free_bytes, size_t & total_bytes, MemoryAPIType api_type);
 
 bool get_memory_size(sycl::device dev, size_t & free_bytes, size_t & total_bytes,
     MemoryAPIType api_type);

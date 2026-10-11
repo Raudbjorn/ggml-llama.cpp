@@ -98,7 +98,10 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 Create two one-prompt JSONL fixtures for `CTX=16384`: one whose server-reported
 prompt-token count is 8% of the usable context and one that fills the usable
 context while leaving room for the requested decode. Record those token counts
-with the fixtures. Use the same model, binary, build, polling interval, kernel
+with the fixtures in each prompt's `expected_prompt_tokens` field. The harness
+must match every observed prompt count and require positive verified decode
+work before treating terminal telemetry as headroom evidence. Use the same
+model, binary, build, polling interval, kernel
 driver, and boot for both launches.
 
 Prerequisites: stop `llama-sycl.cpp.service`, verify sole tenancy on

@@ -60,6 +60,7 @@ docs/research/speculative/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md
 """
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import math
@@ -72,6 +73,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -436,7 +438,13 @@ def arm_library_path(exe: Path) -> str:
     return library_path(str(exe.parent), os.environ.get("LD_LIBRARY_PATH", ""))
 
 
+_owned_servers: dict[int, subprocess.Popen] = {}
+_PR_SET_CHILD_SUBREAPER = 36
+
+
 def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
+    if _owned_servers:
+        raise RuntimeError("previous server group has not been cleaned up")
     env = dict(os.environ)
     env["ZES_ENABLE_SYSMAN"] = "1"
     env["UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS"] = "1"
@@ -444,36 +452,161 @@ def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
         # the build-tree RUNPATH points at one build dir; make each arm load its own libraries
         env["LD_LIBRARY_PATH"] = arm_library_path(Path(arm["server_bin"]).resolve())
         env.setdefault("LLAMA_TRACE", "1")
-    with logpath.open("w", encoding="utf-8") as logf:
-        return subprocess.Popen(
-            ["bash", "-c", server_command(arm)],
-            stdout=logf,
-            stderr=subprocess.STDOUT,
-            env=env,
-            # Keep curve servers inside the wrapper timeout's process group so its
-            # final SIGKILL reaches the server even if Python cannot finish cleanup.
-            start_new_session=MODE != "acceptance-curve",
-        )
+    memory = None
+    if "LLAMA_BENCH_MEM_LOG" in env:
+        identity = uuid.uuid4().hex
+        base = Path(env["LLAMA_BENCH_MEM_LOG"])
+        path = base.with_name(base.name + "." + identity + ".jsonl")
+        env["LLAMA_BENCH_MEM_LOG"] = str(path)
+        env["LLAMA_BENCH_MEM_LAUNCH_ID"] = identity
+        memory = (path, identity)
+    existing_children = set()
+    if MODE == "acceptance-curve":
+        # One server at a time: adopt its orphans without leaving the outer timeout group.
+        if ctypes.CDLL(None, use_errno=True).prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "cannot own curve server descendants")
+        existing_children = {pid for pid, row in process_table().items() if row[0] == os.getpid()}
+    # Register ownership before delivering a cancellation received during Popen.
+    blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+    try:
+        with logpath.open("w", encoding="utf-8") as logf:
+            proc = subprocess.Popen(
+                ["bash", "-c", server_command(arm)],
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                env=env,
+                # Keep curve servers inside the wrapper timeout's process group so its
+                # final SIGKILL reaches the server even if Python cannot finish cleanup.
+                start_new_session=MODE != "acceptance-curve",
+                preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_SETMASK, blocked),
+            )
+            proc.owned_pgid = proc.pid if MODE != "acceptance-curve" else None
+            proc.existing_children = existing_children
+            proc.memory_log = memory
+            _owned_servers[proc.pid] = proc
+            return proc
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+
+
+def process_table() -> dict[int, tuple[int, int, str]]:
+    result = {}
+    for stat in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+            result[int(stat.parent.name)] = (int(fields[1]), int(fields[2]), fields[0])
+        except (OSError, ValueError, IndexError):
+            continue
+    return result
+
+
+def group_alive(group: int) -> bool:
+    # Linux zombies own no device resources and cannot respond to a signal.
+    return any(pgid == group and state != "Z" for _, pgid, state in process_table().values())
+
+
+def curve_children(proc: subprocess.Popen) -> set[int]:
+    table = process_table()
+    owned = {proc.pid} | {pid for pid, row in table.items()
+                         if row[0] == os.getpid() and pid not in proc.existing_children}
+    while True:
+        descendants = {pid for pid, row in table.items() if row[0] in owned}
+        if descendants <= owned:
+            break
+        owned |= descendants
+    live = set()
+    for pid in owned - {proc.pid}:
+        row = table.get(pid)
+        if row is None:
+            continue
+        if row[2] != "Z":
+            live.add(pid)
+        elif row[0] == os.getpid():
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+    return live
 
 
 def stop_server(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
-        return
+    group = getattr(proc, "owned_pgid", None)
     for sig, grace in ((signal.SIGINT, 20), (signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        sent = set()
         try:
-            group = os.getpgid(proc.pid)
-            if group == os.getpgrp():
-                proc.send_signal(sig)  # shared timeout group: do not signal ourselves
-            else:
+            if group is None:
+                if proc.poll() is None:
+                    proc.send_signal(sig)  # shared outer timeout group
+            elif group_alive(group):
                 os.killpg(group, sig)
         except ProcessLookupError:
             pass
-        try:
-            proc.wait(timeout=grace)
-            return
-        except subprocess.TimeoutExpired:
-            if sig == signal.SIGKILL:
-                raise  # do not report successful cleanup while the child is alive
+        deadline = time.monotonic() + grace
+        while True:
+            children = curve_children(proc) if group is None else set()
+            for pid in children - sent:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+                sent.add(pid)
+            leader_done = proc.poll() is not None
+            if leader_done and not children and (group is None or not group_alive(group)):
+                proc.wait()
+                _owned_servers.pop(proc.pid, None)
+                return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+    raise subprocess.TimeoutExpired("server process group cleanup", 35)
+
+
+def read_memory_record(path: Path, identity: str, expected_interval: int = 50) -> dict[str, Any]:
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    if len(rows) != 1 or not isinstance(rows[0], dict):
+        raise ValueError("expected exactly one terminal memory record")
+    row = rows[0]
+    integers = ("interval_ms", "sample_count", "min_free_bytes", "final_free_bytes", "total_bytes", "query_failure_count")
+    if any(type(row.get(key)) is not int for key in integers):
+        raise ValueError("invalid memory counters")
+    if (row.get("schema_version") != 1 or row.get("launch_id") != identity or
+            row.get("valid") is not True or row.get("completed") is not True or
+            not isinstance(row.get("device"), str) or not row["device"] or
+            not 10 <= row["interval_ms"] <= 1000 or row["interval_ms"] != expected_interval or row["sample_count"] < 2 or
+            row["query_failure_count"] != 0 or row["total_bytes"] <= 0 or
+            not 0 <= row["min_free_bytes"] <= row["final_free_bytes"] <= row["total_bytes"] or
+            not isinstance(row.get("providers"), list) or not row["providers"] or
+            any(p not in ("exact_level_zero", "exact_sycl") for p in row["providers"])):
+        raise ValueError("invalid or incomplete memory telemetry")
+    return row
+
+
+def memory_workload_check(launch: dict[str, Any], prompts: list[dict[str, Any]]) -> None:
+    measured = launch.get("prompts", [])
+    expected = {p["id"]: p.get("expected_prompt_tokens") for p in prompts}
+    if not measured or {p.get("id") for p in measured} != set(expected):
+        raise ValueError("missing measured memory workload")
+    for prompt in measured:
+        count = expected[prompt["id"]]
+        if type(count) is not int or count <= 0:
+            raise ValueError("memory fixtures require positive expected_prompt_tokens")
+        if not prompt.get("all_verifier_invariants_ok") or not prompt.get("runs"):
+            raise ValueError("memory workload failed response verification")
+        for run in prompt["runs"]:
+            if (type(run.get("prompt_tokens")) is not int or run["prompt_tokens"] != count or
+                    type(run.get("completion_tokens")) is not int or
+                    run["completion_tokens"] <= 0 or not run.get("token_ids") or
+                    not run.get("verifier_invariant_ok")):
+                raise ValueError("memory workload prompt/decode coverage mismatch")
+
+
+def discard_memory_timings(launch: dict[str, Any]) -> None:
+    for prompt in launch.get("prompts", []):
+        for key in ("tg_median", "pp_median"):
+            prompt[key] = None
+        for run in prompt.get("runs", []):
+            for key in ("tg", "pp", "elapsed_s"):
+                run[key] = None
 
 
 def curve_path(arm_name: str) -> Path:
@@ -481,53 +614,112 @@ def curve_path(arm_name: str) -> Path:
     return RESULTS / f"acceptance_curve_{Path(MODEL).stem}_{arm_name}.jsonl"
 
 
+def _run_arm_requests(arm: dict[str, Any], prompts: list[dict[str, Any]], logpath: Path) -> dict[str, Any]:
+    if not wait_health(HEALTH_TIMEOUT):
+        print(f"  !! server failed health within {HEALTH_TIMEOUT}s (see {logpath})", flush=True)
+        return {"arm": arm, "error": "health_timeout", "prompts": []}
+    # SYCL JIT warmup: run the first prompt once (discarded) so kernel
+    # compilation (incl. batched-verify when spec fires) is not charged to
+    # the first measured generation. A failed warmup fails the launch: the
+    # first measured request would absorb that work, and a warmup response
+    # that fails the verifier must not slip past the launch gate.
+    print("  warmup...", flush=True)
+    try:
+        wp = prompts[0]
+        messages = wp.get("messages") or [{"role": "user", "content": wp.get("prompt", "")}]
+        evidence = analyze_native_response(
+            post_completion(apply_chat_template(messages), int(wp.get("n_predict", 256))))
+    except Exception as e:  # noqa: BLE001 - any failure, request or response, fails the launch
+        print(f"  !! warmup failed: {e}", flush=True)
+        return {"arm": arm, "error": f"warmup failed: {e}", "prompts": []}
+    if not evidence["verifier_invariant_ok"]:
+        print(f"  !! warmup response failed the target-argmax verifier: {evidence['verifier_failures'][:3]}",
+              flush=True)
+        return {"arm": arm, "error": "warmup response failed the target-argmax verifier", "prompts": []}
+    results = []
+    interleave = MODE == "acceptance-curve"
+    requests = (p for _ in range(REPEATS if interleave else 1) for p in prompts)
+    for p in requests:
+        r = run_prompt(p, repeats=1) if interleave else run_prompt(p)
+        tg = r["tg_median"]
+        acc = r["accept_rate_median"]
+        print(f"  {r['id']:<12} tg={tg:.2f} t/s" if tg is not None else f"  {r['id']:<12} tg=n/a",
+              (f"  accept={acc:.3f}" if acc is not None else "  accept=n/a"),
+              f"  ctok={r['completion_tokens']}", flush=True)
+        results.append(r)
+    log_scan = scan_log(logpath)
+    spec_missing = arm["spec_label"] != "none" and not any(r.get("draft_reported") for r in results)
+    if spec_missing:
+        print(f"  !! WARNING: arm '{arm['name']}' expects spec ({arm['spec_label']}) "
+              f"but server reported no draft stats - spec may be disabled", flush=True)
+    return {"arm": arm, "error": None, "prompts": results, "log_scan": log_scan,
+            "spec_stats_missing": spec_missing}
+
 def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]], tag: str = "") -> dict[str, Any]:
     logpath = RESULTS / f"{arm['name']}{tag}.log"
-    print(f"\n=== arm {arm['name']}  (kv={arm['kv']}, spec={arm['spec_label']}) ===", flush=True)
-    proc = start_server(arm, logpath)
+    launch = {"arm": arm, "error": "launch incomplete", "prompts": []}
+    proc = None
+    cancelled = False
+    memory_enabled = "LLAMA_BENCH_MEM_LOG" in os.environ
+    def cancel(signum, _frame):
+        raise SystemExit(f"cancelled by signal {signum}")
+    handlers = {sig: signal.signal(sig, cancel) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        if not wait_health(HEALTH_TIMEOUT):
-            print(f"  !! server failed health within {HEALTH_TIMEOUT}s (see {logpath})", flush=True)
-            return {"arm": arm, "error": "health_timeout", "prompts": []}
-        # SYCL JIT warmup: run the first prompt once (discarded) so kernel
-        # compilation (incl. batched-verify when spec fires) is not charged to
-        # the first measured generation. A failed warmup fails the launch: the
-        # first measured request would absorb that work, and a warmup response
-        # that fails the verifier must not slip past the launch gate.
-        print("  warmup...", flush=True)
-        try:
-            wp = prompts[0]
-            messages = wp.get("messages") or [{"role": "user", "content": wp.get("prompt", "")}]
-            evidence = analyze_native_response(
-                post_completion(apply_chat_template(messages), int(wp.get("n_predict", 256))))
-        except Exception as e:  # noqa: BLE001 - any failure, request or response, fails the launch
-            print(f"  !! warmup failed: {e}", flush=True)
-            return {"arm": arm, "error": f"warmup failed: {e}", "prompts": []}
-        if not evidence["verifier_invariant_ok"]:
-            print(f"  !! warmup response failed the target-argmax verifier: {evidence['verifier_failures'][:3]}",
-                  flush=True)
-            return {"arm": arm, "error": "warmup response failed the target-argmax verifier", "prompts": []}
-        results = []
-        interleave = MODE == "acceptance-curve"
-        requests = (p for _ in range(REPEATS if interleave else 1) for p in prompts)
-        for p in requests:
-            r = run_prompt(p, repeats=1) if interleave else run_prompt(p)
-            tg = r["tg_median"]
-            acc = r["accept_rate_median"]
-            print(f"  {r['id']:<12} tg={tg:.2f} t/s" if tg is not None else f"  {r['id']:<12} tg=n/a",
-                  (f"  accept={acc:.3f}" if acc is not None else "  accept=n/a"),
-                  f"  ctok={r['completion_tokens']}", flush=True)
-            results.append(r)
-        log_scan = scan_log(logpath)
-        spec_missing = arm["spec_label"] != "none" and not any(r.get("draft_reported") for r in results)
-        if spec_missing:
-            print(f"  !! WARNING: arm '{arm['name']}' expects spec ({arm['spec_label']}) "
-                  f"but server reported no draft stats - spec may be disabled", flush=True)
-        return {"arm": arm, "error": None, "prompts": results, "log_scan": log_scan,
-                "spec_stats_missing": spec_missing}
+        proc = start_server(arm, logpath)
+        launch = _run_arm_requests(arm, prompts, logpath)
+    except (SystemExit, KeyboardInterrupt) as error:
+        cancelled = True
+        launch["error"] = str(error) or "cancelled"
+    except Exception as error:
+        launch["error"] = str(error)
     finally:
-        stop_server(proc)
-        time.sleep(2.0)  # let the GPU/Level-Zero context fully release before next arm
+        # Repeated signals invalidate the launch without interrupting bounded cleanup.
+        def cancel_cleanup(signum, _frame):
+            nonlocal cancelled
+            cancelled = True
+            launch["error"] = f"cancelled by signal {signum} during cleanup"
+        for sig in handlers:
+            signal.signal(sig, cancel_cleanup)
+        try:
+            owned = list(_owned_servers.values())
+            if proc is not None and proc not in owned:
+                owned.append(proc)
+            for child in owned:
+                try:
+                    stop_server(child)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    launch["error"] = f"cleanup failed: {error}"
+            if owned and not cancelled:
+                time.sleep(2.0)  # preserve the existing between-launch context-release grace
+            if memory_enabled:
+                launch["memory_only"] = True
+                launch["memory_valid"] = False
+                launch["telemetry_valid"] = False
+                discard_memory_timings(launch)
+                try:
+                    if proc is None or not proc.memory_log:
+                        raise ValueError("no registered memory launch")
+                    path, identity = proc.memory_log
+                    launch["memory_path"] = str(path)
+                    interval = os.environ.get("LLAMA_BENCH_MEM_INTERVAL_MS", "50")
+                    if not re.fullmatch(r"[0-9]+", interval) or not 10 <= int(interval) <= 1000:
+                        raise ValueError("invalid requested memory interval")
+                    record = read_memory_record(path, identity, int(interval))
+                    launch["telemetry_valid"] = True
+                    if cancelled or launch.get("error") or proc.returncode != 0:
+                        raise ValueError("cancelled or failed memory launch")
+                    memory_workload_check(launch, prompts)
+                    launch["memory"] = record
+                    launch["memory_valid"] = True
+                except (OSError, ValueError, TypeError, AttributeError) as error:
+                    launch["error"] = f"{launch.get('error') or ''}; memory invalid: {error}"
+            launch["cancelled"] = cancelled
+            if memory_enabled or cancelled:
+                logpath.with_suffix(".launch.json").write_text(json.dumps(launch, indent=2))
+        finally:
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
+    return launch
 
 
 def run_arm_curve(arm: dict[str, Any], prompts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -672,6 +864,8 @@ def launch_problems(launch: dict[str, Any]) -> list[str]:
     """Why a launch cannot enter the paired statistics; empty for a usable one."""
     if launch.get("error"):
         return [str(launch["error"])]
+    if launch.get("memory_only"):
+        return ["memory-only launch is excluded from performance comparisons"]
     problems = ["no draft statistics"] if launch.get("spec_stats_missing") else []
     for prompt in launch["prompts"]:
         if not isinstance(prompt.get("tg_median"), (int, float)):
@@ -824,6 +1018,8 @@ def run_ab(arms: list[dict[str, Any]], prompts: list[dict[str, Any]]) -> int:
                 return EXIT_GPU_BUSY
             launches[arm["name"]].append(run_arm(arm, prompts, tag=f"{suffix}-L{i}"))
             out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+            if launches[arm["name"]][-1].get("error"):
+                return 1
 
     def tg_of(launch: dict[str, Any], pid: str) -> float | None:
         for pr in launch["prompts"]:
@@ -933,6 +1129,8 @@ def main() -> int:
                       "refusing to time a shared GPU", flush=True)
                 return EXIT_GPU_BUSY
             results.append(run_arm_curve(arm, prompts))
+            if results[-1].get("error"):
+                break
         print("\n## Acceptance curve summary\n")
         for r in results:
             name = r["arm"]["name"]
@@ -968,6 +1166,8 @@ def main() -> int:
             "arms": summary,
         }
         out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+        if summary[-1].get("error"):
+            break
 
     print("\n\n## Throughput (tg, tokens/s, median of repeats)\n")
     print(md_table(summary, prompt_ids, "tg_median", ".2f"))
@@ -979,7 +1179,7 @@ def main() -> int:
     for a in summary:
         if a.get("error"):
             print(f"  ARM ERROR: {a['arm']['name']}: {a['error']}")
-    return 0
+    return 1 if any(a.get("error") for a in summary) else 0
 
 
 if __name__ == "__main__":

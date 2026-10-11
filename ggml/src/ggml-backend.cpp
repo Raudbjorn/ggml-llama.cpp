@@ -924,6 +924,16 @@ void ggml_backend_dev_memory(ggml_backend_dev_t device, size_t * free, size_t * 
     device->iface.get_memory(device, free, total);
 }
 
+enum ggml_backend_memory_status ggml_backend_dev_memory_status(
+        ggml_backend_dev_t device, size_t * free, size_t * total) {
+    GGML_ASSERT(device && free && total);
+    *free = *total = 0;
+    auto reg = ggml_backend_dev_backend_reg(device);
+    auto query = reg ? reinterpret_cast<ggml_backend_dev_memory_status_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_memory_status")) : nullptr;
+    return query ? query(device, free, total) : GGML_BACKEND_MEMORY_FAILURE;
+}
+
 enum ggml_backend_dev_type ggml_backend_dev_type(ggml_backend_dev_t device) {
     GGML_ASSERT(device);
     return device->iface.get_type(device);

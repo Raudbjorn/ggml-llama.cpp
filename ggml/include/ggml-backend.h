@@ -183,6 +183,17 @@ extern "C" {
     GGML_API const char *                  ggml_backend_dev_name(ggml_backend_dev_t device);
     GGML_API const char *                  ggml_backend_dev_description(ggml_backend_dev_t device);
     GGML_API void                          ggml_backend_dev_memory(ggml_backend_dev_t device, size_t * free, size_t * total);
+    enum ggml_backend_memory_status {
+        GGML_BACKEND_MEMORY_FAILURE = 0,
+        GGML_BACKEND_MEMORY_EXACT_LEVEL_ZERO,
+        GGML_BACKEND_MEMORY_EXACT_SYCL,
+        GGML_BACKEND_MEMORY_TOTAL_AS_FREE,
+    };
+    typedef enum ggml_backend_memory_status (*ggml_backend_dev_memory_status_t)(
+            ggml_backend_dev_t device, size_t * free, size_t * total);
+    // Optional provider uses reg_get_proc_address("ggml_backend_dev_memory_status").
+    GGML_API enum ggml_backend_memory_status ggml_backend_dev_memory_status(
+            ggml_backend_dev_t device, size_t * free, size_t * total);
     GGML_API enum ggml_backend_dev_type    ggml_backend_dev_type(ggml_backend_dev_t device);
     GGML_API void                          ggml_backend_dev_get_props(ggml_backend_dev_t device, struct ggml_backend_dev_props * props);
     GGML_API ggml_backend_reg_t            ggml_backend_dev_backend_reg(ggml_backend_dev_t device);

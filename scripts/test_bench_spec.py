@@ -199,22 +199,222 @@ class BenchSpecEvidenceTests(unittest.TestCase):
 
     def test_stop_server_reaps_children_without_signalling_its_own_group(self) -> None:
         for shared in (False, True):
-            proc = mock.Mock(pid=1234)
-            proc.poll.return_value = None
-            proc.wait.side_effect = [subprocess.TimeoutExpired("server", 20),
-                                     subprocess.TimeoutExpired("server", 10), 0]
-            with mock.patch.object(BENCH_SPEC.os, "getpgid", return_value=42 if shared else 1234), \
-                    mock.patch.object(BENCH_SPEC.os, "getpgrp", return_value=42), \
+            proc = mock.Mock(pid=1234, owned_pgid=None if shared else 1234, existing_children=set())
+            proc.poll.side_effect = ([None, 0] if shared else [0])
+            with mock.patch.object(BENCH_SPEC, "curve_children", return_value=set()), \
+                    mock.patch.object(BENCH_SPEC, "group_alive", side_effect=[True, False]), \
                     mock.patch.object(BENCH_SPEC.os, "killpg") as killpg:
                 BENCH_SPEC.stop_server(proc)
-            signals = [signal.SIGINT, signal.SIGTERM, signal.SIGKILL]
+            # An exited group leader must still trigger descendant cleanup.
             if shared:
                 killpg.assert_not_called()
-                self.assertEqual(proc.send_signal.call_args_list, [mock.call(sig) for sig in signals])
+                proc.send_signal.assert_called_once_with(signal.SIGINT)
             else:
                 proc.send_signal.assert_not_called()
-                self.assertEqual(killpg.call_args_list, [mock.call(1234, sig) for sig in signals])
-            self.assertEqual(proc.wait.call_args_list, [mock.call(timeout=t) for t in (20, 10, 5)])
+                killpg.assert_called_once_with(1234, signal.SIGINT)
+            proc.wait.assert_called_once()
+
+    def test_memory_record_validation_and_permanent_failure(self) -> None:
+        row = dict(schema_version=1, launch_id="test", device="SYCL0", interval_ms=50,
+                   sample_count=3, min_free_bytes=60, final_free_bytes=80, total_bytes=100,
+                   query_failure_count=0, valid=True, completed=True, providers=["exact_level_zero"])
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "memory.jsonl"
+            for provider in ("exact_level_zero", "exact_sycl"):
+                row["providers"] = [provider]
+                path.write_text(json.dumps(row) + "\n")
+                self.assertEqual(BENCH_SPEC.read_memory_record(path, "test")["min_free_bytes"], 60)
+            for key, value in (("providers", ["total_as_free"]), ("providers", ["query_failure"]),
+                               ("query_failure_count", 1), ("total_bytes", 0), ("total_bytes", 70),
+                               ("interval_ms", 9), ("interval_ms", "50"), ("interval_ms", 1001),
+                               ("sample_count", 1), ("valid", False), ("completed", False),
+                               ("launch_id", "other")):
+                path.write_text(json.dumps({**row, key: value}))
+                with self.assertRaises(ValueError, msg=key):
+                    BENCH_SPEC.read_memory_record(path, "test")
+            for text in ("", "{}\n{}\n", "not JSON"):
+                path.write_text(text)
+                with self.assertRaises(ValueError):
+                    BENCH_SPEC.read_memory_record(path, "test")
+            path.unlink()
+            with self.assertRaises(OSError):
+                BENCH_SPEC.read_memory_record(path, "test")
+
+    def test_memory_workload_requires_verified_prompt_and_decode_coverage(self) -> None:
+        run = dict(prompt_tokens=1310, completion_tokens=2, token_ids=[1, 2], verifier_invariant_ok=True)
+        prompt = dict(id="eight-percent", all_verifier_invariants_ok=True, runs=[run])
+        launch = {"prompts": [prompt]}
+        fixture = [{"id": "eight-percent", "expected_prompt_tokens": 1310}]
+        BENCH_SPEC.memory_workload_check(launch, fixture)
+        for field, value in (("prompt_tokens", 12), ("completion_tokens", 0), ("token_ids", []),
+                             ("verifier_invariant_ok", False)):
+            with self.assertRaises(ValueError):
+                BENCH_SPEC.memory_workload_check({"prompts": [{**prompt, "runs": [{**run, field: value}]}]}, fixture)
+        with self.assertRaises(ValueError):
+            BENCH_SPEC.memory_workload_check({"prompts": [{**prompt, "all_verifier_invariants_ok": False}]}, fixture)
+        with self.assertRaises(ValueError):
+            BENCH_SPEC.memory_workload_check(launch, [{"id": "eight-percent"}])
+
+    def test_memory_launch_has_no_performance_fields(self) -> None:
+        launch = {"memory_only": True, "prompts": [{"tg_median": 5, "pp_median": 8,
+                  "runs": [{"tg": 5, "pp": 8, "elapsed_s": 3}]}]}
+        BENCH_SPEC.discard_memory_timings(launch)
+        self.assertIsNone(launch["prompts"][0]["tg_median"])
+        self.assertTrue(all(value is None for value in launch["prompts"][0]["runs"][0].values()))
+        self.assertTrue(BENCH_SPEC.launch_problems(launch))
+
+    @unittest.skipUnless(sys.platform == "linux", "requires POSIX sessions")
+    def test_cancellation_during_spawn_health_warmup_and_requests(self) -> None:
+        response = {"tokens": [11], "completion_probabilities": [
+            {"id": 11, "logprob": -0.1, "top_logprobs": [{"id": 11}]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            server = root / "fake.py"
+            server.write_text("""import json, os, signal, sys, time
+from pathlib import Path
+def stop(*args):
+    row=dict(schema_version=1, launch_id=os.environ['LLAMA_BENCH_MEM_LAUNCH_ID'],
+        device='SYCL0', interval_ms=50, sample_count=3, min_free_bytes=60,
+        final_free_bytes=80, total_bytes=100, query_failure_count=0,
+        valid=True, completed=True, providers=['exact_sycl'])
+    Path(os.environ['LLAMA_BENCH_MEM_LOG']).write_text(json.dumps(row)+'\\n')
+    sys.exit(0)
+signal.signal(signal.SIGINT, stop)
+Path(sys.argv[1]).write_text(str(os.getpid()))
+while True: time.sleep(.01)
+""")
+            for stage in ("spawn", "health", "warmup", "request", "complete"):
+                ready = root / "ready"
+                ready.unlink(missing_ok=True)
+                def await_ready(*_args):
+                    import time
+                    deadline = time.monotonic() + 5
+                    while not ready.exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(ready.exists())
+                    return True
+                def cancel(*_args, **_kwargs):
+                    await_ready()
+                    os.kill(os.getpid(), signal.SIGTERM)
+                real_popen = subprocess.Popen
+                def spawn(*args, **kwargs):
+                    child = real_popen(*args, **kwargs)
+                    if stage == "spawn":
+                        cancel()
+                    return child
+                with mock.patch.dict(os.environ, {"LLAMA_BENCH_MEM_LOG": str(root / "memory")}), \
+                        mock.patch.multiple(BENCH_SPEC, RESULTS=root, MODE="baseline",
+                            server_command=lambda arm: "exec " + shlex.join([sys.executable, str(server), str(ready)]),
+                            wait_health=cancel if stage == "health" else await_ready,
+                            apply_chat_template=lambda messages: "prompt",
+                            post_completion=cancel if stage == "warmup" else lambda *_: response,
+                            run_prompt=cancel if stage != "complete" else lambda _: {
+                                "id": "p", "tg_median": 10, "pp_median": 20, "accept_rate_median": None,
+                                "completion_tokens": 1, "all_verifier_invariants_ok": True,
+                                "runs": [{"tg": 10, "pp": 20, "elapsed_s": 1, "prompt_tokens": 10,
+                                          "completion_tokens": 1, "token_ids": [11], "verifier_invariant_ok": True}]}), \
+                        mock.patch.object(BENCH_SPEC.subprocess, "Popen", side_effect=spawn), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    result = BENCH_SPEC.run_arm({"name": stage, "kv": "q8_0", "spec_label": "none"},
+                                                [{"id": "p", "prompt": "hello", "expected_prompt_tokens": 10}])
+                self.assertEqual(result["cancelled"], stage != "complete", stage)
+                self.assertEqual(result["memory_valid"], stage == "complete", stage)
+                self.assertEqual(bool(result["error"]), stage != "complete", stage)
+                self.assertFalse(BENCH_SPEC._owned_servers, stage)
+                self.assertFalse(BENCH_SPEC.group_alive(int(ready.read_text())), stage)
+                self.assertTrue((root / (stage + ".launch.json")).exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "requires POSIX sessions")
+    def test_exited_launcher_does_not_leave_live_descendant(self) -> None:
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "child"
+            code = ("import os,time,signal; from pathlib import Path; child=os.fork(); "
+                    "os._exit(0) if child else None; "
+                    "signal.signal(signal.SIGINT, lambda *args: os._exit(0)); "
+                    f"Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(60)")
+            proc = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
+            proc.owned_pgid = proc.pid
+            try:
+                proc.wait(timeout=5)
+                deadline = time.monotonic() + 5
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(ready.exists())
+                self.assertTrue(BENCH_SPEC.group_alive(proc.pid))
+                BENCH_SPEC.stop_server(proc)
+                self.assertFalse(BENCH_SPEC.group_alive(proc.pid))
+            finally:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+
+    @unittest.skipUnless(sys.platform == "linux", "requires POSIX sessions")
+    def test_curve_mode_reaps_orphan_without_signalling_shared_group(self) -> None:
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ready = root / "child"
+            code = ("import os,time,signal; from pathlib import Path; child=os.fork(); "
+                    "os._exit(0) if child else None; "
+                    "signal.signal(signal.SIGINT, lambda *args: os._exit(0)); "
+                    f"Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(60)")
+            with mock.patch.multiple(BENCH_SPEC, MODE="acceptance-curve",
+                                     server_command=lambda _: "exec " + shlex.join([sys.executable, "-c", code])):
+                proc = BENCH_SPEC.start_server({}, root / "server.log")
+            try:
+                proc.wait(timeout=5)
+                deadline = time.monotonic() + 5
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(ready.exists())
+                child = int(ready.read_text())
+                self.assertEqual(os.getpgid(child), os.getpgrp())
+                with mock.patch.object(BENCH_SPEC.os, "killpg") as killpg:
+                    BENCH_SPEC.stop_server(proc)
+                killpg.assert_not_called()
+                self.assertFalse(Path(f"/proc/{child}").exists())
+            finally:
+                if ready.exists():
+                    try:
+                        os.kill(int(ready.read_text()), signal.SIGKILL)
+                        os.waitpid(int(ready.read_text()), 0)
+                    except (ProcessLookupError, ChildProcessError):
+                        pass
+                proc.wait()
+                BENCH_SPEC._owned_servers.pop(proc.pid, None)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires POSIX sessions")
+    def test_cleanup_escalates_to_kill_and_reaps(self) -> None:
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "ready"
+            code = ("import signal,time; from pathlib import Path; "
+                    "signal.signal(signal.SIGINT,signal.SIG_IGN); "
+                    "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                    f"Path({str(ready)!r}).touch(); time.sleep(60)")
+            proc = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
+            proc.owned_pgid = proc.pid
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(ready.exists())
+                real_clock, real_kill = time.monotonic, os.killpg
+                # Scale the clock to exercise all three production grace periods quickly.
+                with mock.patch.object(BENCH_SPEC.time, "monotonic", side_effect=lambda: real_clock() * 100), \
+                        mock.patch.object(BENCH_SPEC.os, "killpg", side_effect=real_kill) as kill:
+                    BENCH_SPEC.stop_server(proc)
+                self.assertEqual([call.args[1] for call in kill.call_args_list],
+                                 [signal.SIGINT, signal.SIGTERM, signal.SIGKILL])
+                self.assertEqual(proc.returncode, -signal.SIGKILL)
+                self.assertFalse(BENCH_SPEC.group_alive(proc.pid))
+            finally:
+                if proc.poll() is None:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
 
     @unittest.skipUnless(sys.platform == "linux" and shutil.which("timeout"), "requires Linux and timeout")
     def test_curve_wrapper_hard_timeout_kills_server_before_service_restore(self) -> None:

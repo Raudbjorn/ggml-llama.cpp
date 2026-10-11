@@ -385,6 +385,7 @@ if (TARGET cpp-httplib)
 endif()
 
 llama_build_and_test(test-speculative-adaptive.cpp)
+llama_build_and_test(test-server-memory.cpp)
 
 # Synthetic checks always run; absent GPU traces are explicitly skipped.
 llama_build_and_test(test-spec-adaptive-curve.cpp)
