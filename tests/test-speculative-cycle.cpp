@@ -1,4 +1,5 @@
 #include "speculative-cycle.h"
+#include "log.h"
 
 #undef NDEBUG
 #include <cassert>
@@ -129,7 +130,7 @@ static void cancellation_fixture(const char * path, int count) {
     }
 }
 
-int main(int argc, char ** argv) {
+static int run(int argc, char ** argv) {
     if (argc == 2 && std::string(argv[1]) == "--bad-identity") {
         bad_identity();
         return 1;
@@ -171,4 +172,12 @@ int main(int argc, char ** argv) {
     replay_snapshot();
     cancellation_fixture(nullptr, 3);
     std::puts("PASS: speculative cycle attempts, selection, shared phases and replay");
+    return 0;
+}
+
+int main(int argc, char ** argv) {
+    const int result = run(argc, argv);
+    // Recorder rows are synchronous, but their identity/profile logs use a worker thread.
+    common_log_flush(common_log_main());
+    return result;
 }

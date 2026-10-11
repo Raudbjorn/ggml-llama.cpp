@@ -263,10 +263,10 @@ struct distribution_test_env {
 // Override only evaluated draft logits, retaining the real producer and confidence/minimum logic.
 struct distribution_confidence_rows {
     int rows = 0;
+    bool armed = false;
     static bool callback(ggml_tensor * tensor, bool ask, void * data) {
-        if (std::string(tensor->name) != "result_output") { return false; }
-        if (ask) { return true; }
         auto & self = *static_cast<distribution_confidence_rows *>(data);
+        if (ask) { return self.armed && std::string(tensor->name) == "result_output"; }
         require(tensor->type == GGML_TYPE_F32 && tensor->ne[0] == n_vocab && tensor->ne[1] == 1,
                 "confidence fixture receives one evaluated vocabulary row");
         std::vector<float> logits(n_vocab, -100.0f);
@@ -309,6 +309,8 @@ static void test_distribution_minimum(llama_model * target_model, llama_model * 
         auto & dp = common_speculative_get_draft_params(spec.get(), 0);
         dp.drafting = true; dp.pos0 = 2; dp.id_last = 5; dp.prompt = &prompt;
         dp.result = &tokens; dp.result_q = &q; dp.seed = 1201;
+        // Catch-up graphs may expose result_output with no requested logits.
+        observed.armed = true;
         common_speculative_draft(spec.get());
         require(observed.rows == 2, "finite first confidence passes and second fails in the production loop");
         if (minimum == 1) {
