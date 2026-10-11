@@ -23,3 +23,10 @@ PASS: 10 generated files byte-identical after fresh regeneration; generator asse
 PASS: ASCII/trailing whitespace: 28 history files plus docs/README.md
 PASS: 224 relative links, 5 Markdown anchors, 675 linked revision strings
 PASS: 32 unique Hindsight records cited and 40 consolidated register entries
+
+PR 105 review validation, 2026-10-11
+PASS: python3 -B docs/history/test_reproduce.py (2 tests)
+PASS: real shallow clone rejected before creating data or overwriting existing inventory/ledger
+PASS: mode-only and same-blob file-to-symlink changes both have numstat 0/0 entries
+PASS: non-shallow regeneration leaves all 10 evidence files byte-identical
+PASS: 225 relative links, 5 Markdown anchors and 675 linked revision strings

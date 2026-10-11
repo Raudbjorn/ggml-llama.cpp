@@ -159,8 +159,18 @@ It overwrites only the generated inventories and `05-master-ledger.md` within
 this directory. It does not regenerate the prose or the one-time reference
 census, validation transcript, or final checksums.
 
-In a clone containing the fork endpoint, fetch the pinned upstream object if
-necessary, then run:
+Use a non-shallow clone containing the fork endpoint. The generator rejects
+shallow repositories before creating or overwriting output: matching derived
+sets alone cannot detect ancestry omitted by a shallow boundary. Check first:
+
+```bash
+git rev-parse --is-shallow-repository
+```
+
+If this prints `true`, successfully run `git fetch --unshallow origin` (or the
+appropriate complete source remote) and confirm it now prints `false`.
+Fetching a pinned commit alone does not establish complete ancestry. Then
+fetch the pinned upstream object if necessary and generate the inventories:
 
 ```bash
 git fetch --no-tags https://github.com/ggml-org/llama.cpp.git 5c8854fd88319125125dc4b836c98b1b215b0f23
@@ -172,6 +182,13 @@ git diff --no-renames --shortstat 5c8854fd88319125125dc4b836c98b1b215b0f23 2f623
 The fetch adds objects/FETCH_HEAD; the generator leaves source and branch
 history alone. The original run used a dedicated review ref to retain the
 upstream objects. An existing `upstream` remote is not required.
+
+The focused [generator tests](test_reproduce.py) use temporary local Git
+repositories, including a real shallow clone and mode/type-only changes:
+
+```bash
+python3 -B docs/history/test_reproduce.py
+```
 
 For a specific claim, inspect the exact patch and consumers, for example:
 

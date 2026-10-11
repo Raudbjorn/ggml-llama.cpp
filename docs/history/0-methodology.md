@@ -251,8 +251,9 @@ Only this directory and its documentation-index link are part of the change.
 
 Reproduction has three different meanings:
 
-1. **Inventory reproduction:** run the pinned generator with the required Git
-   objects, following chapter 06. This regenerates ten files, not the prose.
+1. **Inventory reproduction:** use a non-shallow checkout with the required Git
+   objects, following chapter 06. The generator rejects shallow ancestry before
+   writing anything. This regenerates ten files, not the prose.
 2. **Review reproduction:** follow a claim's linked patch, source, report or
    raw artifact and reconsider its interpretation. No automated summarizer is
    claimed to recreate the editorial judgments verbatim.

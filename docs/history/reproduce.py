@@ -1,7 +1,7 @@
 """Rebuild this dated review's Git inventories; no network or source changes.
 
 Run from any directory: python3 docs/history/reproduce.py
-Requires the three pinned commits in the local Git object database. Generated
+Requires a non-shallow checkout with the three pinned commits available. Generated
 files are overwritten only in docs/history/data/ and 05-master-ledger.md.
 """
 
@@ -73,6 +73,8 @@ def delta(left: str, name: str) -> list[list]:
 
 
 def main() -> None:
+    if git("rev-parse", "--is-shallow-repository") == "true":
+        raise SystemExit("shallow repository; run git fetch --unshallow <remote> before generation")
     DATA.mkdir(exist_ok=True)
     upstream_set = set(git("rev-list", UPSTREAM).splitlines())
     first_parent = git("rev-list", "--first-parent", "--reverse", FORK).splitlines()
