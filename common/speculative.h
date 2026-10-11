@@ -93,7 +93,7 @@ struct common_speculative_draft_params {
     // the generated draft from the last _draft() call
     llama_tokens * result;
 
-    // candidate distribution per drafted token; set it to make draft-simple and draft-mtp sample
+    // Optional compatibility output; P06 ownership lives in the P04 finalized snapshot.
     std::vector<std::vector<llama_token_data>> * result_q = nullptr;
 
     // the target's temp and seed, read only when the drafter samples probabilistically
@@ -101,6 +101,9 @@ struct common_speculative_draft_params {
     uint32_t seed = LLAMA_DEFAULT_SEED;
 
     int64_t request_id = -1; // server task identity, independent of slot reuse
+    uint64_t proposal_id = 0;
+    std::vector<std::vector<llama_token_data>> dists;
+
 };
 
 common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
@@ -124,7 +127,33 @@ void common_speculative_draft(common_speculative * spec);
 // informs the speculative context that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
 
-// Immutable MTP snapshot; null when cycle instrumentation is disabled or this sequence has no proposal.
+// Immutable MTP snapshot; also available with P06 enabled and cycle logging disabled.
+struct common_sampler;
+struct common_speculative_sampling_config {
+    float temperature = 0;
+    float top_p = 1;
+};
+// Pure parser for initialization and environment fixtures; error names the rejected variable/value.
+bool common_speculative_sampling_parse(const char * temperature, const char * top_p,
+        common_speculative_sampling_config & config, std::string & error);
+// Completed P06 decisions may need KV repair, but must never be sampled again.
+// The caller's draft stores the selected prefix plus the unprocessed correction.
+struct common_speculative_repair {
+    bool pending = false;
+    size_t n_draft = 0;
+
+    bool prepare(llama_tokens & draft, const llama_tokens & selected, bool stops_at_eog);
+    size_t n_decode(const llama_tokens & draft) const;
+    llama_tokens finish(const llama_tokens & draft);
+    void clear();
+};
+
+llama_tokens common_speculative_sample_and_accept(common_speculative * spec, llama_seq_id seq,
+        common_sampler * sampler, llama_context * ctx, const std::vector<int> & idxs,
+        const llama_tokens & draft, uint64_t proposal, bool replay, bool grammar_first = false,
+        bool * used_distribution = nullptr);
+void common_speculative_invalidate(common_speculative * spec, llama_seq_id seq);
+
 const common_speculative_cycle_record * common_speculative_cycle_get(const common_speculative * spec, llama_seq_id seq);
 void common_speculative_cycle_finish(common_speculative * spec, llama_seq_id seq, uint64_t proposal, size_t accepted);
 void common_speculative_cycle_cancel(common_speculative * spec, llama_seq_id seq);

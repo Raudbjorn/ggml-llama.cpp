@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <string>
 #include <vector>
 
 // fork: cycle identity is independent of mutable server replay buffers.
@@ -12,6 +13,8 @@ struct common_speculative_cycle_attempt {
     llama_token token;
     float top1_probability;
     bool emitted;
+    llama_token top1_token = LLAMA_TOKEN_NULL;
+    float sampled_probability = 0;
 };
 
 struct common_speculative_cycle_participant {
@@ -42,6 +45,17 @@ struct common_speculative_cycle_record {
     int64_t completion_us = 0;
     std::vector<common_speculative_cycle_attempt> attempts;
     std::vector<llama_token> proposal;
+    std::vector<std::vector<llama_token_data>> dists;
+    bool sampling_consumed = false;
+    bool sampling_requested = false;
+    bool sampling_decided = false;
+    float sampling_temperature = 0;
+    float sampling_top_p = 1;
+    bool draft_backend_selected = false;
+    size_t distribution_attempts = 0;
+    size_t exact_match_attempts = 0;
+    std::string sampling_mode = "exact_match";
+    std::string sampling_reason = "disabled";
     std::shared_ptr<common_speculative_cycle_phase> draft_phase;
     std::vector<std::shared_ptr<common_speculative_cycle_phase>> verify_phases;
 };
@@ -57,9 +71,16 @@ public:
             llama_context * ctx, const std::vector<common_speculative_cycle_participant> & participants);
     void phase_end(llama_context * ctx, const std::shared_ptr<common_speculative_cycle_phase> & phase, bool draft);
     uint64_t begin(llama_seq_id seq, int64_t request, llama_pos pos);
-    void attempt(llama_seq_id seq, llama_token token, float probability, bool emitted);
-    void finalize(llama_seq_id seq, const std::vector<llama_token> & proposal, bool selected);
+    void attempt(llama_seq_id seq, llama_token token, float probability, bool emitted,
+            llama_token top1 = LLAMA_TOKEN_NULL, float sampled_probability = 0);
+    void finalize(llama_seq_id seq, const std::vector<llama_token> & proposal, bool selected,
+            const std::vector<std::vector<llama_token_data>> & dists = {});
     const common_speculative_cycle_record * get(llama_seq_id seq) const;
+    const common_speculative_cycle_record * consume(llama_seq_id seq, uint64_t proposal,
+            const std::vector<llama_token> & tokens, bool replay);
+    void invalidate(llama_seq_id seq);
+    void sampling_decision(llama_seq_id seq, const std::string & reason);
+    void sampling_request(llama_seq_id seq, const std::string & reason, float temperature = 0, float top_p = 1);
     void finish(llama_seq_id seq, uint64_t proposal, size_t accepted);
     void cancel(llama_seq_id seq);
     void attach_draft(llama_seq_id seq, const std::shared_ptr<common_speculative_cycle_phase> & phase);

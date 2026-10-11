@@ -548,6 +548,22 @@ statistics ngram_map_k: #calls(b,g,a) = 6 1690 26, #gen drafts = 26, #acc drafts
 To measure the end-to-end effect of speculative decoding (throughput, latency, and draft acceptance) across diverse prompts, see the SPEED-Bench client in [tools/server/bench/speed-bench](../../tools/server/bench/speed-bench/README.md).
 It runs against a running `llama-server` and can compare a baseline run against a speculative-decoding run.
 
+## MTP distribution acceptance
+
+`LLAMA_SPEC_SAMPLE_TEMP` is disabled when unset or zero. A finite positive value
+samples eligible non-chained host MTP drafts and records their sparse proposal
+distributions for target rejection sampling. `LLAMA_SPEC_DRAFT_TOPP` defaults to
+1 and must be finite in `(0, 1]`. Use `--no-spec-draft-backend-sampling` for the
+host drafting path. Unsupported constrained/stateful or backend-selected target
+samplers, chained drafting and unavailable/consumed proposal distributions retain
+whole-block exact-match fallback. Positive target temperature and a supported
+stateless sampler chain are required for distribution acceptance.
+
+With cycle logging enabled, proposal-bound `q_records` distinguish the sampled
+token/probability from top-1 diagnostics. Proposal state is single-use even when
+logging is disabled; checkpoint repair never samples an already completed
+decision again. See the [P06 evidence and compatibility limits](../research/speculative/kmic68-distribution-acceptance-2026-10-11.md).
+
 ## MTP cycle logging and phase profiling
 
 Set `LLAMA_SPEC_LOG=/absolute/path/cycles.jsonl` to append one JSON object per

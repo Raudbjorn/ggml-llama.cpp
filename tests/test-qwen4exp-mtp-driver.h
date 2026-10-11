@@ -237,3 +237,122 @@ static void test_ordinary_draft_driver(llama_model * target_model, llama_model *
     require(result == expected, "draft-simple drafts follow the trunkless head");
     fprintf(stderr, "PASS draft-simple driver on an MTP-only head\n");
 }
+
+// fork: environment changes are scoped to this synthetic production-driver fixture.
+struct distribution_test_env {
+    std::string name;
+    std::string previous;
+    bool existed;
+    distribution_test_env(const char * key, const char * value) : name(key), existed(std::getenv(key) != nullptr) {
+        if (existed) { previous = std::getenv(key); }
+        set(value);
+    }
+    void set(const char * value) {
+#ifdef _WIN32
+        _putenv_s(name.c_str(), value ? value : "");
+#else
+        if (value) { setenv(name.c_str(), value, 1); }
+        else { unsetenv(name.c_str()); }
+#endif
+    }
+    ~distribution_test_env() { set(existed ? previous.c_str() : nullptr); }
+};
+
+static void test_distribution_driver(llama_model * target_model, llama_model * draft_model) {
+    distribution_test_env temperature("LLAMA_SPEC_SAMPLE_TEMP", "0.8");
+    distribution_test_env top_p("LLAMA_SPEC_DRAFT_TOPP", "0.7");
+    distribution_test_env logging("LLAMA_SPEC_LOG", nullptr);
+    distribution_test_env profiling("LLAMA_SPEC_PROFILE", "0");
+    distribution_test_env chain_env("LLAMA_SPEC_CHAIN", "0");
+    for (bool chained : {false, true}) {
+        auto cp = llama_context_default_params();
+        cp.n_ctx = 128;
+        cp.n_batch = cp.n_ubatch = 32;
+        cp.n_outputs_max = cp.n_outputs_max_per_seq = 32;
+        cp.n_threads = cp.n_threads_batch = 1;
+        cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        cp.type_k = cp.type_v = q8_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
+        llama_context_ptr target(llama_init_from_model(target_model, cp));
+        cp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        cp.ctx_other = target.get();
+        llama_context_ptr draft(llama_init_from_model(draft_model, cp));
+        require(target && draft, "P06 synthetic contexts");
+        common_params_speculative params;
+        params.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        params.draft.ctx_tgt = target.get();
+        params.draft.ctx_dft = draft.get();
+        params.draft.n_max = 3;
+        params.draft.chain = chained;
+        params.draft.backend_sampling = true; // P06 must explicitly suppress offload
+        common_speculative_ptr spec(common_speculative_init(params, 1));
+        llama_tokens prompt{3, 4}, tokens;
+        common_batch batch(target.get());
+        batch.add(3, 0, 0, true);
+        batch.add(4, 1, 0, true);
+        require(llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "P06 prefill");
+        require(common_speculative_process(spec.get(), batch), "P06 target hidden state handoff");
+        common_speculative_begin(spec.get(), 0, prompt);
+        auto & dp = common_speculative_get_draft_params(spec.get(), 0);
+        dp.drafting = true; dp.pos0 = 2; dp.id_last = 5; dp.prompt = &prompt;
+        dp.result = &tokens; dp.seed = 1201; dp.n_max = 2; dp.request_id = 17;
+        common_speculative_draft(spec.get());
+        const auto * record = common_speculative_cycle_get(spec.get(), 0);
+        require(record && record->proposal_id == dp.proposal_id && record->proposal == tokens && tokens.size() == 2,
+                "P06 has finalized P04 identity without logging and honors the final cap");
+        require(!record->draft_phase && record->attempts.empty() && record->verify_phases.empty(),
+                "identity-only mode records no timing/attempt instrumentation");
+        if (chained) {
+            require(record->dists.empty() && record->sampling_reason == "chained_draft", "chained argmax is ineligible");
+        } else {
+            require(record->dists.size() == tokens.size() && dp.dists.size() == tokens.size(), "q and tokens clamp together");
+            for (size_t i = 0; i < tokens.size(); ++i) {
+                require(record->dists[i].size() <= LLAMA_DRAFT_TOP_K &&
+                        common_sampler_dist_valid(record->dists[i], n_vocab, tokens[i]), "recorded sampled q is normalized and keyed");
+            }
+            require(llama_get_sampled_token_ith(draft.get(), -1) == LLAMA_TOKEN_NULL, "P06 draft backend sampler is disabled");
+        }
+        batch.clear();
+        batch.add(5, 2, 0, true);
+        for (size_t i = 0; i < tokens.size(); ++i) { batch.add(tokens[i], 3 + i, 0, true); }
+        require(llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "P06 verification rows");
+        common_params_sampling sp;
+        sp.seed = 4321; sp.samplers = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE};
+        common_sampler_ptr smpl(common_sampler_init(target_model, sp));
+        common_sampler_sample(smpl.get(), target.get(), 0, true);
+        const auto * original = common_sampler_get_candidates(smpl.get(), false);
+        common_sampler_ptr clone(common_sampler_clone(smpl.get()));
+        auto * copied = common_sampler_get_candidates(clone.get(), false);
+        require(original->size == copied->size && original->data != copied->data, "clone owns copied candidate storage");
+        const float probability = original->data[0].p;
+        copied->data[0].p = -123;
+        require(original->data[0].p == probability, "clone candidate mutation cannot alias live sampler");
+        common_sampler_copy(smpl.get(), clone.get());
+        require(common_sampler_get_candidates(clone.get(), false)->data[0].p == probability, "copy repairs independent candidates");
+        const std::vector<int> indices{0, 1, 2};
+        bool used_distribution = false;
+        const auto result = common_speculative_sample_and_accept(spec.get(), 0, smpl.get(), target.get(), indices,
+                tokens, dp.proposal_id, false, true, &used_distribution);
+        require(used_distribution == !chained, "repair eligibility follows this actual acceptance attempt");
+        require(!result.empty() && result.size() <= 3 && record->sampling_consumed, "P06 production acceptance consumes identity");
+        require(record->sampling_mode == (chained ? "exact_match" : "distribution"), "explicit effective sampling mode");
+        common_sampler_copy(smpl.get(), clone.get());
+        const auto replayed = common_speculative_sample_and_accept(spec.get(), 0, smpl.get(), target.get(), indices,
+                tokens, dp.proposal_id, false, true, &used_distribution);
+        require(!used_distribution, "new consumed-proposal attempt remains exact, not cache repair");
+        require(replayed == common_sampler_sample_and_accept_n(clone.get(), target.get(), indices, tokens, true),
+                "consumed identity falls back with grammar_first preserved");
+        auto replaced = tokens;
+        replaced.back() = (replaced.back() + 1) % n_vocab;
+        common_speculative_invalidate(spec.get(), 0);
+        require(dp.dists.empty() && record->proposal == tokens, "replay invalidation keeps immutable snapshot");
+        common_sampler_copy(smpl.get(), clone.get());
+        require(common_speculative_sample_and_accept(spec.get(), 0, smpl.get(), target.get(), indices,
+                    replaced, dp.proposal_id, true, true, &used_distribution) ==
+                common_sampler_sample_and_accept_n(clone.get(), target.get(), indices, replaced, true),
+                "same-length replay uses exact match");
+        require(!used_distribution, "new invalidated-proposal attempt cannot start distribution repair");
+        common_speculative_cycle_finish(spec.get(), 0, dp.proposal_id, 0);
+        require(!common_speculative_cycle_get(spec.get(), 0), "identity-only completion releases proposal");
+    }
+    fprintf(stderr, "PASS P06 synthetic production MTP sampling, chained fallback, ownership and replay\n");
+}

@@ -60,6 +60,7 @@ Bugs and harness checks:
 
 ## speculative/ - speculative decoding and MTP
 
+- [kmic68-distribution-acceptance-2026-10-11.md](speculative/kmic68-distribution-acceptance-2026-10-11.md) - P06 statistical, consumer and trained proposal evidence with compatibility limits
 - [qwen4exp-mtp-correctness-2026-10-04.md](speculative/qwen4exp-mtp-correctness-2026-10-04.md) - Qwen4Exp MTP head correctness
 - [sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md](speculative/sycl-a770-spec-checkpoint-on-device-ab-2026-10-04.md) - on-device checkpoint A/B
 - [spec-f16-exactness-2026-07-26/](speculative/spec-f16-exactness-2026-07-26/) - f16 KV output exactness, no drafting vs ngram-mod and ngram-map-k4v drafting
