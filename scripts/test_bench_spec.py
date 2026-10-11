@@ -280,7 +280,11 @@ def stop(*args):
     Path(os.environ['LLAMA_BENCH_MEM_LOG']).write_text(json.dumps(row)+'\\n')
     sys.exit(0)
 signal.signal(signal.SIGINT, stop)
-Path(sys.argv[1]).write_text(str(os.getpid()))
+# Publish the PID contents before readiness becomes visible to the parent.
+ready = Path(sys.argv[1])
+pending = ready.with_name(ready.name + '.tmp')
+pending.write_text(str(os.getpid()))
+pending.replace(ready)
 while True: time.sleep(.01)
 """)
             for stage in ("spawn", "health", "warmup", "request", "complete"):
@@ -332,7 +336,8 @@ while True: time.sleep(.01)
             code = ("import os,time,signal; from pathlib import Path; child=os.fork(); "
                     "os._exit(0) if child else None; "
                     "signal.signal(signal.SIGINT, lambda *args: os._exit(0)); "
-                    f"Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(60)")
+                    f"ready=Path({str(ready)!r}); pending=ready.with_name(ready.name+'.tmp'); "
+                    "pending.write_text(str(os.getpid())); pending.replace(ready); time.sleep(60)")
             proc = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
             proc.owned_pgid = proc.pid
             try:
@@ -360,7 +365,8 @@ while True: time.sleep(.01)
             code = ("import os,time,signal; from pathlib import Path; child=os.fork(); "
                     "os._exit(0) if child else None; "
                     "signal.signal(signal.SIGINT, lambda *args: os._exit(0)); "
-                    f"Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(60)")
+                    f"ready=Path({str(ready)!r}); pending=ready.with_name(ready.name+'.tmp'); "
+                    "pending.write_text(str(os.getpid())); pending.replace(ready); time.sleep(60)")
             with mock.patch.multiple(BENCH_SPEC, MODE="acceptance-curve",
                                      server_command=lambda _: "exec " + shlex.join([sys.executable, "-c", code])):
                 proc = BENCH_SPEC.start_server({}, root / "server.log")
