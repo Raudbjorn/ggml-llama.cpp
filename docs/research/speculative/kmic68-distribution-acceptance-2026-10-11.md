@@ -9,7 +9,7 @@ campaign records actual distribution acceptance in all 287 enabled cycles and
 1984 proposal-bound q records, including 369 sampled tokens distinct from top-1.
 An independent [acceptance review](/home/svnbjrn/wt/kmic68-evidence/p06-acceptance-review.md) cleared the candidate. Integration commit
 `09b203c4744198dd66f72cf6a29bf5fd31cc5164` passed the fresh CPU checks below.
-Final combined AOT and P07 interaction checks remain pending.
+Final accepted-tree CPU/API/SYCL checks passed; see the [campaign ledger](../kmic68-campaign-outcomes-2026-10-11.md). P07 failed its trained identity gate and is excluded.
 
 ## Candidate and behavior
 
@@ -238,7 +238,9 @@ identities stayed unchanged. These checks used fresh CPU artifacts and did
 not repeat the 19 injected consumer cases or GPU/model execution. Runtime
 mapping samples do not guarantee capture of every short-lived fixture.
 
-Final combined AOT regression remains pending. P06/P07 combined coverage remains dependent on P07.
+Final combined AOT regression passed for the accepted source tree. P06/P07
+synthetic coverage passed in the excluded candidate, but its trained mode-identity
+gate failed; no integrated P07 capability is claimed.
 P06/P10 is blocked by P10's recorded calibration protocol blocker; P05 was
 rejected and is excluded. No combined pass is claimed for excluded features.
 

@@ -9,6 +9,7 @@ predate this layout.
 
 Baselines and A/B runs:
 
+- [kmic68-campaign-outcomes-2026-10-11.md](kmic68-campaign-outcomes-2026-10-11.md) - Completed twelve-plan campaign: four accepted, four rejected, four blocked; final verification and service restoration
 - [kmic68-a770-rebaseline.md](kmic68-a770-rebaseline.md) - P01 token-count calibration and separately gated P02 memory observations
 - [kmic68-a770-fa-memory-floor.md](kmic68-a770-fa-memory-floor.md) - P03 readiness rejection and P11 prerequisite blocker; no proxy timings
 - [kmic68-draft-capacity-blockers.md](kmic68-draft-capacity-blockers.md) - P08 mandatory real-fixture blockers and P12 dependency outcome

@@ -12,6 +12,8 @@ Each included finding belongs to exactly one plan. Thresholds and defaults from
 the P100 source are evidence, not A770 defaults; each A770 value must be derived
 and recorded by the plan that consumes it.
 
+Execution outcome: [2026-10-11 campaign ledger](../research/kmic68-campaign-outcomes-2026-10-11.md) records all twelve dispositions, final verification, retained evidence and unresolved prerequisites.
+
 ## EARS contract
 
 Requirements use the five forms from Mavin et al., *Easy Approach to

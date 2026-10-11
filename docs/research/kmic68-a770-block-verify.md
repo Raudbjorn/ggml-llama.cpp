@@ -10,7 +10,8 @@ bias, a diagnostic RNG defect or a throughput regression.
 Source review, CPU verification, an unchanged AOT retry, scoped compatibility
 checks and all eleven native/synthetic gates passed. Those scoped passes do not
 override the real-model gate. Independent disposition review confirmed rejection.
-Final accepted-tree checks and campaign service restoration remain pending.
+Final accepted-tree checks and campaign service restoration are complete; see
+the [campaign ledger](kmic68-campaign-outcomes-2026-10-11.md). They do not qualify this rejected candidate.
 
 Scope: [P07 plan](../plans/kmic68-07-block-verify.md), extending accepted
 [P06](speculative/kmic68-distribution-acceptance-2026-10-11.md).
@@ -159,7 +160,7 @@ trained campaign and cannot replace its separate post-real floor.
 | R07.4 | Exact pass/fail enumeration and 256-contribution caller fixtures check expectations and draft-only denominator. | Three trained 256-block records were observed for one acceptor; retained as raw observations of the failed campaign. |
 | R07.5 | Residual target joint-law and exact 2^-54 regression fixture pass. | Full trained-output distribution equivalence is not proven. |
 | R07.6 | Inherited P06 fallback/transaction corpus passes under modes 0/1/2 in CPU and normal AOT builds. | Source and synthetic evidence cover constraints, stateful/backend/chained and invalid/missing q; trained coverage is separate. |
-| R07.7 | Unset/0 same-seed future decisions and disabled behavior pass. | Candidate excluded; final accepted-tree floor pending. |
+| R07.7 | Unset/0 same-seed future decisions and disabled behavior pass. | Candidate excluded; final accepted-tree floor passed separately. |
 | R07.8 | Frozen 437-comparison/1311-hypothesis family and exact short joint law pass in CPU and normal AOT builds. | Trained mode 1/2 identity gate failed; this does not itself prove distribution bias or invalidate the scoped synthetic pass. |
 | R07.9 | Greatest-passing-prefix checks include all-pass/all-fail/nonmonotonic cases. | Normal AOT execution and evidence audit passed. |
 | R07.10 | Strict accepted/rejected mode parsing and startup fixtures pass; empty is directly tested through parser. | Candidate not integrated; no integrated P07 parser claim. |
@@ -312,7 +313,7 @@ records agree. All three native servers shut down cleanly after SIGINT without
 escalation. No observed test PID survived, and services remained
 inactive/inactive/failed. It explicitly records `campaign_pass=false` and
 `all_four_evidence_audits_pass=false`: cleanup and preservation do not turn the
-failed campaign into a pass. Final accepted-tree regression remains pending.
+failed campaign into a pass. Final accepted-tree regression passed separately.
 
 The [independent disposition review](/home/svnbjrn/wt/kmic68-evidence/p07-gate-disposition-review.md)
 confirmed rejection and found no actionable evidence-handling flaw. It checked
@@ -356,12 +357,12 @@ are not part of this candidate. No corresponding combination is claimed.
 | Mode 2 diagnostics | Three raw complete buckets for acceptor 2, with operands and denominators above; no partial-campaign acceptance. |
 | Mode 1/2 equivalence | Failed at output index 1; subsequent proposal/distribution equality check was not reached. No cause established. |
 | Trained fault/resource/floor | Cleanup, mappings and source/binary/model preservation recorded; fault/resource error lists empty. All three post-real floor commands unrun after the first failed gate. |
-| Review/integration | Independent review confirms P07 rejection and code exclusion. Outcome publication commit, final accepted-tree regression/combined review and service restoration remain pending. |
+| Review/integration | Independent review confirms P07 rejection and code exclusion. Outcome commit `eae53a37e` contains no candidate code. Final accepted-tree regression, combined review and service restoration are recorded in the campaign ledger. |
 
 ## Not claimed
 
 No P07 acceptance, passing trained campaign, integrated feature,
 universal distribution equivalence, trained replay/EOG/repair equivalence,
 throughput improvement, default promotion, full typed ABI compatibility or
-compiler repair. All reported test/build figures are supplied observations in
-the linked records; this document author ran no runtime or hardware checks.
+compiler repair. All reported test/build figures are observations in the linked retained records;
+source review is distinguished from runtime verification.
