@@ -23,6 +23,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <limits>
+#include <random>
 
 #define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SPC_TRC(fmt, ...) LOG_TRC("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -1614,6 +1615,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     bool sample_host = false;
     std::vector<bool> sampler_initialized;
     std::vector<uint32_t> sampler_seeds;
+    std::vector<std::mt19937> proposal_rngs;
 
     common_batch batch;
 
@@ -1719,10 +1721,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         zeros.assign((size_t) n_embd, 0.0f);
 
         const bool chain_enabled = common_speculative_mtp_chain_enabled(this->params);
-        sample_host = sampling.temperature > 0 && !chain_enabled;
+        // Discarding a sampled prefix after a later confidence failure biases its first token.
+        sample_host = sampling.temperature > 0 && !chain_enabled && (adaptive || this->params.n_min <= 1);
         if (sampling.temperature > 0) { this->params.backend_sampling = false; }
         sampler_initialized.assign(n_seq, false);
         sampler_seeds.assign(n_seq, LLAMA_DEFAULT_SEED);
+        proposal_rngs.resize(n_seq);
         smpls.resize(n_seq);
         for (auto & s : smpls) {
             common_params_sampling sparams;
@@ -2136,7 +2140,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             const auto & dp = dparams[seq];
             if (!dp.drafting) { continue; }
             if (sampling.temperature > 0 && cycles) {
-                cycles->sampling_request(seq, sample_host ? "pending" : "chained_draft", sampling.temperature, sampling.top_p);
+                cycles->sampling_request(seq, sample_host ? "pending" :
+                        common_speculative_mtp_chain_enabled(params) ? "chained_draft" : "minimum_length_selection",
+                        sampling.temperature, sampling.top_p);
             }
             if (sample_host && (!sampler_initialized[seq] || sampler_seeds[seq] != dp.seed)) {
                 common_params_sampling sp;
@@ -2147,6 +2153,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 sp.min_keep = 1;
                 sp.samplers = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE, COMMON_SAMPLER_TYPE_TOP_P};
                 smpls[seq].reset(common_sampler_init(llama_get_model(params.ctx_dft), sp));
+                // Separate from both the scratch chain and target rejection RNG domains.
+                std::seed_seq proposal_seed{common_sampler_get_seed(smpls[seq].get()), 0x50303651u, uint32_t(seq)};
+                proposal_rngs[seq].seed(proposal_seed);
                 sampler_initialized[seq] = true;
                 sampler_seeds[seq] = dp.seed;
             }
@@ -2420,7 +2429,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                const llama_token sampled = common_sampler_sample(smpl, ctx_dft, i_last[seq_id], true);
+                // The categorical result is scratch; P06 draws from the recorded float q below.
+                common_sampler_sample(smpl, ctx_dft, i_last[seq_id], true);
                 const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -2439,28 +2449,33 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     cycles->sampling_request(seq_id, backend_token ? "backend_draft_token" : "unsupported_draft_sampler",
                             sampling.temperature, sampling.top_p);
                 }
-                const llama_token id = sampled_host ? sampled : cur_p->data[0].id;
-                float sampled_probability = 0;
+                const float top1_probability = cur_p->data[0].p;
+                const llama_token top1 = cur_p->data[0].id;
+                const bool confident = top1_probability >= params.p_min;
+                llama_token id = top1;
+                std::vector<llama_token_data> q;
+                if (sampled_host && confident) {
+                    q.assign(cur_p->data, cur_p->data + cur_p->size);
+                    if (common_sampler_dist_valid(q, llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft))))) {
+                        id = common_sampler_dist_draw(q, std::uniform_real_distribution<double>(0, 1)(proposal_rngs[seq_id]));
+                    } else {
+                        q.clear();
+                        if (cycles) {
+                            cycles->sampling_request(seq_id, "invalid_draft_distribution", sampling.temperature, sampling.top_p);
+                        }
+                    }
+                }
                 if constexpr (record) {
+                    float sampled_probability = 0;
                     for (size_t k = 0; k < cur_p->size; ++k) {
                         if (cur_p->data[k].id == id) { sampled_probability = cur_p->data[k].p; }
                     }
-                }
-                std::vector<llama_token_data> q;
-                if (sampled_host) {
-                    q.assign(cur_p->data, cur_p->data + cur_p->size);
+                    cycles->attempt(seq_id, id, top1_probability, confident, top1, sampled_probability);
                 }
 
-                if constexpr (record) {
-                    cycles->attempt(seq_id, id, cur_p->data[0].p, cur_p->data[0].p >= params.p_min,
-                            cur_p->data[0].id, sampled_probability);
-                }
-
-                // only collect very high-confidence draft tokens
-                if (cur_p->data[0].p < params.p_min) {
+                if (top1_probability < params.p_min) {
                     drafting[seq_id] = false;
                     n_drafting--;
-
                     continue;
                 }
 

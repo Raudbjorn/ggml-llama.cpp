@@ -102,6 +102,8 @@ struct common_sampler_dist_source {
 bool common_sampler_dist_supported(const common_sampler * gsmpl);
 bool common_sampler_dist_valid(const std::vector<llama_token_data> & row, int32_t n_vocab,
         llama_token emitted = LLAMA_TOKEN_NULL);
+// Draw from the recorded float weights normalized by their double sum; unit is in [0, 1).
+llama_token common_sampler_dist_draw(const std::vector<llama_token_data> & row, double unit);
 llama_tokens common_sampler_sample_and_accept_n_dist(common_sampler * gsmpl,
         const common_sampler_dist_source & source, const std::vector<int> & idxs,
         const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & q,

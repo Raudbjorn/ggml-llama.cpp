@@ -2,6 +2,8 @@
 
 #include "speculative.h"
 
+#include <random>
+
 struct driver_graph_observation {
     struct execution {
         int64_t input_rows;
@@ -258,13 +260,82 @@ struct distribution_test_env {
     ~distribution_test_env() { set(existed ? previous.c_str() : nullptr); }
 };
 
+// Override only evaluated draft logits, retaining the real producer and confidence/minimum logic.
+struct distribution_confidence_rows {
+    int rows = 0;
+    static bool callback(ggml_tensor * tensor, bool ask, void * data) {
+        if (std::string(tensor->name) != "result_output") { return false; }
+        if (ask) { return true; }
+        auto & self = *static_cast<distribution_confidence_rows *>(data);
+        require(tensor->type == GGML_TYPE_F32 && tensor->ne[0] == n_vocab && tensor->ne[1] == 1,
+                "confidence fixture receives one evaluated vocabulary row");
+        std::vector<float> logits(n_vocab, -100.0f);
+        const float p = self.rows++ == 0 ? .75f : .5f;
+        logits[0] = std::log(p); logits[1] = std::log(1 - p);
+        ggml_backend_tensor_set(tensor, logits.data(), 0, logits.size() * sizeof(float));
+        return true;
+    }
+};
+
+static void test_distribution_minimum(llama_model * target_model, llama_model * draft_model) {
+    distribution_test_env temperature("LLAMA_SPEC_SAMPLE_TEMP", "1");
+    distribution_test_env top_p("LLAMA_SPEC_DRAFT_TOPP", "1");
+    for (int minimum : {1, 2}) {
+        auto cp = llama_context_default_params();
+        cp.n_ctx = 128; cp.n_batch = cp.n_ubatch = 32;
+        cp.n_outputs_max = cp.n_outputs_max_per_seq = 32;
+        cp.n_threads = cp.n_threads_batch = 1;
+        cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        cp.type_k = cp.type_v = q8_kv ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
+        llama_context_ptr target(llama_init_from_model(target_model, cp));
+        cp.ctx_type = LLAMA_CONTEXT_TYPE_MTP; cp.ctx_other = target.get();
+        distribution_confidence_rows observed;
+        cp.cb_eval = distribution_confidence_rows::callback; cp.cb_eval_user_data = &observed;
+        llama_context_ptr draft(llama_init_from_model(draft_model, cp));
+        require(target && draft, "minimum selection contexts");
+        common_params_speculative params;
+        params.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        params.draft.ctx_tgt = target.get(); params.draft.ctx_dft = draft.get();
+        params.draft.n_max = 2; params.draft.n_min = minimum; params.draft.p_min = .6f;
+        params.draft.backend_sampling = false;
+        common_speculative_ptr spec(common_speculative_init(params, 1));
+        llama_tokens prompt{3, 4}, tokens;
+        std::vector<std::vector<llama_token_data>> q;
+        common_batch batch(target.get());
+        batch.add(3, 0, 0, true); batch.add(4, 1, 0, true);
+        require(llama_process(target.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "minimum selection prefill");
+        require(common_speculative_process(spec.get(), batch), "minimum selection hidden handoff");
+        common_speculative_begin(spec.get(), 0, prompt);
+        auto & dp = common_speculative_get_draft_params(spec.get(), 0);
+        dp.drafting = true; dp.pos0 = 2; dp.id_last = 5; dp.prompt = &prompt;
+        dp.result = &tokens; dp.result_q = &q; dp.seed = 1201;
+        common_speculative_draft(spec.get());
+        require(observed.rows == 2, "finite first confidence passes and second fails in the production loop");
+        if (minimum == 1) {
+            require(tokens.size() == 1 && q.size() == 1, "eligible short sampled prefix survives confidence stopping");
+            std::seed_seq seed{uint32_t(1201), 0x50303651u, uint32_t(0)};
+            std::mt19937 rng(seed);
+            require(tokens[0] == common_sampler_dist_draw(q[0], std::uniform_real_distribution<double>(0, 1)(rng)),
+                    "confidence stopping retains canonical first proposal draw");
+        } else {
+            require(tokens.empty() && q.empty() && !common_speculative_cycle_get(spec.get(), 0),
+                    "legacy minimum clears the short greedy draft and never publishes sampled q");
+        }
+    }
+    fprintf(stderr, "PASS P06 finite-logit producer confidence/minimum selection fixture\n");
+}
+
 static void test_distribution_driver(llama_model * target_model, llama_model * draft_model) {
     distribution_test_env temperature("LLAMA_SPEC_SAMPLE_TEMP", "0.8");
     distribution_test_env top_p("LLAMA_SPEC_DRAFT_TOPP", "0.7");
     distribution_test_env logging("LLAMA_SPEC_LOG", nullptr);
     distribution_test_env profiling("LLAMA_SPEC_PROFILE", "0");
     distribution_test_env chain_env("LLAMA_SPEC_CHAIN", "0");
-    for (bool chained : {false, true}) {
+    for (int mode : {0, 1, 2, 3}) {
+        const bool chained = mode == 1;
+        const bool minimum_fallback = mode == 2;
+        const bool adaptive = mode == 3;
+        const bool eligible = !chained && !minimum_fallback;
         auto cp = llama_context_default_params();
         cp.n_ctx = 128;
         cp.n_batch = cp.n_ubatch = 32;
@@ -278,10 +349,12 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
         llama_context_ptr draft(llama_init_from_model(draft_model, cp));
         require(target && draft, "P06 synthetic contexts");
         common_params_speculative params;
-        params.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        params.types = {adaptive ? COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE : COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
         params.draft.ctx_tgt = target.get();
         params.draft.ctx_dft = draft.get();
         params.draft.n_max = 3;
+        params.draft.n_min = minimum_fallback || adaptive ? 2 : 0;
+        params.draft.n_min_adaptive = 2;
         params.draft.chain = chained;
         params.draft.backend_sampling = true; // P06 must explicitly suppress offload
         common_speculative_ptr spec(common_speculative_init(params, 1));
@@ -304,13 +377,18 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
                 "P06 has finalized P04 identity without logging and honors the final cap");
         require(!record->draft_phase && record->attempts.empty() && record->verify_phases.empty(),
                 "identity-only mode records no timing/attempt instrumentation");
-        if (chained) {
-            require(record->dists.empty() && record->sampling_reason == "chained_draft", "chained argmax is ineligible");
+        if (!eligible) {
+            require(record->dists.empty() && compatibility_q.empty() && record->sampling_reason ==
+                    (chained ? "chained_draft" : "minimum_length_selection"), "eligibility is fixed before proposal draws");
         } else {
             require(record->dists.size() == tokens.size() && compatibility_q.size() == tokens.size(), "q and tokens clamp together");
+            std::seed_seq proposal_seed{uint32_t(1201), 0x50303651u, uint32_t(0)};
+            std::mt19937 proposal_rng(proposal_seed);
             for (size_t i = 0; i < tokens.size(); ++i) {
                 require(record->dists[i].size() <= LLAMA_DRAFT_TOP_K &&
                         common_sampler_dist_valid(record->dists[i], n_vocab, tokens[i]), "recorded sampled q is normalized and keyed");
+                require(tokens[i] == common_sampler_dist_draw(record->dists[i],
+                        std::uniform_real_distribution<double>(0, 1)(proposal_rng)), "producer draws from recorded canonical q");
             }
             require(llama_get_sampled_token_ith(draft.get(), -1) == LLAMA_TOKEN_NULL, "P06 draft backend sampler is disabled");
         }
@@ -335,9 +413,9 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
         bool used_distribution = false;
         const auto result = common_speculative_sample_and_accept(spec.get(), 0, smpl.get(), target.get(), indices,
                 tokens, proposal_id, false, true, &used_distribution);
-        require(used_distribution == !chained, "repair eligibility follows this actual acceptance attempt");
+        require(used_distribution == eligible, "repair eligibility follows this actual acceptance attempt");
         require(!result.empty() && result.size() <= 3 && record->sampling_consumed, "P06 production acceptance consumes identity");
-        require(record->sampling_mode == (chained ? "exact_match" : "distribution"), "explicit effective sampling mode");
+        require(record->sampling_mode == (eligible ? "distribution" : "exact_match"), "explicit effective sampling mode");
         common_sampler_copy(smpl.get(), clone.get());
         const auto replayed = common_speculative_sample_and_accept(spec.get(), 0, smpl.get(), target.get(), indices,
                 tokens, proposal_id, false, true, &used_distribution);
@@ -354,8 +432,30 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
                 common_sampler_sample_and_accept_n(clone.get(), target.get(), indices, replaced, true),
                 "same-length replay uses exact match");
         require(!used_distribution, "new invalidated-proposal attempt cannot start distribution repair");
+        // The production dist sampler has a standard assert(found) on NaN softmax in Debug.
+        if (mode == 0 && release_sampling_fixtures) {
+            sp.temp = .25f;
+            common_sampler_ptr invalid_sampler(common_sampler_init(target_model, sp));
+            common_sampler_ptr exact_control(common_sampler_clone(invalid_sampler.get()));
+            float * current = llama_get_logits_ith(target.get(), 0);
+            float * suffix = llama_get_logits_ith(target.get(), 1);
+            std::fill(current, current + n_vocab, -INFINITY);
+            std::fill(suffix, suffix + n_vocab, -INFINITY);
+            current[0] = .25f * std::log(.75f); current[1] = .25f * std::log(.25f);
+            suffix[0] = 1e38f; suffix[1] = 0;
+            require(std::isfinite(suffix[0]), "invalid suffix starts with finite raw logits");
+            const std::vector<std::vector<llama_token_data>> half_q{{{0, 0, .5f}, {1, 0, .5f}}};
+            std::string reason;
+            const auto invalid_result = common_sampler_sample_and_accept_n_dist(invalid_sampler.get(), target.get(),
+                    {0, 1}, {1}, half_q, reason, true);
+            require(reason == "invalid_target_distribution", "future temperature overflow selects whole-block fallback");
+            require(invalid_result == common_sampler_sample_and_accept_n(exact_control.get(), target.get(),
+                    {0, 1}, {1}, true), "invalid suffix fallback keeps the original sampler transaction");
+            fprintf(stderr, "PASS P06 release finite-logit overflow and whole-block invalid-suffix fallback\n");
+        }
         common_speculative_cycle_finish(spec.get(), 0, proposal_id, 0);
         require(!common_speculative_cycle_get(spec.get(), 0), "identity-only completion releases proposal");
     }
-    fprintf(stderr, "PASS P06 synthetic production MTP sampling, chained fallback, ownership and replay\n");
+    test_distribution_minimum(target_model, draft_model);
+    fprintf(stderr, "PASS P06 synthetic production MTP sampling, chained/minimum fallback, ownership and replay\n");
 }

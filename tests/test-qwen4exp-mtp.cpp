@@ -29,6 +29,7 @@ static constexpr int n_vocab = 32;
 static constexpr int n_rank = 4;
 static ggml_backend_dev_t test_device = nullptr;
 static bool q8_kv = false;
+static bool release_sampling_fixtures = false;
 
 static void require(bool ok, const char * message) {
     if (!ok) {
@@ -1128,6 +1129,8 @@ int main(int argc, char ** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--q8-kv") {
             q8_kv = true;
+        } else if (std::string(argv[i]) == "--release-sampling-fixtures") {
+            release_sampling_fixtures = true;
         } else if (std::string(argv[i]) == "--backend" && i + 1 < argc) {
             ggml_backend_load_all();
             test_device = ggml_backend_dev_by_name(argv[++i]);

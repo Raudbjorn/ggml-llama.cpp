@@ -777,11 +777,15 @@ bool common_sampler_dist_valid(const std::vector<llama_token_data> & row, int32_
     return found && !row.empty() && std::abs(sum - 1.0) <= mass_tolerance;
 }
 
-static llama_token dist_draw(const std::vector<llama_token_data> & row, std::mt19937 & rng) {
+llama_token common_sampler_dist_draw(const std::vector<llama_token_data> & row, double unit) {
+    GGML_ASSERT(unit >= 0 && unit < 1);
     double sum = 0;
-    for (const auto & item : row) { sum += item.p; }
-    GGML_ASSERT(sum > 0);
-    double u = std::uniform_real_distribution<double>(0, sum)(rng);
+    for (const auto & item : row) {
+        GGML_ASSERT(std::isfinite(item.p) && item.p >= 0);
+        sum += item.p;
+    }
+    GGML_ASSERT(sum > 0 && std::isfinite(sum));
+    double u = unit * sum;
     llama_token last = LLAMA_TOKEN_NULL;
     for (const auto & item : row) {
         if (item.p <= 0) { continue; }
@@ -857,7 +861,7 @@ llama_tokens common_sampler_sample_and_accept_n_dist(common_sampler * gsmpl,
                     if (u < 0) { break; }
                 }
             } else {
-                correction = dist_draw(p[i], work->rng);
+                correction = common_sampler_dist_draw(p[i], uniform(work->rng));
             }
             all_accepted = false;
             result.push_back(correction);
@@ -865,7 +869,7 @@ llama_tokens common_sampler_sample_and_accept_n_dist(common_sampler * gsmpl,
         }
     }
     if (all_accepted) {
-        result.push_back(dist_draw(p.back(), work->rng));
+        result.push_back(common_sampler_dist_draw(p.back(), uniform(work->rng)));
     }
     for (llama_token token : result) { common_sampler_accept(work.get(), token, true); }
     // The owning vectors and their candidate pointers move together; no partial live copy.

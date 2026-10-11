@@ -82,6 +82,21 @@ struct fixture {
     }
 };
 
+static void canonical_proposal_draw() {
+    const auto row = probabilities({0, .25f, 0, .75f, 0});
+    assert(common_sampler_dist_draw(row, 0) == 1);
+    assert(common_sampler_dist_draw(row, std::nextafter(.25, 0.0)) == 1);
+    assert(common_sampler_dist_draw(row, .25) == 3);
+    assert(common_sampler_dist_draw(row, std::nextafter(1.0, 0.0)) == 3);
+    const auto rounded = probabilities({.1f, .2f, .7f});
+    const double mass = double(rounded[0].p) + rounded[1].p + rounded[2].p;
+    assert(mass != 1.0);
+    const double boundary = double(rounded[0].p) / mass;
+    assert(common_sampler_dist_draw(rounded, std::nextafter(boundary, 0.0)) == 0);
+    assert(common_sampler_dist_draw(rounded, std::nextafter(boundary, 1.0)) == 1);
+    std::puts("PASS: canonical recorded-q draw normalizes float mass and skips zero CDF boundaries");
+}
+
 static void transactions(llama_model & model) {
     const auto half = probabilities({.5f, .5f});
     const distributions q(3, half);
@@ -514,6 +529,14 @@ struct hypothesis { std::string name; double p; };
 static void compare(const corpus_case & c, const std::vector<uint64_t> & on,
         const std::vector<uint64_t> & off, std::vector<hypothesis> & family) {
     const auto truth = expected(c);
+    // Preserve every unpooled bin, including zero support, for independent reanalysis.
+    std::printf("P06 counts corpus=%s on=[", c.name().c_str());
+    for (size_t i = 0; i < on.size(); ++i) { std::printf("%s%llu", i ? "," : "", (unsigned long long) on[i]); }
+    std::printf("] off=[");
+    for (size_t i = 0; i < off.size(); ++i) { std::printf("%s%llu", i ? "," : "", (unsigned long long) off[i]); }
+    std::printf("] expected=[");
+    for (size_t i = 0; i < truth.size(); ++i) { std::printf("%s%.17g", i ? "," : "", truth[i]); }
+    std::printf("]\n");
     const double n = std::accumulate(on.begin(), on.end(), uint64_t(0));
     assert(n == 25000 && std::accumulate(off.begin(), off.end(), uint64_t(0)) == 25000);
     std::vector<int> order;
@@ -601,6 +624,7 @@ void test_speculative_sampling() {
     llama_model & model = *model_owner;
     environment();
     lifecycle();
+    canonical_proposal_draw();
     transactions(model);
     checkpoint_repair(model);
     statistics_self_check();
