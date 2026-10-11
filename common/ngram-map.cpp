@@ -7,6 +7,9 @@
 #include <cstdio>
 #include <sstream>
 
+// Preserve the baseline shared-library destructor exports for this installed C++ type.
+template std::vector<common_ngram_map>::~vector();
+
 // prime number used for LCG hash function (32 bit), it is near (sqrt(5) - 1)/2 * 2^32.
 #define LCG_FACTOR 2654435761UL
 
