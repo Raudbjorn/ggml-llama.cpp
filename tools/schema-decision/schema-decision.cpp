@@ -352,7 +352,9 @@ outcome<token_plan> plan_tokens(const llama_vocab * vocab, const std::string & s
                 continue;
             }
             cp.n_left = left_tokens.size();
-            if (tokenize_fields(vocab, cp, inputs, left_tokens, seqs)) {
+            // the fields' tokens depend only on left and rest: a known tail already passed
+            if (tail_index.count(cp.left + std::string(1, '\0') + cp.rest) != 0 ||
+                tokenize_fields(vocab, cp, inputs, left_tokens, seqs)) {
                 chosen = cp;
                 found  = true;
                 break;
