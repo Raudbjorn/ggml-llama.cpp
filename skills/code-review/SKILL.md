@@ -7,12 +7,14 @@ description: Review llama.cpp changes against project conventions and common rev
 
 This skill reviews changes against llama.cpp's conventions and the pitfalls that reviewers flag most often, so the contributor can fix them before a maintainer has to. It has two modes:
 
-- **Self-review (default):** review the contributor's own local changes (uncommitted work, or a branch vs `master`) as a pre-PR pass. Ask which if it's ambiguous; default to `git diff master...HEAD` plus any uncommitted changes.
+- **Self-review (default):** review the contributor's own local changes (uncommitted work, or a branch vs its base) as a pre-PR pass. Ask which if it's ambiguous; default to `git diff feature/turboquant-kv-cache...HEAD` plus any uncommitted changes (use the upstream merge-base of the fork as the base when the diff against the feature branch is noisy).
 - **Read-only review of a PR/file:** if the user points at a PR number or specific files (including code they didn't write), review those and report findings.
+
+**Fork context:** this repo is the TurboQuant fork, not upstream llama.cpp. Most changes here are fork-internal and never go to ggml-org; the upstream-facing rules below (issue-first, quick-reject gates, maintainer approval expectations) still apply to the shared upstream code, but the fork-specific checklist at the end takes precedence for TurboQuant paths. The `AGENTS.md` overview is required context - read it first if not already in context; its "Known pitfalls" list is the first place to check on any turbo regression.
 
 In both modes the output is **private review notes for the user to read and act on** - it is never something to post. This is a hard rule from `AGENTS.md`: an agent must NEVER write, or help write, a PR comment, a review comment, or a reply to a reviewer, by any means including `gh`. Do not offer to. If the user asks you to post the notes, refuse and point them at that rule. Present findings in the conversation only.
 
-Before starting, read `AGENTS.md` and `CONTRIBUTING.md` if not already in context - the "Coding guidelines", "Naming guidelines", and AI usage sections are the baseline this review enforces. For a diff that adds a new model architecture, also read `docs/development/HOWTO-add-model.md` and consider the dedicated `add-new-model` skill.
+Before starting, read `AGENTS.md` if not already in context - its code standards and code conventions are the baseline this review enforces. For a diff that adds a new model architecture, also read `docs/development/HOWTO-add-model.md` and consider the dedicated `add-new-model` skill.
 
 ## Step 0 - Scope the diff and pick the checklists
 
@@ -20,6 +22,7 @@ Identify what actually changed and which area checklists below apply. Run `git d
 
 - `conversion/`, `gguf-py/`, `src/models/`, `src/llama-arch.*` -> **New model / architecture**
 - `ggml/` (any backend, op, or `ggml.h`) -> **ggml / backend**
+- `ggml-turbo-quant.c`, turbo/TQ weight or cache types, `GGML_OP_TURBO_WHT`, turbo kernels in any backend -> **TurboQuant / fork-specific** (in addition to ggml / backend)
 - `include/llama.h` and other public headers -> **Public API**
 - `tools/server/` -> **Server**
 - `tests/`, `tools/server/tests/`, or any other added/changed test -> **Tests**
@@ -31,10 +34,10 @@ Always run the **Scope and quick-reject gate**, the **Security review**, and the
 
 These are the patterns that get PRs closed without a full review. Check them first - a finding here is more important than any code nit, because it can mean the change shouldn't be a PR in its current form at all.
 
-- Is there a prior issue/discussion for this? Features are supposed to start as an issue, not a PR (`CONTRIBUTING.md`). If this is a nontrivial feature with no linked issue, flag it and suggest opening one first.
+- Is there a prior issue/discussion for this? Features are supposed to start as an issue, not a PR (upstream llama.cpp's `CONTRIBUTING.md`). If this is a nontrivial feature with no linked issue, flag it and suggest opening one first.
 - Is it a duplicate of existing/in-flight work? Suggest `gh search prs` / `gh search issues` for the feature. Many closed PRs were duplicates of something already queued.
 - Is it self-contained and single-purpose? Multiple unrelated changes/optimizations bundled together get sent back to be split. Flag unrelated changes and suggest separate PRs.
-- Does it touch multiple ggml backends at once? Initial support should be CPU-only, other backends as follow-ups (`CONTRIBUTING.md`). Flag CUDA/Metal/Vulkan/etc. changes bundled into a feature's first PR.
+- Does it touch multiple ggml backends at once? Initial support should be CPU-only, other backends as follow-ups (upstream llama.cpp's `CONTRIBUTING.md`). Flag SYCL/Vulkan/etc. changes bundled into a feature's first PR.
 - Does it add a new `ggml_type` / quantization type? That carries a disproportionate maintenance burden and needs the full justification package (GGUF sample upload, perplexity vs FP16/BF16 and similar sizes, KL-divergence data, CPU perf numbers). Absent that, it will be rejected regardless of code quality.
 - Is it invasive - new subsystem, core-API reshaping, changes to shared graph/sampler code that other models don't need? Flag it and suggest a discussion with maintainers before investing further.
 - Does it add a model-specific CLI argument to any binary (`common/arg.cpp`, tools, examples) or conversion script (`convert_*.py`)? Not allowed - model-specific behavior must come from GGUF metadata or be detected automatically, not from a per-model flag.
@@ -92,7 +95,7 @@ See the `add-new-model` skill and `docs/development/HOWTO-add-model.md` for the 
 - No hardcoded warp/lane size - use `ggml_cuda_get_physical_warp_size()` (32 on CUDA, 64 on HIP/ROCm) and the portable helpers.
 - Strip leftover debug/profiling/logging code before review.
 - New or changed op? Update `docs/ops.md` and the relevant `docs/ops/*.csv` for the touched backend.
-- New op or operator change needs corresponding `test-backend-ops` cases, and (per `CONTRIBUTING.md`) consistency across at least two backends.
+- New op or operator change needs corresponding `test-backend-ops` cases, and (per upstream llama.cpp's `CONTRIBUTING.md`) consistency across at least two backends.
 - New kernels are expected to come with concrete perf data (throughput across realistic tensor shapes), not just correctness.
 - Don't have a backend mutate the cgraph as a shortcut - that's an unresolved architectural question, not something to slip in.
 - Expect this to need two maintainer approvals; that's normal for `ggml/` changes, not a sign something is wrong.
@@ -100,7 +103,7 @@ See the `add-new-model` skill and `docs/development/HOWTO-add-model.md` for the 
 
 ## Public API (`include/llama.h`)
 
-Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Review for:
+Public API changes carry a higher bar than internal ones (upstream llama.cpp's `CONTRIBUTING.md`). Review for:
 
 - Justification: why doesn't an existing mechanism (e.g. `cb_eval`, existing batch/sampler knobs) suffice? If it does, the change likely shouldn't add public surface. This is the single most common reason these PRs are rejected.
 - Experimental or stop-gap surface belongs in a side header (`llama-ext.h`), not in `llama.h`.
@@ -136,7 +139,7 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 
 ## General (always)
 
-Enforce the `AGENTS.md` / `CONTRIBUTING.md` coding and naming guidelines on every changed line - this is a distinct pass from checking that the code works, and matters just as much for review speed:
+Enforce the `AGENTS.md` coding and naming guidelines on every changed line - this is a distinct pass from checking that the code works, and matters just as much for review speed:
 
 - ASCII only in code and comments - no emdash, unicode arrows, `x`, `...` used as unicode; use `-`, `->`, `x`, `...` ASCII equivalents.
 - Comments are concise and explain non-obvious *why*, not *what*. Flag verbose comments, comments that restate the code, comments that reference the current task/PR, and comments hard-wrapped to a fixed column width.
@@ -149,6 +152,19 @@ Enforce the `AGENTS.md` / `CONTRIBUTING.md` coding and naming guidelines on ever
 - Every added line should be something the contributor can explain and defend to a reviewer without AI help - flag anything that looks copied-in without understanding.
 - `Co-authored-by:` must be reserved for human co-authors; AI contributions (claude, cursor, codex, etc.) must use `Assisted-by:`; if this point is violated, it's a blocking finding.
 - Any mentions of Minja must be treated as blocking; see `AGENTS.md` for why.
+
+## TurboQuant / fork-specific (takes precedence on fork paths)
+
+Run this in addition to the General checklist whenever the diff touches turbo code, and instead of the upstream-facing gates where they conflict. The AGENTS.md "Known pitfalls" list is the regression checklist - each entry there cost a real bug; verify the diff doesn't disturb those invariants.
+
+- **Type/enum stability:** `GGML_TYPE_TURBO2_0=43, TURBO3_0=44, TURBO4_0=45, TQ3_1S=46, TQ4_1S=47` and `GGML_OP_TURBO_WHT` are baked into GGUF files and cross-backend dispatch - never renumber, reorder, or repurpose. New fork types go after 47.
+- **Codec fidelity:** `ggml/src/ggml-turbo-quant.c` must stay byte-identical to fork tip conventions; any change needs `test-turbo-quant` passing (turbo3 MSE=0/Cosine=1.0, turbo4 Cosine=0.9956) plus `test-quantize-fns` (TQ3_1S/TQ4_1S cases).
+- **Backend coverage matrix:** this fork ships CPU, BLAS, SYCL, Vulkan, and OpenVINO only - CUDA, HIP, Metal, CANN, MUSA, WebGPU, RPC, and Hexagon are deleted from the tree; a change to turbo KV or TQ weight behavior must keep the retained backends in sync, and must never reintroduce a removed one. Vulkan SET_ROWS pipeline registration missing TURBO types or the `require_full_subgroups=true, subgroup_size=32` flags is the classic Vulkan regression (abort).
+- **KV cache types:** changes to cache-type handling must be exercised with turbo types (`-ctk/-ctv turbo3`), which require flash attention (auto-enabled). Respect the 128-element rotation block: zero-padding of head dims, and no V rotation/padding for MLA models. K/V types must stay identical for MLA/DeepSeek4.
+- **Env knobs:** `TURBO_LAYER_ADAPTIVE`, `TURBO_AUTO_ASYMMETRIC`, `TURBO_SPARSE_V`, `LLAMA_ATTN_ROT_*` semantics in `docs/turboquant/KV-cache-quantization.md` are the contract - changing behavior without updating that doc is a finding.
+- **Rebase hygiene:** shared upstream files (`src/`, `ggml/`, `common/`) should stay structurally close to upstream so the next upstream rebase does not produce stacked duplicates - the `gguf-py/gguf/constants.py` duplicate-model-tensor crash is the canonical example. Fork-only logic in shared files needs a `fork:` tag in the comment so rebase conflict resolution can find it.
+- **Test gates:** run `test-backend-ops` sweeps that cover TQ3_1S/TQ4_1S in `all_types` and the turbo3/4 FA cases on SYCL and Vulkan, not just the default CPU matrix. `llama-bench` with `-ctk/-ctv turboN` is the perf gate for cache-type work.
+- **Upstream-facing sections below** still apply to changes in shared code, but do not block fork-internal work on upstream acceptance criteria (issue-first, two-maintainer approvals, upstream docs) that do not apply here.
 
 ## Reporting
 

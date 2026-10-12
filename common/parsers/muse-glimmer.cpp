@@ -15,6 +15,9 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     data.generation_prompt = "<|start|>assistant";
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
+    // the reasoning turn is opened by " to=self<|message|>" and closed by "<|eom|>"
+    data.thinking_start_tag = " to=self<|message|>";
+    data.thinking_end_tags  = {"<|eom|>"};
 
     data.preserved_tokens = {
         "<|start|>", "<|message|>", "<|eom|>", "<|eot|>",

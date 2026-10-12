@@ -117,9 +117,7 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader & ml) {
         layer.wq_b          = create_tensor(tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head}, flags);
         layer.wkv           = create_tensor(tn(LLM_TENSOR_ATTN_KV,       "weight", i), {n_embd, n_embd_head}, flags);
         layer.attn_kv_norm  = create_tensor(tn(LLM_TENSOR_ATTN_KV_NORM,  "weight", i), {n_embd_head}, flags);
-        // for wo_a, the shape in the file is (n_head * n_embd_head / o_groups, o_lora_rank*o_groups)
-        // so we reshape here, to avoid reshaping the tensor in the graph
-        layer.wo_a          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_A,    "weight", i), {n_head * n_embd_head / o_groups, o_lora_rank, o_groups}, flags | TENSOR_ALLOW_RESHAPE);
+        layer.wo_a          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_A,    "weight", i), {n_head * n_embd_head / o_groups, o_lora_rank * o_groups}, flags);
         layer.wo_b          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_B,    "weight", i), {o_groups * o_lora_rank, n_embd}, flags);
 
         layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    "weight", i), {hc_dim, hc_mix_dim}, flags);
@@ -623,7 +621,8 @@ ggml_tensor * llama_model_deepseek4::graph::build_lid_top_k(
     indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f/sqrtf(float(n_embd_indexer_head*n_indexer_head)));
     cb(indexer_weights, "lid_weights", il);
 
-    ggml_tensor * indexer_k = inp_dsv4->mctx->get_lid()->get_k(ctx0, il);
+    const auto * mctx_lid = inp_dsv4->mctx->get_lid();
+    ggml_tensor * indexer_k = mctx_lid->get_k(ctx0, il);
     const int64_t n_lid = inp_lid.kq_mask->ne[0];
     GGML_ASSERT(n_lid > 0);
     GGML_ASSERT(n_lid <= indexer_k->ne[2]);
@@ -632,6 +631,13 @@ ggml_tensor * llama_model_deepseek4::graph::build_lid_top_k(
             indexer_k->ne[0], indexer_k->ne[1], n_lid, indexer_k->ne[3],
             indexer_k->nb[1], indexer_k->nb[2], indexer_k->nb[3], 0);
     cb(indexer_k, "lid_k", il);
+
+    // TurboQuant: turbo K is padded to a 128-element block and WHT-rotated
+    // at quantize time; match indexer_q so the dot product with
+    // ggml_lightning_indexer (or the manual fallback below) stays width-aligned.
+    // llama_kv_cache_dsv4_comp_context does not expose the InnerQ scale (and
+    // InnerQ is dormant/off by default fork-wide), so pass null here.
+    indexer_q = build_attn_pad_turbo_query(indexer_q, indexer_k, nullptr);
 
     const int64_t n_stream = indexer_k->ne[3];
     indexer_q = ggml_view_4d(ctx0, indexer_q,
@@ -756,8 +762,15 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
     ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
     cb(kq_mask, "csa_lid_kq_mask", il);
 
+    // n_kv_max bounds the finite (non -INFINITY) mask entries per row that
+    // flash_attn_mask_to_sparse_indices will keep; entries past it are silently dropped.
+    // n_swa == 0 would zero out the raw SWA window and leave only the csa top-k entries,
+    // which is never a valid config for this path.
+    GGML_ASSERT(hparams.n_swa > 0);
     const int64_t n_kv_max = std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + top_k->ne[0];
+    GGML_ASSERT(n_kv_max <= k_all->ne[2]); // must not exceed raw_k + csa_k concat length
     ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, n_kv_max, kq_scale, il);
+    out = build_attn_strip_padded_turbo_v(out, k_all, n_embd_head_v, n_head);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -813,6 +826,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
     cb(kq_mask, "hca_kq_mask", il);
 
     ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, 0, kq_scale, il);
+    out = build_attn_strip_padded_turbo_v(out, k_all, n_embd_head_v, n_head);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -849,6 +863,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_raw_attention(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
 
     ggml_tensor * out = build_attn_mha(q, k, k, nullptr, kq_mask, sinks, nullptr, 0, kq_scale, il);
+    out = build_attn_strip_padded_turbo_v(out, k, n_embd_head_v, n_head);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -1208,7 +1223,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
 
     out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, nt);
     out = ggml_permute(ctx0, out, 0, 2, 1, 3);
-    ggml_tensor * oa = ggml_mul_mat(ctx0, layer.wo_a, out);
+    ggml_tensor * oa = ggml_mul_mat(ctx0, ggml_reshape_3d(ctx0, layer.wo_a, layer.wo_a->ne[0], o_lora_rank, n_groups), out);
     cb(oa, "attn_wo_a", il);
     oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
     oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, nt);

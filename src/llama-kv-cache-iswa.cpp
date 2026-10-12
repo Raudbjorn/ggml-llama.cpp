@@ -110,6 +110,11 @@ void llama_kv_cache_iswa::clear(bool data) {
     kv_swa ->clear(data);
 }
 
+void llama_kv_cache_iswa::clear_data_only() {
+    kv_base->clear_data_only();
+    kv_swa ->clear_data_only();
+}
+
 bool llama_kv_cache_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     bool res = true;
 
@@ -349,6 +354,7 @@ const llama_ubatch & llama_kv_cache_iswa_context::get_ubatch() const {
 
     return ubatches[i_next];
 }
+
 
 const llama_kv_cache_context * llama_kv_cache_iswa_context::get_base() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);

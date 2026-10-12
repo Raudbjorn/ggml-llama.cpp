@@ -86,6 +86,22 @@ using llama_memory_breakdown = std::map<ggml_backend_buffer_type_t, llama_memory
 LLAMA_API int32_t llama_model_n_expert (const struct llama_model * model);
 LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 
+struct llama_moe_tensor_info {
+    enum ggml_type type;
+    size_t expert_size;
+    int64_t n_input;
+    int64_t n_output;
+    int64_t n_expert;
+    // Transformer block index parsed from the tensor name ("blk.<N>..."),
+    // or -1 when the layer cannot be determined.
+    int64_t layer;
+};
+
+LLAMA_API size_t llama_model_get_moe_tensor_info(
+        const struct llama_model * model,
+        struct llama_moe_tensor_info * info,
+        size_t capacity);
+
 LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
@@ -99,6 +115,36 @@ LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value
 // the trunk: il = n_layer() + offset). Used by the speculative NextN driver to
 // chain multiple trained NextN heads. Default 0 (first head).
 LLAMA_API void llama_set_nextn_layer_offset(struct llama_context * ctx, int32_t offset);
+
+LLAMA_API bool llama_model_supports_mtp_chain(const struct llama_model * model);
+
+// Candidates a draft's confidence is normalized over. Every drafter's sampler keeps this many and compares
+// p_min with the probability of its top candidate; the Qwen4Exp chain graph computes the same probability
+// in-graph, so p_min means the same in both.
+#define LLAMA_DRAFT_TOP_K 10
+
+// True only for architectures whose "draft" is a same-position early-exit of the
+// target's own trunk (gemma4-assistant), where every drafted token in a round shares
+// llama_pos n_past. A dedicated trained NextN/MTP head (qwen35, qwen4exp, deepseek, ...)
+// still needs an incrementing position per draft step even when it shares KV memory
+// with the target (no separate -md model given).
+LLAMA_API bool llama_model_uses_shared_position_draft(const struct llama_model * model);
+
+// True only for architectures whose draft context literally aliases the target's
+// KV cache object (currently gemma4-assistant only - see llama_model::create_memory,
+// the `arch == LLM_ARCH_GEMMA4_ASSISTANT` branch that wires cparams.ctx_other's memory
+// into the draft's llama_kv_cache_iswa constructor). Every other architecture that
+// requires ctx_other (eagle3, dflash, qwen4exp, ...) uses it only to borrow the target's
+// weights (tok_embd/lm_head) or embeddings, and still allocates its own independent
+// KV cache - do not infer KV sharing from `ctx_other == ctx_tgt` alone, since ctx_other
+// is set unconditionally for every draft context regardless of architecture.
+// Returns false for a null model; this checks architecture, not a live context's memory.
+LLAMA_API bool llama_model_shares_target_kv(const struct llama_model * model);
+
+// Run the DECODER_MTP graph in chained mode: the batch's first row carries the
+// real (token, h) inputs and each following row's inputs come from the previous
+// row's in-graph argmax and hidden state. One decode drafts n_tokens tokens.
+LLAMA_API void llama_set_mtp_chain(struct llama_context * ctx, bool value);
 
 // Marks the entries that a decision head (clef, vllm-decision2) reads, the default is 0
 // See https://github.com/ggml-org/llama.cpp/pull/29831 for details
@@ -143,6 +189,6 @@ LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_mode
 
 // retrieves the whole token embedding matrix in F32 format (n_embd * n_vocab)
 // returns total number of elements or 0 on error
-// if out is nullptr, returns the number of tokens without writing to out
+// if out is nullptr, returns the number of elements without writing to out
 // caller must allocate enough memory for out before calling
 LLAMA_API uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out);

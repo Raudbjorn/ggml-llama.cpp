@@ -1,11 +1,12 @@
 #pragma once
 
-#include "llama.h"
 #include "llama-graph.h"
+#include "llama.h"
 
+#include <functional>
 #include <map>
 #include <memory>
-#include <functional>
+#include <vector>
 
 struct llama_ubatch;
 
@@ -13,6 +14,8 @@ class llama_batch_allocr;
 
 class llama_io_write_i;
 class llama_io_read_i;
+
+class llama_kv_cache;
 
 struct llama_memory_params {
     // kv cache
@@ -64,6 +67,36 @@ struct llama_memory_context_i {
 
     // get the status of the memory context - used for error handling and checking if any updates would be applied
     virtual llama_memory_status get_status() const = 0;
+
+    // TurboQuant: get rotation tensors for pre-rotate-queries optimization
+    // Returns null for non-turbo memory types. Override in KV cache contexts.
+    virtual ggml_tensor * get_turbo_rot_forward() const { return nullptr; }
+
+    virtual ggml_tensor * get_turbo_rot_inverse() const { return nullptr; }
+
+    // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization.
+    // Returns nullptr when InnerQ is not active. Today the SYCL path still
+    // uses identity/no-op plumbing until runtime abort/retry state is wired.
+    virtual ggml_tensor * get_turbo_innerq_scale_inv() const { return nullptr; }
+
+    // TurboQuant InnerQ: publish a newly-measured scale_inv snapshot back to
+    // the concrete memory context. Hybrid contexts should forward to their
+    // attention-side child.
+    virtual void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+        (void) scale_inv;
+        (void) n;
+        (void) finalized;
+    }
+
+    // P3.2.3.3b2b1a/b3: narrow failure hook. Called when graph_compute() or
+    // an adjacent backend sync path returns non-success to seed state for a
+    // later attempt. `abort_reason` is backend-neutral: device-lost style
+    // causes may be forwarded here, but NaN/PPL/policy causes must come from
+    // their own gates.
+    virtual void on_graph_compute_failure(ggml_status status, int abort_reason = 0) {
+        (void) status;
+        (void) abort_reason;
+    }
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;
@@ -85,10 +118,7 @@ struct llama_memory_i {
     // split the input batch into a set of ubatches and verify that they can fit into the cache
     // return a context object containing the ubatches and memory state required to process them
     // check the llama_memory_context_i::get_status() for the result
-    virtual llama_memory_context_ptr init_batch(
-            llama_batch_allocr & balloc,
-            uint32_t n_ubatch,
-            bool embd_all) = 0;
+    virtual llama_memory_context_ptr init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) = 0;
 
     // simulate full cache, used for allocating worst-case compute buffers
     virtual llama_memory_context_ptr init_full() = 0;
@@ -106,12 +136,14 @@ struct llama_memory_i {
 
     // if data == true, the data buffers will also be cleared together with the metadata
     virtual void clear(bool data) = 0;
+    // Default = clear(true); llama_kv_cache overrides to preserve InnerQ calibration.
+    virtual void clear_data_only() { clear(true); }
 
-    virtual bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) = 0;
-    virtual void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) = 0;
-    virtual void seq_keep(llama_seq_id seq_id) = 0;
-    virtual void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos shift) = 0;
-    virtual void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) = 0;
+    virtual bool seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1)                              = 0;
+    virtual void seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) = 0;
+    virtual void seq_keep(llama_seq_id seq_id)                                                        = 0;
+    virtual void seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift)            = 0;
+    virtual void seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d)                      = 0;
 
     virtual llama_pos seq_pos_min(llama_seq_id seq_id) const = 0;
     virtual llama_pos seq_pos_max(llama_seq_id seq_id) const = 0;
@@ -124,6 +156,15 @@ struct llama_memory_i {
 
     virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const = 0;
     virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
+
+    // called by the context each time it learns the outcome of every graph
+    // enqueued so far. An asynchronous backend reports a failure only at a
+    // later synchronize, after the batch context whose next() already
+    // accounted for the ubatch is gone; memory types that book-keep in next()
+    // undo that accounting here on failure. Default: nothing to undo.
+    virtual void on_graph_compute_synced(ggml_status status) {
+        (void) status;
+    }
 };
 
 using llama_memory_ptr = std::unique_ptr<llama_memory_i>;

@@ -52,18 +52,25 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 - `Q4_1`
 - `Q4_K`
 - `Q4_K_M`
+- `Q5_1`
 - `Q5_K` (converted to `Q8_0_C` at runtime by default)
 - `Q6_K` (converted to `Q8_0_C` at runtime by default)
+- `MXFP4`
+
+Other types, including `Q5_0`, `Q2_K`, `Q3_K`, the `IQ*` types and this fork's TurboQuant
+types (`turbo2/3/4`, `TQ3_1S`, `TQ4_1S`), are rejected by the backend's `supports_op`.
 
 > [!NOTE]
 > Accuracy validation and performance optimizations for quantized models are a work in progress.
 
 **CPU and GPU Quantization Details:**
-- `Q5_K` and `Q6_K` tensors are converted to `Q8_0_C`
+- `Q5_K` and `Q6_K` tensors are converted to `Q8_0_C`, unless `GGML_OPENVINO_REQUANT_KQUANT` selects another target
+- `token_embd.weight` and `output.weight` are converted to `Q8_0_C` on every device (NPU exception below)
+- On GPU, 3D MoE expert weights stored as `Q5_1`/`Q8_0` are requantized to `Q4_0_64` to work around a GPU-plugin bug; this costs accuracy, and `GGML_OPENVINO_REQUANT_KQUANT=native` opts out
 
 **NPU Quantization Details:**
 - Primary supported quantization scheme is `Q4_0`
-- `Q6_K` tensors are requantized to `Q4_0_128` in general. For embedding weights, `Q6_K` tensors are requantized to `Q8_0_C` except for the token embedding matrix which is dequantized to fp16
+- Quantized weights are requantized to `Q4_0_128`, except `output.weight` (`Q8_0_C`) and `token_embd.weight` (`Q8_0_C`, or fp16 when it is `Q6_K`). `GGML_OPENVINO_REQUANT_KQUANT` is ignored on NPU
 
 **Additional Notes:**
 - Both `Q4_0` and `Q4_1` models use `Q6_K` for the token embedding tensor and the final matmul weight tensor (often the same tensor)
@@ -81,9 +88,10 @@ However, all the tools coverage across all devices is not uniform and exhaustive
 - llama-completion
 - llama-embedding
 - llama-perplexity
-- llama-run
 - llama-server
 - llama-simple
+
+`llama-embedding` and `llama-simple` are examples, built when `LLAMA_BUILD_EXAMPLES` is on.
 
 ## Validated Models
 
@@ -91,6 +99,8 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 
 > [!NOTE]
 > Extensive accuracy validation, performance optimizations, and broader architecture coverage are work in progress.
+
+These results are upstream's; no OpenVINO validation run for this fork is recorded in `docs/research/`.
 
 **Legend & Test Configuration:**
 - **Status:** ✓ = Passed | ~ = Accuracy issues | ✗ = Failed or Unsupported
@@ -113,13 +123,13 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 | [bartowski/Qwen_Qwen3-1.7B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 | [Qwen/Qwen3-4B-Q4_K_M](https://huggingface.co/Qwen/Qwen3-4B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 | [lm-kit/Qwen3-8B-Q4_K_M](https://huggingface.co/lm-kit/qwen-3-8b-instruct-gguf) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/Qwen_Qwen3.5-0.8B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
-| [bartowski/Qwen_Qwen3.5-2B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
-| [bartowski/Qwen_Qwen3.5-4B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
-| [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
+| [bartowski/Qwen_Qwen3.5-0.8B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF) | ✓ / ✓ | ✓ / ~ | ✗ |
+| [bartowski/Qwen_Qwen3.5-2B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) | ✓ / ✓ | ✓ / ~ | ✗ |
+| [bartowski/Qwen_Qwen3.5-4B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF) | ✓ / ✓ | ✓ / ~ | ✗ |
+| [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ / ✓ | ✓ / ~ | ✗ |
 |  |  |  |  |
 | [unsloth/gemma-3-4b-it-Q4_K_M](https://huggingface.co/unsloth/gemma-3-4b-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ~ |
+| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ / ✓ | ✓ / ~ | ~ |
 | [bartowski/google_gemma-4-E4B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) | ✓ / ✓ | ✗ / ✗ | ✓ |
 | [bartowski/gemma-4-12B-it-Q4_K_M](https://huggingface.co/bartowski/gemma-4-12B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
 |  |  |  |  |
@@ -199,10 +209,10 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 
 ### 2. Build llama.cpp with OpenVINO Backend
 
-Clone llama.cpp repo and build :
+Clone this fork and build :
 
 ```bash
-git clone https://github.com/ggml-org/llama.cpp
+git clone https://github.com/Raudbjorn/ggml-llama.cpp llama.cpp
 cd llama.cpp
 ```
 
@@ -275,7 +285,7 @@ cd "${SCRIPT_DIR}"
 # ============================================
 if [[ ! -f "llama.cpp/CMakeLists.txt" ]]; then
     echo "Cloning llama.cpp..."
-    git clone https://github.com/ggml-org/llama.cpp
+    git clone https://github.com/Raudbjorn/ggml-llama.cpp llama.cpp
 fi
 
 # ============================================
@@ -342,7 +352,7 @@ echo "  ./build/ReleaseOV/bin/llama-cli -m model.gguf"
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.4.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release.
+> The script pins OpenVINO `2026.4.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top -- edit them to track a different release.
 
 </details>
 
@@ -429,7 +439,7 @@ REM Clone llama.cpp if missing
 REM ============================================
 if not exist "llama.cpp\CMakeLists.txt" (
     echo Cloning llama.cpp...
-    git clone https://github.com/ggml-org/llama.cpp
+    git clone https://github.com/Raudbjorn/ggml-llama.cpp llama.cpp
 )
 
 cd /d "llama.cpp"
@@ -552,7 +562,7 @@ endlocal
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.4.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction — `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
+> The script pins OpenVINO `2026.4.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top -- edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction -- `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
 
 </details>
 
@@ -629,67 +639,14 @@ build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.ggu
 
 ### 5. Docker Build
 
-You can build and run llama.cpp with OpenVINO backend using Docker.
-
-```bash
-# Build the base runtime image with compiled shared libraries and minimal dependencies.
-docker build -t llama-openvino:base -f .devops/openvino.Dockerfile .
-
-# Build the complete image with all binaries, Python tools, gguf-py library, and model conversion utilities.
-docker build --target=full -t llama-openvino:full -f .devops/openvino.Dockerfile .
-
-# Build a minimal CLI-only image containing just the llama-cli executable.
-docker build --target=light -t llama-openvino:light -f .devops/openvino.Dockerfile .
-
-# Builds a server-only image with llama-server executable, health check endpoint, and REST API support.
-docker build --target=server -t llama-openvino:server -f .devops/openvino.Dockerfile .
-
-# If you are behind a proxy:
-docker build --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_proxy --target=server -t llama-openvino:server -f .devops/openvino.Dockerfile .
-```
-
-Run llama.cpp with OpenVINO backend Docker container.
-Save sample models in `~/models` as [shown above](#3-download-sample-model). It will be mounted to the container in the examples below.
-
-
-```bash
-#  Run Docker container
-docker run --rm -it -v ~/models:/models llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
-
-# With Intel GPU access (iGPU or dGPU)
-docker run --rm -it -v ~/models:/models \
---device=/dev/dri --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
---env=GGML_OPENVINO_DEVICE=GPU --env=GGML_OPENVINO_STATEFUL_EXECUTION=1 \
-llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
-
-# With Intel NPU access
-docker run --rm -it -v ~/models:/models \
---device=/dev/accel --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
---env=GGML_OPENVINO_DEVICE=NPU \
-llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
-```
+This fork ships no Dockerfiles: `.devops/openvino.Dockerfile` is not in this tree (see
+[Docker](../build/docker.md)). Build from source as above.
 
 Run Llama.cpp Server with OpenVINO Backend.
 > [!NOTE]
 > `llama-server` with OpenVINO backend supports only one chat session/thread, when `GGML_OPENVINO_STATEFUL_EXECUTION=1` is enabled.
 
 ```bash
-# Run the llama-openvino:server Docker container (CPU)
-docker run --rm -it -p 8080:8080 -v ~/models:/models llama-openvino:server --no-warmup -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 1024 --host 0.0.0.0
-
-# Run the llama-openvino:server Docker container with Intel GPU access (iGPU or dGPU)
-docker run --rm -it -v ~/models:/models \
---device=/dev/dri --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
--p 8080:8080 --env=GGML_OPENVINO_DEVICE=GPU  \
-llama-openvino:server --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf --host 0.0.0.0
-
-# Run the llama-openvino:server Docker container with Intel NPU access
-docker run --rm -it -v ~/models:/models \
---device=/dev/accel --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
--p 8080:8080 --env=GGML_OPENVINO_DEVICE=NPU \
-llama-openvino:server --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf --host 0.0.0.0
-
-# Or Using llama-server executable
 ./build/ReleaseOV/bin/llama-server -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf --port 8080 -c 1024
 
 # Option 1: Open your browser to http://localhost:8080 to access the web UI for the llama.cpp server.
@@ -709,7 +666,7 @@ curl -X POST "http://localhost:8080/v1/chat/completions" -H "Content-Type: appli
 ## GGML OpenVINO Backend Runtime Configurations
 
 The OpenVINO backend can be configured using the following environment variables at runtime to control device selection, caching, debugging, and profiling behavior.
-Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `1`) to enable; unset, empty, `0`, negative, or non-numeric values are treated as disabled.
+Boolean flags are parsed with `atoi`: any **non-zero integer** (e.g. `1`) enables; unset, empty, `0`, or non-numeric values (parsed as 0) are treated as disabled. `GGML_OPENVINO_MANUAL_GQA_ATTN` is the exception and needs a positive value. Values are read once, at backend initialization.
 
 | Variable                          | Type      | Default    | Description                                                                                                 |
 |-----------------------------------|-----------|------------|-------------------------------------------------------------------------------------------------------------|
@@ -717,17 +674,18 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_CACHE_DIR`         | String    | `not set`  | Directory for OpenVINO's separate plugin cache. On NPU, this sets `NPUW_CACHE_DIR`. |
 | `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` | String | `not set` | Directory for standalone compiled blobs with weights. Dynamic CPU/GPU graphs can import matching blobs on later runs. |
 | `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY` | Boolean | `0` | Require an existing compiled blob and skip weight uploads and compilation. Requires Linux or Windows mmap loading and a full dynamic CPU/GPU graph on OpenVINO. |
-| `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for **NPU** prefill (NPU-only; ignored on CPU/GPU). Must be a positive integer; otherwise the default is used. |
+| `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for prefill on the static path (NPU, or `GGML_OPENVINO_FORCE_STATIC=1`); ignored otherwise. Must be a positive integer; otherwise the default is used. |
+| `GGML_OPENVINO_FORCE_STATIC`      | Boolean   | `0`        | Use the static (NPU-shape) compute path on any device, to test the static translation without NPU hardware. |
 | `GGML_OPENVINO_NPU_COMPILE_CONFIG` | String | `not set` | NPU-only compiler mode parameters forwarded to OpenVINO as `NPU_COMPILATION_MODE_PARAMS`, for example `optimization-level=3`. |
 | `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | Keep KV and supported recurrent caches inside the model. Single-slot CPU/GPU execution only.               |
 | `GGML_OPENVINO_DISABLE_CACHE`     | Boolean   | `0`        | Disable the in-process compiled-model / decoder cache (cache is on by default). Set to `1` to disable.      |
-| `GGML_OPENVINO_DISABLE_KV_SLICE`  | Boolean   | `0`        | Disable the KV-cache input-tensor slicing optimization (slicing is on by default on CPU/GPU). Set to `1` to disable. |
+| `GGML_OPENVINO_DISABLE_KV_SLICE`  | Boolean   | `0`        | Disable the KV-cache input-tensor slicing optimization (slicing is on by default for stateless, single-sequence runs on the dynamic path; sliding-window layers are never sliced). Set to `1` to disable. |
 | `GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT` | Boolean | `0`     | Disable the stateful KV-state sequence-axis relayout (relayout is on by default). It moves the KV state sequence axis from dim 1 to dim 2, so the GPU plugin can append new tokens in place instead of copying the whole state every token, and the reader side no longer transposes the whole accumulated state. Set to `1` to disable. |
-| `GGML_OPENVINO_MANUAL_GQA_ATTN`   | Boolean   | device-based | Tri-state. When **unset**, manual GQA attention is enabled by default on `GPU` and disabled on other devices. Set to a positive integer to force-enable, or `0` to force-disable. |
+| `GGML_OPENVINO_MANUAL_GQA_ATTN`   | Boolean   | device-based | Tri-state. When **unset**, manual GQA attention is enabled by default on `GPU` and disabled on other devices. Set to a positive integer to force-enable, or `0` to force-disable. Applies only to GQA attention in stateless mode. |
 | `GGML_OPENVINO_MEMORY_OPTIMIZE`   | Boolean   | `0`        | Umbrella switch for compile-time memory reductions. Enables `GGML_OPENVINO_REDUCE_COMPILE_MEM` and, on GPU, `GGML_OPENVINO_RELEASE_WEIGHTS` unless those fine-grained variables are explicitly set. |
 | `GGML_OPENVINO_REDUCE_COMPILE_MEM`| Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` | Reduce compile-time host memory use by streaming weight requantization and avoiding extra weight-node materialization where possible. Set explicitly to override the umbrella switch. |
 | `GGML_OPENVINO_RELEASE_WEIGHTS`   | Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` on GPU | GPU-only. Release host weight buffers after the compiled model cache can reuse the device/plugin copy. Requires stable graph shapes; dynamic workloads that need recompilation should leave this disabled. |
-| `GGML_OPENVINO_SPILL_DIR`         | String    | `not set`  | Directory for a disk-backed weight buffer. When set, the repacked weight buffer is mapped from an unlinked file on this path instead of anonymous memory, so its pages are reclaimable under memory pressure instead of staying pinned, cutting the load-time host memory peak. Must point at real storage; a tmpfs mount (e.g. `/tmp` on many systems) backs it with RAM and makes the peak worse. |
+| `GGML_OPENVINO_SPILL_DIR`         | String    | `not set`  | Directory for a disk-backed weight buffer. When set, the repacked weight buffer is mapped from an unlinked file on this path instead of anonymous memory, so its pages are reclaimable under memory pressure instead of staying pinned, cutting the load-time host memory peak. Must point at real storage; a tmpfs mount (e.g. `/tmp` on many systems) backs it with RAM and makes the peak worse. Ignored with a warning on Windows. |
 | `GGML_OPENVINO_REQUANT_KQUANT`    | String    | `not set`  | Requantize Q6_K/Q5_K weights (and matching MoE expert weights) to a 4-bit target instead of the default Q8_0_C, trading accuracy for less memory traffic. One of `q4_asym64` (Q6_K/Q5_K only, keeps a real zero point at group 64), `q4_asym64_all` (also requantizes Q4_K), `q4_sym128` (Q6_K/Q5_K only), `q4_sym128_all` (Q4_K too, drops its per-group zero point), or `native` (no requantization). |
 | `GGML_OPENVINO_PROFILING`         | Integer   | `0`        | `1` logs execution timing; `2` or higher also enables OpenVINO and OpenCL profiling.                        |
 | `GGML_OPENVINO_DEBUG_NODE`       | String    | `not set`  | Add the named graph nodes as compiled outputs for debugging. Separate multiple names with commas.          |
@@ -738,6 +696,9 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_DEBUG_OUTPUT`      | Boolean   | `0`        | Enable output debugging and print output tensor info.                                                       |
 | `GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS` | Boolean | `0` | Print tensor address map once.                                                                           |
 | `GGML_OPENVINO_LOG_UNSUPPORTED_OPS`| Boolean   | `0`        | Log warning messages with tensor details and rejection reasons for any ops not supported by the OpenVINO backend. Emits at `WARN` level (requires `--log-verbosity >= 2`, enabled by default). |
+| `GGML_OPENVINO_ENABLE_FALLBACK`   | Boolean   | `0`        | Enable split-graph detection; when off, graphs are never treated as split. |
+| `GGML_OPENVINO_LOG_SWA_LAYERS`    | Boolean   | `0`        | Log per-layer sliding-window extents at `WARN` level. |
+| `GGML_OPENVINO_NATIVE_SOFTPLUS`   | Boolean   | `0`        | Use OpenVINO's SoftPlus op instead of the decomposed form. |
 
 > [!NOTE]
 > - `GGML_OPENVINO_STATEFUL_EXECUTION` is an **Experimental** feature for managing caches internally inside the OpenVINO model on CPUs and GPUs. Use a single slot (`-np 1`). KV caches retain the append-based state layout and sequence-axis optimization. Qwen3.5 adds recurrent cache states in their GGML layouts. Qwen3.5 requires an unsplit graph with model caching enabled and no recurrent rollback. A prompt starting at position 0 resets all states. State save/restore, sequence rewind, context shift, and mid-sequence graph replacement are unsupported. Stateful execution is not effective on NPUs.

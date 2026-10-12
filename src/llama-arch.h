@@ -314,7 +314,6 @@ enum llm_kv {
     LLM_KV_ATTENTION_COMPRESS_RATIOS,
     LLM_KV_ATTENTION_SHARED_KV_LAYERS,
     LLM_KV_ATTENTION_RECURRENT_LAYERS,
-
     LLM_KV_HYPER_CONNECTION_COUNT,
     LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS,
     LLM_KV_HYPER_CONNECTION_EPSILON,
@@ -332,6 +331,9 @@ enum llm_kv {
     LLM_KV_PLE_IMAGE_TOKEN_ID,
 
     LLM_KV_HASH_LAYER_COUNT,
+
+
+
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_COUNT_SWA,
@@ -433,6 +435,7 @@ enum llm_kv {
     LLM_KV_DFLASH_SELECTOR_TOP_K,
     LLM_KV_NORM_BEFORE_RESIDUAL,
     LLM_KV_NORM_BEFORE_FC,
+    LLM_KV_DECODER_ARCH,
 
     LLM_KV_SHORTCONV_L_CACHE,
 
@@ -463,6 +466,7 @@ enum llm_kv {
     LLM_KV_DENSE_2_FEAT_OUT,
     LLM_KV_DENSE_3_FEAT_IN,
     LLM_KV_DENSE_3_FEAT_OUT,
+
 };
 
 enum llm_tensor {
@@ -680,6 +684,7 @@ enum llm_tensor {
     LLM_TENSOR_ENC_FFN_DOWN,
     LLM_TENSOR_ENC_FFN_UP,
     LLM_TENSOR_ENC_OUTPUT_NORM,
+    LLM_TENSOR_ENC_AUX_NORM,
     LLM_TENSOR_CLS,
     LLM_TENSOR_CLS_OUT,
     LLM_TENSOR_CLS_NORM,
@@ -728,6 +733,7 @@ enum llm_tensor {
     LLM_TENSOR_INDEXER_K_NORM,
     LLM_TENSOR_INDEXER_PROJ,
     LLM_TENSOR_INDEXER_ATTN_K,
+
     LLM_TENSOR_INDEXER_ATTN_Q_B,
     LLM_TENSOR_INDEXER_Q_PROJ,
     LLM_TENSOR_INDEXER_K_PROJ,
@@ -849,6 +855,7 @@ const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
 bool llm_arch_is_recurrent      (const llm_arch & arch);
 bool llm_arch_is_hybrid         (const llm_arch & arch);
 bool llm_arch_is_diffusion      (const llm_arch & arch);
+bool llm_arch_is_qwen           (const llm_arch & arch);
 bool llm_arch_supports_sm_tensor(const llm_arch & arch);
 bool llm_arch_supports_rs_rollback(const llm_arch & arch);
 bool llm_arch_supports_mixed_batch(const llm_arch & arch);

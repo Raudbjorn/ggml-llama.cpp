@@ -12,6 +12,133 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"
+#endif
+
+#ifdef GGML_USE_SYCL
+static enum ggml_status ggml_backend_maybe_consume_sycl_status(ggml_backend_t backend) {
+    if (backend == NULL || !ggml_backend_is_sycl(backend)) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    return ggml_backend_sycl_consume_last_status(backend);
+}
+#else
+static enum ggml_status ggml_backend_maybe_consume_sycl_status(ggml_backend_t backend) {
+    GGML_UNUSED(backend);
+    return GGML_STATUS_SUCCESS;
+}
+#endif
+
+static enum ggml_status ggml_backend_sched_maybe_consume_sycl_status(ggml_backend_sched_t sched) {
+    if (sched == NULL) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    const int n_backends = ggml_backend_sched_get_n_backends(sched);
+    enum ggml_status first_failure = GGML_STATUS_SUCCESS;
+    for (int i = 0; i < n_backends; ++i) {
+        // Consume every backend's sticky status, not just the first failing one -
+        // an early return here would leave later backends' pending error status
+        // uncleared and it would leak into the next request.
+        const enum ggml_status status =
+            ggml_backend_maybe_consume_sycl_status(ggml_backend_sched_get_backend(sched, i));
+        if (status != GGML_STATUS_SUCCESS && first_failure == GGML_STATUS_SUCCESS) {
+            first_failure = status;
+        }
+    }
+
+    return first_failure;
+}
+
+#include "ggml-backend-moe-cache.h"
+
+#include <algorithm>
+#include <mutex>
+#include <vector>
+
+// MoE expert cache providers, keyed by backend registration object. Multiple
+// backends (CUDA, Metal, Vulkan, HIP) can register; each scheduler picks the
+// provider that owns a device in its backend set.
+static std::mutex g_moe_cache_registry_mu;
+static std::vector<ggml_moe_cache_api> g_moe_cache_providers;
+
+void ggml_moe_cache_register(const ggml_moe_cache_api * api) {
+    if (!api || !api->owner || !api->session_create || !api->session_destroy ||
+        !api->session_enter || !api->session_leave) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_moe_cache_registry_mu);
+    for (ggml_moe_cache_api & existing : g_moe_cache_providers) {
+        if (existing.owner == api->owner) {
+            existing = *api; // refresh: a rebuilt library re-registers
+            return;
+        }
+    }
+    g_moe_cache_providers.push_back(*api);
+}
+
+void ggml_moe_cache_unregister(const void * owner) {
+    std::lock_guard<std::mutex> lock(g_moe_cache_registry_mu);
+    g_moe_cache_providers.erase(
+        std::remove_if(g_moe_cache_providers.begin(), g_moe_cache_providers.end(),
+            [owner](const ggml_moe_cache_api & api) { return api.owner == owner; }),
+        g_moe_cache_providers.end());
+}
+
+ggml_moe_cache_api ggml_moe_cache_get(const void * owner) {
+    std::lock_guard<std::mutex> lock(g_moe_cache_registry_mu);
+    for (const ggml_moe_cache_api & api : g_moe_cache_providers) {
+        if (api.owner == owner) {
+            return api;
+        }
+    }
+    return ggml_moe_cache_api{};
+}
+
+// The provider table the current thread is executing under. Set by the
+// scheduler scope while a graph with a cache session runs; the CPU backend
+// reads it to reach the session's provider callbacks.
+static thread_local ggml_moe_cache_api t_moe_cache_active;
+
+ggml_moe_cache_api ggml_moe_cache_active(void) {
+    if (t_moe_cache_active.owner) {
+        return t_moe_cache_active;
+    }
+    // Direct CPU users outside a scheduler scope fall back to the first
+    // registered provider.
+    std::lock_guard<std::mutex> lock(g_moe_cache_registry_mu);
+    for (const ggml_moe_cache_api & api : g_moe_cache_providers) {
+        if (api.session_create && api.session_destroy) {
+            return api;
+        }
+    }
+    return ggml_moe_cache_api{};
+}
+
+// Providers whose backend owns at least one device in the scheduler set, in
+// registration order. Returns copies: the scheduler keeps the selected copy
+// with its session so later registration changes cannot alter the callbacks.
+static std::vector<ggml_moe_cache_api> ggml_moe_cache_provider_candidates(
+        void * const * backends, int n_backends) {
+    std::lock_guard<std::mutex> lock(g_moe_cache_registry_mu);
+    std::vector<ggml_moe_cache_api> result;
+    for (const ggml_moe_cache_api & api : g_moe_cache_providers) {
+        if (!api.session_create || !api.session_destroy ||
+            !api.session_enter || !api.session_leave) {
+            continue;
+        }
+        for (int b = 0; b < n_backends; b++) {
+            ggml_backend_dev_t device = ggml_backend_get_device((ggml_backend_t) backends[b]);
+            if (device && (const void *) ggml_backend_dev_backend_reg(device) == api.owner) {
+                result.push_back(api);
+                break;
+            }
+        }
+    }
+    return result;
+}
 
 #include <assert.h>
 #include <limits.h>
@@ -21,6 +148,7 @@
 #include <string.h>
 #include <algorithm>
 #include <unordered_map>
+#include <mutex>
 #include <vector>
 
 #ifdef __APPLE__
@@ -203,7 +331,7 @@ size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const s
         GGML_ASSERT(size <= ggml_nbytes(tensor) ||
                     ggml_op_is_empty(tensor->op) ||
                     ggml_is_quantized(tensor->type) || // [TAG_ALLOC_SIZE_EXPAND]
-                    ggml_op_alloc_size_may_expand(tensor->op));
+                    ggml_backend_op_alloc_size_may_expand(tensor->op));
 
         return size;
     }
@@ -231,6 +359,26 @@ ggml_backend_dev_t ggml_backend_buft_get_device(ggml_backend_buffer_type_t buft)
     return buft->device;
 }
 
+static void ggml_backend_moe_cache_invalidate_buffer(
+        ggml_backend_buffer_t buffer, const void * address, size_t size) {
+    if (!buffer || !address || size == 0 ||
+        buffer->usage != GGML_BACKEND_BUFFER_USAGE_WEIGHTS ||
+        !ggml_backend_buffer_is_host(buffer)) {
+        return;
+    }
+    // Each registered provider invalidates its own sessions.
+    std::vector<ggml_moe_cache_api> providers;
+    {
+        std::lock_guard<std::mutex> lock(g_moe_cache_registry_mu);
+        providers = g_moe_cache_providers;
+    }
+    for (const ggml_moe_cache_api & api : providers) {
+        if (api.invalidate) {
+            api.invalidate(address, size);
+        }
+    }
+}
+
 // backend buffer
 
 ggml_backend_buffer_t ggml_backend_buffer_init(
@@ -256,6 +404,15 @@ const char * ggml_backend_buffer_name(ggml_backend_buffer_t buffer) {
 void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
     if (buffer == NULL) {
         return;
+    }
+
+    // Host weight buffers can back queued cache-fill jobs.
+    if (buffer->iface.get_base) {
+        void * base = ggml_backend_buffer_get_base(buffer);
+        if (base) {
+            ggml_backend_moe_cache_invalidate_buffer(
+                    buffer, base, ggml_backend_buffer_get_size(buffer));
+        }
     }
 
     if (buffer->iface.free_buffer != NULL) {
@@ -305,6 +462,10 @@ void ggml_backend_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
         return;
     }
 
+    if (buffer->iface.get_base) {
+        ggml_backend_moe_cache_invalidate_buffer(
+                buffer, ggml_backend_buffer_get_base(buffer), buffer->size);
+    }
     buffer->iface.clear(buffer, value);
 }
 
@@ -326,6 +487,10 @@ bool ggml_backend_buffer_is_host(ggml_backend_buffer_t buffer) {
 
 void ggml_backend_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {
     GGML_ASSERT(buffer);
+    if (usage != buffer->usage && buffer->iface.get_base) {
+        ggml_backend_moe_cache_invalidate_buffer(
+                buffer, ggml_backend_buffer_get_base(buffer), buffer->size);
+    }
     buffer->usage = usage;
 
     // FIXME: add a generic callback to the buffer interface
@@ -349,6 +514,10 @@ ggml_backend_buffer_type_t ggml_backend_buffer_get_type(ggml_backend_buffer_t bu
 void ggml_backend_buffer_reset(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(buffer);
     if (buffer->iface.reset) {
+        if (buffer->iface.get_base) {
+            ggml_backend_moe_cache_invalidate_buffer(
+                    buffer, ggml_backend_buffer_get_base(buffer), buffer->size);
+        }
         buffer->iface.reset(buffer);
     }
 }
@@ -356,6 +525,8 @@ void ggml_backend_buffer_reset(ggml_backend_buffer_t buffer) {
 bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst) {
     ggml_backend_buffer_t dst_buf = dst->view_src ? dst->view_src->buffer : dst->buffer;
     if (dst_buf->iface.cpy_tensor) {
+        ggml_backend_moe_cache_invalidate_buffer(
+                dst_buf, dst->data, ggml_nbytes(dst));
         return dst_buf->iface.cpy_tensor(dst_buf, src, dst);
     }
     return false;
@@ -412,6 +583,9 @@ void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * 
         ggml_backend_synchronize(backend);
         ggml_backend_tensor_set(tensor, data, offset, size);
     } else {
+        ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+        ggml_backend_moe_cache_invalidate_buffer(
+                buf, (const char *) tensor->data + offset, size);
         backend->iface.set_tensor_async(backend, tensor, data, offset, size);
     }
 }
@@ -448,6 +622,10 @@ void ggml_backend_tensor_set_2d_async(ggml_backend_t backend, struct ggml_tensor
 
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + (n_copies-1)*stride_tensor + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
+    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_moe_cache_invalidate_buffer(
+            buf, (const char *) tensor->data + offset,
+            (n_copies - 1)*stride_tensor + size);
     backend->iface.set_tensor_2d_async(backend, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
 }
 
@@ -484,6 +662,8 @@ void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, siz
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
+    ggml_backend_moe_cache_invalidate_buffer(
+            buf, (const char *) tensor->data + offset, size);
     buf->iface.set_tensor(buf, tensor, data, offset, size);
 }
 
@@ -521,6 +701,9 @@ void ggml_backend_tensor_set_2d(struct ggml_tensor * tensor, const void * data, 
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + (n_copies-1)*stride_tensor + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
+    ggml_backend_moe_cache_invalidate_buffer(
+            buf, (const char *) tensor->data + offset,
+            (n_copies - 1)*stride_tensor + size);
     buf->iface.set_tensor_2d(buf, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
 }
 
@@ -559,6 +742,8 @@ void ggml_backend_tensor_memset(struct ggml_tensor * tensor, uint8_t value, size
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
     GGML_ASSERT(buf->iface.memset_tensor != NULL && "memset not implemented by backend buffer");
 
+    ggml_backend_moe_cache_invalidate_buffer(
+            buf, (const char *) tensor->data + offset, size);
     buf->iface.memset_tensor(buf, tensor, value, offset, size);
 }
 
@@ -593,9 +778,10 @@ enum ggml_status ggml_backend_graph_plan_compute(ggml_backend_t backend, ggml_ba
 }
 
 enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
+    const enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
     ggml_backend_synchronize(backend);
-    return err;
+    const enum ggml_status sync_err = ggml_backend_maybe_consume_sycl_status(backend);
+    return err != GGML_STATUS_SUCCESS ? err : sync_err;
 }
 
 enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
@@ -632,9 +818,13 @@ void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor
         return;
     }
 
-    if (ggml_backend_buffer_is_host(src->buffer)) {
+    ggml_backend_buffer_t src_buf = src->view_src ? src->view_src->buffer : src->buffer;
+    ggml_backend_buffer_t dst_buf = dst->view_src ? dst->view_src->buffer : dst->buffer;
+    if (ggml_backend_buffer_is_host(src_buf)) {
         ggml_backend_tensor_set(dst, src->data, 0, ggml_nbytes(src));
-    } else if (ggml_backend_buffer_is_host(dst->buffer)) {
+    } else if (ggml_backend_buffer_is_host(dst_buf)) {
+        ggml_backend_moe_cache_invalidate_buffer(
+                dst_buf, dst->data, ggml_nbytes(dst));
         ggml_backend_tensor_get(src, dst->data, 0, ggml_nbytes(src));
     } else if (!ggml_backend_buffer_copy_tensor(src, dst)) {
 #ifndef NDEBUG
@@ -657,6 +847,9 @@ void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t b
 
     GGML_ASSERT(backend_dst);
     if (backend_dst->iface.cpy_tensor_async != NULL) {
+        ggml_backend_buffer_t dst_buf = dst->view_src ? dst->view_src->buffer : dst->buffer;
+        ggml_backend_moe_cache_invalidate_buffer(
+                dst_buf, dst->data, ggml_nbytes(dst));
         if (backend_dst->iface.cpy_tensor_async(backend_src, backend_dst, src, dst)) {
             return;
         }
@@ -912,6 +1105,10 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_COPIES 4
 #endif
 
+#ifndef GGML_SCHED_MAX_PREFETCH_SLOTS
+#define GGML_SCHED_MAX_PREFETCH_SLOTS 4
+#endif
+
 struct ggml_backend_sched_split {
     int backend_id;
     int i_start;
@@ -962,6 +1159,10 @@ struct ggml_backend_sched {
     int graph_inputs_capacity;
 
     struct ggml_context * ctx;
+    void * moe_cache_session;
+    // The provider table selected for this session. Copied at creation so a
+    // later registration change cannot alter the session's callbacks.
+    struct ggml_moe_cache_api moe_cache_api;
 
     ggml_backend_sched_eval_callback callback_eval;
     void * callback_eval_user_data;
@@ -971,6 +1172,44 @@ struct ggml_backend_sched {
 
     ggml_backend_sched_realloc_callback callback_realloc;
     void * callback_realloc_user_data;
+    // Stream-ordered split input copies (port of Andrei-Dr local-ai 0018/0020). A host-buffer
+    // input bound for a backend whose async work runs in issue order on one stream is uploaded
+    // with set_tensor_async and no host sync first. stream_ordered[b] caches the backend's
+    // "ggml_backend_async_is_stream_ordered" answer. Mutable host sources need an upload
+    // completion event, waited before host writes or graph return without draining later kernels.
+    bool     stream_ordered[GGML_SCHED_MAX_BACKENDS];
+    bool     pending_host_reads[GGML_SCHED_MAX_BACKENDS];
+    ggml_backend_event_t host_read_events[GGML_SCHED_MAX_BACKENDS];
+    uint64_t n_stream_ordered_copies;
+    uint64_t n_host_read_flushes_split;
+    uint64_t n_host_read_flushes_graph;
+
+    // mindcontrol-port of --prefetch-experts-slots: full-tensor lookahead prefetch of
+    // offloaded MUL_MAT_ID weights (MoE experts resident in CPU/host memory, i.e. ncmoe).
+    // While split[i] computes, a private-stream backend instance on the same device uploads
+    // split[i+1+LOOKAHEAD]'s weight tensor into rotating staging slots; the consuming
+    // split waits on the slot's ready event right before launch (per-split wait mode 1,
+    // the only mode that preserves tool_choice semantics). Staging cost = n_slots x
+    // max_expert_tensor; lazy-allocated at first fire, gracefully disabled on any failure.
+    bool prefetch_experts;
+    ggml_backend_t prefetch_backend;   // private-stream backend instance on the same device
+    ggml_backend_dev_t prefetch_dev;   // device prefetch_backend/slots/events were built for
+    int prefetch_n_slots;
+    int prefetch_lookahead;            // 1 = fire split i+2 while split i computes (measured-optimal)
+    int prefetch_wait_mode;            // 1 = per-split cross-stream wait; >=2 = one wait per graph (debug)
+    ggml_backend_buffer_t prefetch_slots[GGML_SCHED_MAX_PREFETCH_SLOTS];
+    ggml_backend_event_t  prefetch_ready[GGML_SCHED_MAX_PREFETCH_SLOTS];
+    ggml_backend_event_t  prefetch_free [GGML_SCHED_MAX_PREFETCH_SLOTS];
+    bool prefetch_used[GGML_SCHED_MAX_PREFETCH_SLOTS];
+    // high-water mark of real bytes ever staged in this slot; a later, smaller tensor
+    // reusing the slot needs everything past its own size re-zeroed up to this mark
+    size_t prefetch_slot_bytes[GGML_SCHED_MAX_PREFETCH_SLOTS];
+    // pinned host bounce per slot for mmap-backed (CPU_Mapped) sources: a driver copy straight
+    // from file-backed pages is staged on the host thread and measured ~3.4x slower than a
+    // memcpy into pinned memory followed by an async copy (see ggml_backend_sched_prefetch_stage)
+    ggml_backend_buffer_t prefetch_host[GGML_SCHED_MAX_PREFETCH_SLOTS];
+    bool prefetch_host_pending[GGML_SCHED_MAX_PREFETCH_SLOTS]; // an async copy may still read it
+    int prefetch_cur;
 
     char * context_buffer;
     size_t context_buffer_size;
@@ -1201,6 +1440,49 @@ static bool ggml_backend_sched_buffer_supported(ggml_backend_sched_t sched, stru
     }
 
     return buft != NULL && ggml_backend_supports_buft(sched->backends[backend_id], buft);
+}
+
+// An op that computes in place into a view of another tensor (SET_ROWS, CPY, SET, the
+// *_inplace variants) writes through that tensor's buffer. The scheduler copies inputs
+// across backends, never destinations, so such a node has to run on a backend that can
+// address the buffer its view source lives in. When the backend holding that buffer
+// declines the op, the fallback backend would dereference foreign memory during compute.
+// Refuse the graph here instead, at allocation time, before anything runs.
+static bool ggml_backend_sched_check_inplace_dst(ggml_backend_sched_t sched, const struct ggml_cgraph * graph) {
+    for (int i = 0; i < graph->n_nodes; i++) {
+        struct ggml_tensor * node = graph->nodes[i];
+        struct ggml_tensor * vsrc = node->view_src;
+        if (vsrc == NULL || ggml_is_view_op(node->op)) {
+            continue;
+        }
+        const int node_backend_id = tensor_backend_id(node);
+        const int vsrc_backend_id = tensor_backend_id(vsrc);
+        if (node_backend_id == -1 || (vsrc->buffer == NULL && vsrc_backend_id == -1)) {
+            // nothing known yet about where one side lives
+            continue;
+        }
+        if (ggml_backend_sched_buffer_supported(sched, vsrc, node_backend_id)) {
+            continue;
+        }
+
+        const char * holder = vsrc->buffer ? ggml_backend_buffer_name(vsrc->buffer)
+                                           : ggml_backend_name(sched->backends[vsrc_backend_id]);
+        GGML_LOG_ERROR("%s: node '%s' (%s) writes in place into '%s' held by %s but is assigned to %s, "
+                       "which cannot address that buffer; the scheduler copies inputs, not destinations\n",
+                       __func__, node->name, ggml_op_desc(node), vsrc->name, holder,
+                       ggml_backend_name(sched->backends[node_backend_id]));
+        if (vsrc_backend_id != -1 && !ggml_backend_supports_op(sched->backends[vsrc_backend_id], node)) {
+            GGML_LOG_ERROR("%s: %s does not support %s with src0 %s, src1 %s, dst %s: "
+                           "add that support or keep the op off this device\n",
+                           __func__, ggml_backend_name(sched->backends[vsrc_backend_id]), ggml_op_desc(node),
+                           node->src[0] ? ggml_type_name(node->src[0]->type) : "-",
+                           node->src[1] ? ggml_type_name(node->src[1]->type) : "-",
+                           ggml_type_name(node->type));
+        }
+        return false;
+    }
+
+    return true;
 }
 
 static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, struct ggml_tensor * node, int cur_backend_id, int * node_backend_id) {
@@ -1482,6 +1764,17 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                         int src_backend_id = tensor_backend_id(src);
                         if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
+                            need_new_split = true;
+                            break;
+                        }
+                    }
+                    // check if the split has too many inputs
+                    // FIXME: count the number of inputs instead of only checking when full
+                    if (split->n_inputs >= split->inputs_capacity) {
+                        const size_t id = hash_id(src);
+                        int src_backend_id = sched->hv_tensor_backend_ids[id];
+                        bool supported = ggml_backend_sched_buffer_supported(sched, src, cur_backend_id);
+                        if (src_backend_id != cur_backend_id && tensor_id_copy(id, cur_backend_id, 0) == NULL && !supported) {
                             need_new_split = true;
                             break;
                         }
@@ -1814,64 +2107,420 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
-static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
-    return t->buffer != NULL &&
-        ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
-        ggml_backend_buffer_is_host(t->buffer);
+// ---- mindcontrol-port prefetch helpers (--prefetch-experts-slots) ----
+static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void);
+
+// Waits for everything that may touch a prefetch slot: the last consumer kernels of every used
+// slot, through that slot's free event, and the private stream's own uploads. It deliberately
+// does not synchronize sched->backends: llama_context destroys its backends before the
+// scheduler, so they are dangling by the time ggml_backend_sched_free() gets here.
+static void ggml_backend_sched_prefetch_sync(ggml_backend_sched_t sched) {
+    if (sched->prefetch_backend == NULL) {
+        return;
+    }
+    for (int i = 0; i < GGML_SCHED_MAX_PREFETCH_SLOTS; i++) {
+        if (sched->prefetch_used[i] && sched->prefetch_free[i] != NULL) {
+            ggml_backend_event_synchronize(sched->prefetch_free[i]);
+        }
+    }
+    ggml_backend_synchronize(sched->prefetch_backend);
 }
 
-static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
-    const int split_backend_id = split->backend_id;
-    ggml_backend_t split_backend = sched->backends[split_backend_id];
-    ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, input);
-    struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+// Frees one slot's resources; the caller has synchronized. NULL-safe for entries never allocated.
+static void ggml_backend_sched_prefetch_free_slot(ggml_backend_sched_t sched, int i) {
+    ggml_backend_buffer_free(sched->prefetch_slots[i]);
+    sched->prefetch_slots[i] = NULL;
+    ggml_backend_buffer_free(sched->prefetch_host[i]);
+    sched->prefetch_host[i] = NULL;
+    ggml_backend_event_free(sched->prefetch_ready[i]);
+    sched->prefetch_ready[i] = NULL;
+    ggml_backend_event_free(sched->prefetch_free[i]);
+    sched->prefetch_free[i] = NULL;
+    sched->prefetch_used[i] = false;
+    sched->prefetch_host_pending[i] = false;
+    sched->prefetch_slot_bytes[i] = 0;
+}
 
-    if (input->flags & GGML_TENSOR_FLAG_INPUT) {
-        // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
-        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-        } else {
-            ggml_backend_synchronize(split_backend);
+// Frees every prefetch resource (slots, host bounces, events, the private-stream backend) and
+// resets the slot cursor. Walks every array entry rather than prefetch_n_slots, so entries left
+// behind by a lowered slot count are freed too. The feature stays configured; the next fire
+// rebuilds.
+static void ggml_backend_sched_prefetch_free(ggml_backend_sched_t sched) {
+    ggml_backend_sched_prefetch_sync(sched);
+    for (int i = 0; i < GGML_SCHED_MAX_PREFETCH_SLOTS; i++) {
+        ggml_backend_sched_prefetch_free_slot(sched, i);
+    }
+    ggml_backend_free(sched->prefetch_backend);
+    sched->prefetch_backend = NULL;
+    sched->prefetch_dev     = NULL;
+    sched->prefetch_cur     = 0;
+}
+
+// Full teardown that also turns the feature off for the rest of this scheduler's life.
+static void ggml_backend_sched_prefetch_disable(ggml_backend_sched_t sched) {
+    sched->prefetch_experts = false;
+    ggml_backend_sched_prefetch_free(sched);
+}
+
+// Largest slot needed for this graph's prefetchable weights, in the destination buffer type's
+// allocation size. *host_size receives the largest ggml_nbytes() among mmap-backed sources
+// (0 if none), which is what the pinned host bounce has to hold.
+static size_t ggml_backend_sched_prefetch_max_size(ggml_backend_sched_t sched, ggml_backend_buffer_type_t buft, size_t * host_size) {
+    size_t max_size = 0;
+    *host_size = 0;
+    for (int split_id = 0; split_id < sched->n_splits; split_id++) {
+        struct ggml_backend_sched_split * split = &sched->splits[split_id];
+        if (split->graph.n_nodes == 0 || split->graph.nodes[0]->op != GGML_OP_MUL_MAT_ID) {
+            continue;
         }
-        ggml_backend_tensor_copy(input, input_cpy);
-        return;
-    }
-
-    // wait for the split backend to finish using the input before overwriting it
-    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-        ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
-    } else {
-        ggml_backend_synchronize(split_backend);
-    }
-
-    if (sched->callback_copy != NULL && ggml_backend_sched_is_host_weight(input) &&
-        sched->callback_copy(split_backend, input, input_cpy, &split->graph, sched->callback_copy_user_data)) {
-        return;
-    }
-
-    // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
-    // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
-    if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-        ggml_backend_synchronize(input_backend);
-        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-        } else {
-            ggml_backend_synchronize(split_backend);
+        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+            const ggml_tensor * input = split->inputs[input_id];
+            if (input->buffer &&
+                ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                ggml_backend_buffer_is_host(input->buffer)) {
+                // buft-aware size: a quantized tensor's backend allocation can be larger
+                // than ggml_nbytes() to satisfy block/row alignment; undersizing the
+                // staging slot lets MUL_MAT_ID kernels read past the allocation.
+                max_size = std::max(max_size, ggml_backend_buft_get_alloc_size(buft, input));
+                if (input->buffer->buft == ggml_backend_cpu_buffer_from_ptr_type()) {
+                    *host_size = std::max(*host_size, ggml_nbytes(input));
+                }
+            }
         }
-        ggml_backend_tensor_copy(input, input_cpy);
     }
+    return max_size;
+}
+
+static bool ggml_backend_sched_prefetch_init(ggml_backend_sched_t sched, int backend_id, size_t size) {
+    ggml_backend_t split_backend = sched->backends[backend_id];
+    ggml_backend_dev_t dev = split_backend->device;
+
+    // Prefetch resources (the private-stream backend, its events, the staging buffers) are
+    // all tied to one device, and switching them to a second device mid-run is not safe: a
+    // still-pending lookahead entry primed for an earlier, not-yet-consumed split on the
+    // first device would be left holding a slot/event that tearing down for the switch just
+    // freed. Simplest correct rule: never switch devices within one scheduler run. A graph
+    // that alternates devices for its MUL_MAT_ID splits (mixed CPU/GPU via --n-cpu-moe, or
+    // multiple GPUs) only gets prefetch on whichever device claims it first; every other
+    // device falls back to the ordinary copy path.
+    if (sched->prefetch_backend != NULL && sched->prefetch_dev != dev) {
+        return false;
+    }
+
+    if (sched->prefetch_backend == NULL) {
+        // The upload only overlaps compute if it runs on a stream of its own. A plain second
+        // backend instance does not guarantee that (SYCL and Vulkan hand every instance on a
+        // device the same queue), and a serialized upload is a pure loss: a full-tensor copy
+        // instead of the routed-experts-only copy it replaces. So require a backend that can
+        // create a private-stream instance.
+        ggml_backend_dev_props props;
+        ggml_backend_dev_get_props(dev, &props);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        ggml_backend_init_private_stream_t init_private_stream = reg == NULL ? NULL :
+            (ggml_backend_init_private_stream_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_init_private_stream");
+        if (!props.caps.async || !props.caps.events || init_private_stream == NULL) {
+            GGML_LOG_WARN("%s: --prefetch-experts-slots disabled: %s cannot run the prefetch upload on its own stream\n",
+                          __func__, ggml_backend_dev_name(dev));
+            sched->prefetch_experts = false;
+            return false;
+        }
+        sched->prefetch_backend = init_private_stream(dev);
+        if (sched->prefetch_backend == NULL) {
+            GGML_LOG_WARN("%s: --prefetch-experts-slots disabled: no private stream on %s\n",
+                          __func__, ggml_backend_dev_name(dev));
+            sched->prefetch_experts = false;
+            return false;
+        }
+        sched->prefetch_dev = dev;
+        for (int i = 0; i < sched->prefetch_n_slots; i++) {
+            sched->prefetch_ready[i] = ggml_backend_event_new(dev);
+            sched->prefetch_free[i]  = ggml_backend_event_new(dev);
+            if (sched->prefetch_ready[i] == NULL || sched->prefetch_free[i] == NULL) {
+                ggml_backend_sched_prefetch_disable(sched);
+                return false;
+            }
+        }
+    }
+
+    // A slot stands in for the tensor copy the scheduler allocated from its own buffer type for
+    // this backend, so it must come from that buffer type, and the private-stream backend must
+    // be able to upload into it.
+    ggml_backend_buffer_type_t buft = sched->bufts[backend_id];
+    if (buft != ggml_backend_get_default_buffer_type(sched->prefetch_backend)) {
+        GGML_LOG_WARN("%s: --prefetch-experts-slots disabled: scheduler buffer type %s is not the default of %s\n",
+                      __func__, ggml_backend_buft_name(buft), ggml_backend_dev_name(dev));
+        ggml_backend_sched_prefetch_disable(sched);
+        return false;
+    }
+    size_t host_size = 0;
+    size = std::max(size, ggml_backend_sched_prefetch_max_size(sched, buft, &host_size));
+    ggml_backend_buffer_type_t host_buft = host_size > 0 ? ggml_backend_dev_host_buffer_type(dev) : NULL;
+
+    for (int i = 0; i < sched->prefetch_n_slots; i++) {
+        if (sched->prefetch_slots[i] == NULL || ggml_backend_buffer_get_size(sched->prefetch_slots[i]) < size) {
+            ggml_backend_buffer_t new_buf = ggml_backend_buft_alloc_buffer(buft, size);
+            if (new_buf == NULL) {
+                if (i >= 2 && sched->prefetch_slots[0] != NULL &&
+                    ggml_backend_buffer_get_size(sched->prefetch_slots[0]) >= size) {
+                    // keep the first i slots and free the rest now, rather than holding their
+                    // device memory under the pressure that just failed this allocation
+                    ggml_backend_sched_prefetch_sync(sched);
+                    for (int j = i; j < sched->prefetch_n_slots; j++) {
+                        ggml_backend_sched_prefetch_free_slot(sched, j);
+                    }
+                    sched->prefetch_n_slots = i;
+                    sched->prefetch_cur = 0;
+                    return true;
+                }
+                ggml_backend_sched_prefetch_disable(sched);
+                return false;
+            }
+            // Zero the whole slot once: covers the backend's own alignment padding past the
+            // largest tensor's real bytes (avoids NaNs, matching
+            // ggml_backend_buffer_init_tensor's convention for quantized types). Goes through
+            // the backend API rather than a host memset, since device-local memory is not
+            // host-dereferenceable. Stale bytes from a later smaller tensor reusing this slot
+            // are handled per-upload in ggml_backend_sched_prefetch_stage().
+            ggml_backend_buffer_clear(new_buf, 0);
+            if (sched->prefetch_slots[i] != NULL) {
+                ggml_backend_sched_prefetch_sync(sched);
+                ggml_backend_buffer_free(sched->prefetch_slots[i]);
+            }
+            sched->prefetch_slots[i] = new_buf;
+            sched->prefetch_used[i] = false;
+            sched->prefetch_slot_bytes[i] = 0;
+        }
+        // optional: a missing host buffer type or a failed allocation keeps the direct copy
+        if (host_buft != NULL &&
+            (sched->prefetch_host[i] == NULL || ggml_backend_buffer_get_size(sched->prefetch_host[i]) < host_size)) {
+            if (sched->prefetch_host[i] != NULL) {
+                ggml_backend_sched_prefetch_sync(sched);
+                ggml_backend_buffer_free(sched->prefetch_host[i]);
+                sched->prefetch_host_pending[i] = false;
+            }
+            sched->prefetch_host[i] = ggml_backend_buft_alloc_buffer(host_buft, host_size);
+        }
+    }
+    return true;
+}
+
+// Repoints input_cpy at the slot, re-zeroing any stale padding a smaller tensor would
+// otherwise inherit from a larger one that previously used this slot (the one-time clear in
+// ggml_backend_sched_prefetch_init() only covers the buffer's initial state), then fires the
+// async H2D upload and records its ready event. Shared by both prefetch call sites (lookahead
+// and inline) so they can't drift out of sync on this.
+static void ggml_backend_sched_prefetch_stage(
+        ggml_backend_sched_t sched, int slot, ggml_tensor * input, ggml_tensor * input_cpy) {
+    const size_t nbytes = ggml_nbytes(input);
+    if (nbytes < sched->prefetch_slot_bytes[slot]) {
+        // The caller's own event_wait() on prefetch_free[slot] is queue-side and returns on
+        // the host immediately; it does not mean the previous consumer's compute is actually
+        // done reading this slot yet. A host-side clear here needs a real host-blocking wait
+        // first, or it can race ahead and hand that still-running kernel zeros mid-read.
+        if (sched->prefetch_used[slot]) {
+            ggml_backend_event_synchronize(sched->prefetch_free[slot]);
+        }
+        ggml_backend_buffer_clear(sched->prefetch_slots[slot], 0);
+    }
+    // Either branch leaves everything past nbytes zero (never touched since the initial
+    // clear, or just re-cleared above), so nbytes - not a running max - is what the next
+    // upload needs to compare against; keeping a stale max would re-clear (and re-sync)
+    // every smaller upload after the first shrink for no reason.
+    sched->prefetch_slot_bytes[slot] = nbytes;
+
+    // An async copy straight from mmap-backed (file) pages is staged by the driver on this
+    // thread; on Arc A770 / SYCL that measured ~120 ms per 512 MiB against ~35 ms for a memcpy
+    // into pinned memory plus a ~0.02 ms async submit from there. Anonymous (--no-mmap) memory
+    // is left to the driver, which handled it faster than a memcpy (5-14 ms per 512 MiB).
+    const void * src = input->data;
+    ggml_backend_buffer_t host = sched->prefetch_host[slot];
+    if (host != NULL && input->buffer->buft == ggml_backend_cpu_buffer_from_ptr_type() &&
+        ggml_backend_buffer_get_size(host) >= nbytes) {
+        if (sched->prefetch_host_pending[slot]) {
+            // the previous async copy out of this bounce must finish before it is overwritten
+            ggml_backend_event_synchronize(sched->prefetch_ready[slot]);
+        }
+        memcpy(ggml_backend_buffer_get_base(host), input->data, nbytes);
+        src = ggml_backend_buffer_get_base(host);
+        sched->prefetch_host_pending[slot] = true;
+    }
+
+    input_cpy->buffer = sched->prefetch_slots[slot];
+    input_cpy->data   = ggml_backend_buffer_get_base(sched->prefetch_slots[slot]);
+    GGML_LOG_DEBUG("%s: staging %s (%zu bytes%s) into prefetch slot %d\n", __func__, input->name, nbytes,
+                   src != input->data ? ", via pinned bounce" : "", slot);
+    ggml_backend_tensor_set_async(sched->prefetch_backend, input_cpy, src, 0, nbytes);
+    ggml_backend_event_record(sched->prefetch_ready[slot], sched->prefetch_backend);
+}
+
+// Keep synchronous copies until real-model output equivalence is established.
+// Only literal GGML_SCHED_COPY_SYNC=0 opts in; unset/empty/other values keep sync.
+// Cached process-wide on first use; see docs/backend/SYCL.md#scheduler-input-copy-synchronization.
+static bool ggml_backend_sched_copy_sync_forced(void) {
+    static const bool forced = [] {
+        const char * env = getenv("GGML_SCHED_COPY_SYNC");
+        return env == nullptr || strcmp(env, "0") != 0;
+    }();
+    return forced;
+}
+
+// Synchronizes a scheduler backend and clears its pending host reads.
+static void ggml_backend_sched_synchronize_backend(ggml_backend_sched_t sched, ggml_backend_t backend) {
+    ggml_backend_synchronize(backend);
+    const int id = ggml_backend_sched_backend_id(sched, backend);
+    if (id >= 0) {
+        sched->pending_host_reads[id] = false;
+    }
+}
+
+// Wait only through each last mutable-source upload, leaving subsequent kernels in flight.
+static bool ggml_backend_sched_flush_host_reads(ggml_backend_sched_t sched) {
+    bool flushed = false;
+    for (int b = 0; b < sched->n_backends; b++) {
+        if (sched->pending_host_reads[b]) {
+            ggml_backend_event_synchronize(sched->host_read_events[b]);
+            sched->pending_host_reads[b] = false;
+            flushed = true;
+        }
+    }
+    return flushed;
 }
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
+    struct moe_cache_scope {
+        void * session;
+        void (*leave)(void *);
+        ggml_moe_cache_api previous_active;
+
+        explicit moe_cache_scope(void * session, void (*enter)(void *),
+                                 void (*leave_fn)(void *),
+                                 const ggml_moe_cache_api & active_api)
+            : session(session), leave(leave_fn), previous_active(t_moe_cache_active) {
+            t_moe_cache_active = active_api;
+            if (enter && leave) {
+                enter(session);
+            } else {
+                leave = nullptr;
+            }
+        }
+
+        ~moe_cache_scope() {
+            t_moe_cache_active = previous_active;
+            if (leave) {
+                leave(session);
+            }
+        }
+    } cache_scope(sched->moe_cache_session,
+                  sched->moe_cache_api.session_enter,
+                  sched->moe_cache_api.session_leave,
+                  sched->moe_cache_api);
+
+    ggml_tensor * prev_ids_tensor = nullptr;
+    std::vector<int32_t> ids;
+    std::vector<ggml_bitset_t> used_ids;
+
     int prev_backend_id = -1;
+
+    // mindcontrol-port of --prefetch-experts-slots. Lookahead depth (1) and cross-stream
+    // wait mode (1 = per-split, the only mode that preserves tool_choice semantics) are
+    // hardcoded to their measured-optimal safe values; the only user-visible knob is the
+    // slot count, set via ggml_backend_sched_set_prefetch_experts_slots(). LOOKAHEAD must
+    // stay < prefetch_n_slots. Modes 0 and 2 are internal-only debug values.
+    const int LOOKAHEAD = sched->prefetch_lookahead;
+    const int prefetch_wait_mode = sched->prefetch_wait_mode;
+    std::vector<int> pending_prefetch_slots;
+    ggml_backend_t last_prefetch_split_backend = NULL;
+
+    // Fire H2D for split[i+1+LOOKAHEAD] while split[i] computes, so by the consuming
+    // split's per-split wait the upload is already done and the wait is a no-op.
+    struct prefetch_pending {
+        int slot = -1;
+        ggml_tensor * input_cpy = NULL;
+        ggml_backend_buffer_t saved_buffer = NULL;
+        void * saved_data = NULL;
+    };
+    std::vector<prefetch_pending> lookahead(sched->n_splits);
+
+    auto try_fire_prefetch = [&](int target_id) {
+        if (target_id >= sched->n_splits) return;
+        if (!sched->prefetch_experts || sched->callback_eval || sched->callback_copy) return;
+        if (lookahead[target_id].slot != -1) return;
+        struct ggml_backend_sched_split * s = &splits[target_id];
+        if (s->graph.n_nodes == 0 || s->n_inputs == 0) return;
+        ggml_tensor * node = s->graph.nodes[0];
+        if (node->op != GGML_OP_MUL_MAT_ID) return;
+
+        ggml_tensor * input = NULL;
+        ggml_tensor * input_cpy = NULL;
+        for (int i = 0; i < s->n_inputs; i++) {
+            ggml_tensor * cand = s->inputs[i];
+            if (cand->flags & GGML_TENSOR_FLAG_INPUT) continue;
+            ggml_tensor * cand_cpy = tensor_copy(cand, s->backend_id, sched->cur_copy);
+            if (node->src[0] == cand_cpy) { input = cand; input_cpy = cand_cpy; break; }
+        }
+        if (!input || !input->buffer) return;
+        if (ggml_backend_buffer_get_usage(input->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS ||
+            !ggml_backend_buffer_is_host(input->buffer)) return;
+        const ggml_tensor * ids = node->src[2];
+        const int64_t n_expert = input->ne[2];
+        if (ids->ne[0]*ids->ne[1] < 2*n_expert) return;
+
+        // prefetch_init() declines (does not tear anything down) if this split's device
+        // differs from whichever device prefetch is already committed to for this run
+        if (!ggml_backend_sched_prefetch_init(sched, s->backend_id, ggml_nbytes(input))) return;
+
+        const int slot = sched->prefetch_cur;
+        sched->prefetch_cur = (sched->prefetch_cur + 1) % sched->prefetch_n_slots;
+        if (sched->prefetch_used[slot]) {
+            ggml_backend_event_wait(sched->prefetch_backend, sched->prefetch_free[slot]);
+        }
+        lookahead[target_id].slot = slot;
+        lookahead[target_id].input_cpy = input_cpy;
+        lookahead[target_id].saved_buffer = input_cpy->buffer;
+        lookahead[target_id].saved_data = input_cpy->data;
+        ggml_backend_sched_prefetch_stage(sched, slot, input, input_cpy);
+    };
+
+    // Prime the pipeline: fire prefetch for splits [0, LOOKAHEAD]
+    if (LOOKAHEAD > 0) {
+        for (int i = 0; i <= LOOKAHEAD && i < sched->n_splits; i++) {
+            try_fire_prefetch(i);
+        }
+    }
 
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+        // mindcontrol-port: per-split prefetch state, consumed when this split was the
+        // target of a lookahead fire
+        int split_prefetch_slot = -1;
+        ggml_tensor * prefetch_input_cpy = NULL;
+        ggml_backend_buffer_t prefetch_saved_buffer = NULL;
+        void * prefetch_saved_data = NULL;
+        int lookahead_input_id = -1;
+        if (lookahead[split_id].slot != -1) {
+            split_prefetch_slot   = lookahead[split_id].slot;
+            prefetch_input_cpy    = lookahead[split_id].input_cpy;
+            prefetch_saved_buffer = lookahead[split_id].saved_buffer;
+            prefetch_saved_data   = lookahead[split_id].saved_data;
+            for (int i = 0; i < split->n_inputs; i++) {
+                if (tensor_copy(split->inputs[i], split_backend_id, sched->cur_copy) == prefetch_input_cpy) {
+                    lookahead_input_id = i;
+                    break;
+                }
+            }
+        }
+
+        // A host split writes host memory, starting with its own input copies, and that memory
+        // may be the source of a stream-ordered upload another backend has not executed yet.
+        if (ggml_backend_buft_is_host(sched->bufts[split_backend_id]) && ggml_backend_sched_flush_host_reads(sched)) {
+            sched->n_host_read_flushes_split++;
+        }
 
         // ensure the previous split's async work has completed before we start
         // this split, the allocator may have reused buffer regions across splits
@@ -1879,27 +2528,262 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
             } else {
-                ggml_backend_synchronize(sched->backends[prev_backend_id]);
+                ggml_backend_sched_synchronize_backend(sched, sched->backends[prev_backend_id]);
             }
         }
 
         // copy the input tensors to the split backend
         // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
-        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-            if (!ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
-                ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
-            }
-        }
-        for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-            if (ggml_backend_sched_is_host_weight(split->inputs[input_id])) {
-                ggml_backend_sched_copy_input(sched, split, split->inputs[input_id]);
+        for (int weight_pass = 0; weight_pass < 2; ++weight_pass) {
+            for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+                const ggml_tensor * candidate = split->inputs[input_id];
+                const bool host_weight = candidate->buffer &&
+                    ggml_backend_buffer_get_usage(candidate->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                    ggml_backend_buffer_is_host(candidate->buffer);
+                if (host_weight != (weight_pass == 1)) {
+                    continue;
+                }
+                if (input_id == lookahead_input_id) continue; // H2D already fired via lookahead
+                ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
+                struct ggml_tensor * input = split->inputs[input_id];
+                struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+
+                if (input->flags & GGML_TENSOR_FLAG_INPUT) {
+                    // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
+                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                        ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                    } else {
+                        ggml_backend_sched_synchronize_backend(sched, split_backend);
+                    }
+                    ggml_backend_tensor_copy(input, input_cpy);
+                } else {
+                    // Stream-ordered uploads need no destination wait in a single-copy scheduler.
+                    // Parallel schedulers can lack events too; GGML_SCHED_COPY_SYNC=1 restores the wait.
+                    const bool stream_ordered = sched->n_copies == 1 &&
+                        sched->stream_ordered[split_backend_id] &&
+                        sched->events[split_backend_id][sched->cur_copy] == NULL &&
+                        !ggml_backend_sched_copy_sync_forced() && input->buffer != NULL &&
+                        ggml_backend_buffer_is_host(input->buffer) &&
+                        // Preserve the backend's blocking-copy staging for potentially mapped memory.
+                        input->buffer->buft != ggml_backend_cpu_buffer_from_ptr_type() &&
+                        (ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS ||
+                         sched->host_read_events[split_backend_id] != NULL) &&
+                        split_backend->iface.set_tensor_async != NULL;
+
+                    // wait for the split backend to finish using the input before overwriting it
+                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                        ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
+                    } else if (!stream_ordered) {
+                        ggml_backend_sched_synchronize_backend(sched, split_backend);
+                    }
+
+                    if (sched->callback_copy != NULL && host_weight &&
+                        sched->callback_copy(split_backend, input, input_cpy, &split->graph, sched->callback_copy_user_data)) {
+                        continue;
+                    }
+
+                    // mindcontrol-port: full-tensor prefetch for MoE expert weights in large batches.
+                    // Only when NOT already handled by a lookahead fire for this split, and never in
+                    // callback_eval mode. With large batches virtually every expert is used, so the
+                    // routing ids are not worth waiting for; uploads run through a private-stream
+                    // backend instance on the same device so they overlap compute, rotating through
+                    // the staging slots.
+                    if (sched->prefetch_experts && !sched->callback_eval && split_prefetch_slot == -1 && split->graph.n_nodes > 0) {
+                        ggml_tensor * node = split->graph.nodes[0];
+                        if (input->buffer &&
+                            ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                            ggml_backend_buffer_is_host(input->buffer) &&
+                            node->op == GGML_OP_MUL_MAT_ID && node->src[0] == input_cpy) {
+                            const ggml_tensor * ids = node->src[2];
+                            const int64_t n_expert = input->ne[2];
+                            if (ids->ne[0]*ids->ne[1] >= 2*n_expert &&
+                                ggml_backend_sched_prefetch_init(sched, split_backend_id, ggml_nbytes(input))) {
+                                const int slot = sched->prefetch_cur;
+                                sched->prefetch_cur = (sched->prefetch_cur + 1) % sched->prefetch_n_slots;
+                                // wait for the previous user of this slot to finish computing
+                                if (sched->prefetch_used[slot]) {
+                                    ggml_backend_event_wait(sched->prefetch_backend, sched->prefetch_free[slot]);
+                                }
+                                // point the staging copy at the slot only for the duration of
+                                // this split, so a fallback to the regular path on a later
+                                // eval can never see a dangling slot pointer
+                                prefetch_input_cpy    = input_cpy;
+                                prefetch_saved_buffer = input_cpy->buffer;
+                                prefetch_saved_data   = input_cpy->data;
+                                ggml_backend_sched_prefetch_stage(sched, slot, input, input_cpy);
+                                // NOTE: no event_wait here - prefetch runs on separate stream and
+                                // overlaps with compute. The consumer side has its own event
+                                // synchronization right before graph launch to ensure data is ready.
+                                split_prefetch_slot = slot;
+                                continue;
+                            }
+                        }
+                    }
+
+                    // when offloading MoE weights, we can reduce the amount of data copied by copying only the experts that are used
+                    ggml_tensor * node = split->graph.nodes[0];
+                    if (split->graph.n_nodes > 0 &&
+                        ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                        ggml_backend_buffer_is_host(input->buffer) && (
+                        (node->src[0] == input_cpy && node->op == GGML_OP_MUL_MAT_ID)
+                        //|| (node->src[1] == input_cpy && node->op == GGML_OP_ADD_ID) /* GGML_OP_ADD_ID weights are small and not worth splitting */
+                        )) {
+
+                        const int64_t n_expert   = node->op == GGML_OP_MUL_MAT_ID ? input->ne[2] : input->ne[1];
+                        const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
+
+                        ggml_backend_sched_synchronize_backend(sched, input_backend);
+
+                        // get the ids
+                        ggml_tensor * ids_tensor = node->src[2];
+                        ggml_backend_t ids_backend = split_backend;
+
+                        if (ggml_nelements(ids_tensor) == 0) {
+                            continue;
+                        }
+
+                        // if the ids tensor is also an input of the split, it may not have been copied yet to the split backend
+                        // in that case, we use the original ids tensor
+                        for (int i = input_id + 1; i < split->n_inputs; i++) {
+                            if (ids_tensor == tensor_copy(split->inputs[i], split_backend_id, sched->cur_copy)) {
+                                ids_tensor = split->inputs[i];
+                                ids_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[i]);
+                                break;
+                            }
+                        }
+
+                        if (ids_tensor != prev_ids_tensor) {
+                            ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
+                            ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
+                            ggml_backend_sched_synchronize_backend(sched, ids_backend);
+
+                            // find the used experts; an id of -1 marks a skipped slot (see ggml_mul_mat_id)
+                            used_ids.clear();
+                            used_ids.resize(ggml_bitset_size(n_expert));
+                            for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
+                                for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
+                                    int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
+                                    GGML_ASSERT(id >= -1 && id < n_expert);
+                                    if (id == -1) {
+                                        continue;
+                                    }
+                                    ggml_bitset_set(used_ids.data(), id);
+                                }
+                            }
+
+                            prev_ids_tensor = ids_tensor;
+                        }
+
+                        // group consecutive experts and copy them together
+                        auto copy_experts = [&](int32_t first_id, int32_t last_id) {
+                            const size_t expert_offset = first_id * expert_size;
+                            const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
+                            const size_t padding = std::min<size_t>(expert_size, 512);
+                            const size_t padding_end = last_id < n_expert - 1 ? padding : 0;
+
+                            ggml_backend_tensor_set_async(split_backend,
+                                input_cpy,
+                                (const uint8_t *)input->data + expert_offset, expert_offset,
+                                // copy a bit extra at the to ensure there are no NaNs in the padding of the last expert
+                                // this is necessary for MMQ in the CUDA backend
+                                expert_size_copy + padding_end);
+                        };
+
+                        // every slot skipped: no expert is read, nothing to copy
+                        int id = 0;
+                        while (id < n_expert && !ggml_bitset_get(used_ids.data(), id)) {
+                            id++;
+                        }
+                        if (id == n_expert) {
+                            continue;
+                        }
+                        int32_t first_id = id;
+                        int32_t last_id = first_id;
+
+                        for (++id; id < n_expert; ++id) {
+                            if (!ggml_bitset_get(used_ids.data(), id)) {
+                                continue;
+                            }
+
+                            if (id == last_id + 1) {
+                                last_id = id;
+                                continue;
+                            }
+
+                            copy_experts(first_id, last_id);
+
+                            first_id = id;
+                            last_id = id;
+                        }
+                        copy_experts(first_id, last_id);
+                    } else if (stream_ordered) {
+                        ggml_backend_sched_synchronize_backend(sched, input_backend);
+                        ggml_backend_tensor_set_async(split_backend, input_cpy, input->data, 0, ggml_nbytes(input));
+                        sched->n_stream_ordered_copies++;
+                        // the device reads input->data when the copy executes; a compute-buffer
+                        // intermediate can be overwritten by the host before then, weights cannot
+                        if (ggml_backend_buffer_get_usage(input->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                            ggml_backend_event_record(sched->host_read_events[split_backend_id], split_backend);
+                            sched->pending_host_reads[split_backend_id] = true;
+                        }
+                    } else {
+                        // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
+                        // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
+                        if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                            ggml_backend_sched_synchronize_backend(sched, input_backend);
+                            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                                ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                            } else {
+                                ggml_backend_synchronize(split_backend);
+                            }
+                            ggml_backend_tensor_copy(input, input_cpy);
+                        }
+                    }
+                }
             }
         }
 
         if (!sched->callback_eval) {
+            // Cross-stream sync for a lookahead/inline-prefetched weight: wait until the
+            // H2D on the prefetch backend has completed before launching compute (mode 1).
+            if (split_prefetch_slot != -1) {
+                if (prefetch_wait_mode == 1) {
+                    ggml_backend_event_wait(split_backend, sched->prefetch_ready[split_prefetch_slot]);
+                } else if (prefetch_wait_mode >= 2) {
+                    pending_prefetch_slots.push_back(split_prefetch_slot);
+                    last_prefetch_split_backend = split_backend;
+                }
+            }
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
+            if (split_prefetch_slot != -1) {
+                // the kernels have captured the slot address at launch, safe to restore
+                ggml_backend_event_record(sched->prefetch_free[split_prefetch_slot], split_backend);
+                sched->prefetch_used[split_prefetch_slot] = true;
+                prefetch_input_cpy->buffer = prefetch_saved_buffer;
+                prefetch_input_cpy->data   = prefetch_saved_data;
+            }
             if (ec != GGML_STATUS_SUCCESS) {
+                // don't fire more prefetch work on top of a failure, and undo every
+                // lookahead that primed a tensor for a split we're not going to reach:
+                // its buffer/data still point at a staging slot, and the caller may
+                // retry using the same graph/tensors expecting the allocator's own
+                // buffer back.
+                for (int i = split_id + 1; i < sched->n_splits; i++) {
+                    if (lookahead[i].slot != -1 && lookahead[i].input_cpy != NULL) {
+                        lookahead[i].input_cpy->buffer = lookahead[i].saved_buffer;
+                        lookahead[i].input_cpy->data   = lookahead[i].saved_data;
+                        lookahead[i].slot = -1;
+                    }
+                }
+                if (sched->prefetch_backend) {
+                    ggml_backend_synchronize(sched->prefetch_backend);
+                }
                 return ec;
+            }
+            // fire lookahead prefetch for a future split so the H2D overlaps this split's
+            // compute (LOOKAHEAD=0: skip - prefetch fires inline per split instead)
+            if (LOOKAHEAD > 0) {
+                try_fire_prefetch(split_id + 1 + LOOKAHEAD);
             }
         } else {
             // similar to ggml_backend_compare_graph_backend
@@ -1943,6 +2827,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         prev_backend_id = split_backend_id;
     }
 
+    // End-of-graph prefetch sync (wait_mode >= 2, debug): one wait per graph instead of
+    // one per split. Only the last MoE split's output actually needs syncing.
+    if (prefetch_wait_mode >= 2 && !pending_prefetch_slots.empty() && last_prefetch_split_backend) {
+        for (int slot : pending_prefetch_slots) {
+            ggml_backend_event_wait(last_prefetch_split_backend, sched->prefetch_ready[slot]);
+        }
+    }
+
     return GGML_STATUS_SUCCESS;
 }
 
@@ -1971,6 +2863,14 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->n_backends = n_backends;
     sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
+
+    // mindcontrol-port: full-tensor MoE expert prefetch. Default off; enabled via
+    // --prefetch-experts-slots, which calls ggml_backend_sched_set_prefetch_experts_slots().
+    sched->prefetch_experts   = false;
+    sched->prefetch_lookahead = 0;
+    sched->prefetch_wait_mode = 0;
+    sched->prefetch_n_slots   = 2;
+    sched->prefetch_cur       = 0;
 
     // initialize hash table
     // FIXME: needs to be size*2 to account for leafs (do it in graph_split instead)
@@ -2003,9 +2903,39 @@ ggml_backend_sched_t ggml_backend_sched_new(
         sched->bufts[b] = bufts ? bufts[b] : ggml_backend_get_default_buffer_type(backends[b]);
         GGML_ASSERT(ggml_backend_supports_buft(backends[b], sched->bufts[b]));
 
+        ggml_backend_dev_t dev = ggml_backend_get_device(backends[b]);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : NULL;
+        ggml_backend_async_is_stream_ordered_t is_stream_ordered = reg == NULL ? NULL :
+            (ggml_backend_async_is_stream_ordered_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_async_is_stream_ordered");
+        // tensor copies are allocated from bufts[b]; backends only take set_tensor_async into their
+        // default buffer type (SYCL asserts on anything else)
+        sched->stream_ordered[b] = is_stream_ordered != NULL && is_stream_ordered(dev) &&
+            sched->bufts[b] == ggml_backend_get_default_buffer_type(backends[b]);
+
+        if (!ggml_backend_sched_copy_sync_forced() && sched->n_copies == 1 && sched->stream_ordered[b] &&
+            backends[b]->iface.event_record && dev->iface.event_synchronize && dev->iface.event_free) {
+            sched->host_read_events[b] = ggml_backend_event_new(dev);
+        }
+
         if (sched->n_copies > 1) {
             for (int c = 0; c < sched->n_copies; c++) {
                 sched->events[b][c] = ggml_backend_event_new(backends[b]->device);
+            }
+        }
+    }
+
+    {
+        void * cache_backends[GGML_SCHED_MAX_BACKENDS];
+        for (int b = 0; b < n_backends; b++) {
+            cache_backends[b] = backends[b];
+        }
+        for (const ggml_moe_cache_api & api :
+                ggml_moe_cache_provider_candidates(cache_backends, n_backends)) {
+            void * session = api.session_create(cache_backends, n_backends, nullptr);
+            if (session) {
+                sched->moe_cache_session = session;
+                sched->moe_cache_api = api;
+                break;
             }
         }
     }
@@ -2018,15 +2948,102 @@ ggml_backend_sched_t ggml_backend_sched_new(
     return sched;
 }
 
+void ggml_backend_sched_set_moe_cache(
+        ggml_backend_sched_t sched, enum ggml_moe_cache_mode mode, size_t budget_mib) {
+    GGML_ASSERT(sched);
+    if (mode == GGML_MOE_CACHE_MODE_UNSPECIFIED) {
+        return;
+    }
+
+    if (sched->moe_cache_session && sched->moe_cache_api.session_destroy) {
+        sched->moe_cache_api.session_destroy(sched->moe_cache_session);
+    }
+    sched->moe_cache_session = nullptr;
+    sched->moe_cache_api = ggml_moe_cache_api{};
+    if (mode == GGML_MOE_CACHE_MODE_OFF) {
+        return;
+    }
+
+    void * cache_backends[GGML_SCHED_MAX_BACKENDS];
+    for (int index = 0; index < sched->n_backends; index++) {
+        cache_backends[index] = sched->backends[index];
+    }
+
+    // Probe the providers against this scheduler's backend set and pick the
+    // first one that can create a session, retrying another provider when
+    // session_create returns null.
+    const int automatic = mode == GGML_MOE_CACHE_MODE_AUTO ? 1 : 0;
+    bool provider_tried = false;
+    for (const ggml_moe_cache_api & api :
+            ggml_moe_cache_provider_candidates(cache_backends, sched->n_backends)) {
+        ggml_moe_cache_config config = {};
+        if (!api.query_config || !api.query_config(automatic, budget_mib, &config)) {
+            continue;
+        }
+        provider_tried = true;
+        void * session = api.session_create(cache_backends, sched->n_backends, &config);
+        if (session) {
+            sched->moe_cache_session = session;
+            sched->moe_cache_api = api;
+            break;
+        }
+    }
+    if (provider_tried && !sched->moe_cache_session) {
+        GGML_LOG_INFO("[moe-cache] session creation failed: all candidate providers returned null\n");
+    }
+}
+
+void ggml_backend_sched_set_prefetch_experts_slots(ggml_backend_sched_t sched, int slots) {
+    if (sched == NULL) { return; }
+    if (slots > GGML_SCHED_MAX_PREFETCH_SLOTS) { slots = GGML_SCHED_MAX_PREFETCH_SLOTS; }
+    // 0 (off) and 1 (cannot pipeline) both mean disabled
+    const int new_n_slots = slots < 2 ? 0 : slots;
+
+    // Normal llama.cpp usage sets this once right after ggml_backend_sched_new, but it is an
+    // exported API an embedder can call again, possibly right after an async graph compute.
+    // Disabling, or changing the slot count, tears everything down (waiting first for the last
+    // kernels that read each slot and for in-flight uploads) and lets the next fire rebuild for the new
+    // count, so no stale slot, event or cursor survives a reconfiguration.
+    if (sched->prefetch_backend != NULL && new_n_slots != sched->prefetch_n_slots) {
+        ggml_backend_sched_prefetch_free(sched);
+    }
+    sched->prefetch_cur = 0;
+
+    if (new_n_slots == 0) {
+        sched->prefetch_experts   = false;
+        sched->prefetch_lookahead = 0;
+        sched->prefetch_wait_mode = 0;
+        return;
+    }
+    sched->prefetch_experts   = true;
+    sched->prefetch_n_slots   = new_n_slots;
+    sched->prefetch_lookahead = 1; // measured-optimal (mindcontrol prefetch-wait A/B verdict)
+    sched->prefetch_wait_mode = 1; // per-split wait: only mode that preserves tool_calls
+}
+
 void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     if (sched == NULL) {
         return;
     }
+    if (sched->moe_cache_session && sched->moe_cache_api.session_destroy) {
+        sched->moe_cache_api.session_destroy(sched->moe_cache_session);
+        sched->moe_cache_session = NULL;
+    }
     for (int b = 0; b < sched->n_backends; b++) {
+        ggml_backend_event_free(sched->host_read_events[b]);
         for (int c = 0; c < sched->n_copies; c++) {
             ggml_backend_event_free(sched->events[b][c]);
         }
     }
+    if (sched->n_stream_ordered_copies > 0) {
+        GGML_LOG_DEBUG("%s: stream-ordered input copies: %llu, host-read flushes: %llu at a host split, %llu at graph end\n",
+                       __func__, (unsigned long long) sched->n_stream_ordered_copies,
+                       (unsigned long long) sched->n_host_read_flushes_split,
+                       (unsigned long long) sched->n_host_read_flushes_graph);
+    }
+    // uploads may still be in flight on the private stream and kernels may still read a slot;
+    // the teardown synchronizes both before freeing
+    ggml_backend_sched_prefetch_free(sched);
     ggml_gallocr_free(sched->galloc);
     ggml_free(sched->ctx);
     ggml_hash_set_free(&sched->hash_set);
@@ -2081,6 +3098,10 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
 
     ggml_backend_sched_split_graph(sched, measure_graph);
 
+    if (!ggml_backend_sched_check_inplace_dst(sched, measure_graph)) {
+        return false;
+    }
+
     if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
         return false;
     }
@@ -2100,6 +3121,10 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
     ggml_backend_sched_split_graph(sched, graph);
 
+    if (!ggml_backend_sched_check_inplace_dst(sched, graph)) {
+        return false;
+    }
+
     if (!ggml_backend_sched_alloc_splits(sched)) {
         return false;
     }
@@ -2110,9 +3135,10 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
 }
 
 enum ggml_status ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
-    enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
+    const enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
     ggml_backend_sched_synchronize(sched);
-    return err;
+    const enum ggml_status sync_err = ggml_backend_sched_maybe_consume_sycl_status(sched);
+    return err != GGML_STATUS_SUCCESS ? err : sync_err;
 }
 
 enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
@@ -2127,13 +3153,20 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
         }
     }
 
-    return ggml_backend_sched_compute_splits(sched);
+    const enum ggml_status status = ggml_backend_sched_compute_splits(sched);
+    // on every exit, before the caller writes the next graph's inputs: an input's memory can be
+    // reused by an intermediate that a stream-ordered upload is still reading
+    if (ggml_backend_sched_flush_host_reads(sched)) {
+        sched->n_host_read_flushes_graph++;
+    }
+    return status;
 }
 
 void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     for (int i = 0; i < sched->n_backends; i++) {
         ggml_backend_synchronize(sched->backends[i]);
+        sched->pending_host_reads[i] = false;
     }
     if (!sched->is_alloc) {
         // if the graph is not already allocated, always use copy 0 after a synchronization
@@ -2218,7 +3251,10 @@ ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched,
 
 // utils
 
-bool ggml_op_alloc_size_may_expand(enum ggml_op op) {
+// [TAG_ALLOC_SIZE_EXPAND]
+// returns true for ops that may require additional memory for fleeting data on some backends,
+// i.e. the backend's get_alloc_size may return more than ggml_nbytes for the output tensor
+bool ggml_backend_op_alloc_size_may_expand(enum ggml_op op) {
     switch (op) {
         case GGML_OP_FLASH_ATTN_EXT:
         case GGML_OP_MUL_MAT:

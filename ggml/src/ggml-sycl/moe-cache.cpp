@@ -1,0 +1,1310 @@
+// SYCL MoE Expert Cache.
+//
+// Keeps the hottest CPU-resident MoE expert weights resident in VRAM so
+// decode-time expert matvecs run on the GPU instead of the CPU path.
+//
+// This implements the ggml_moe_cache_api contract (see
+// ggml-backend-moe-cache.h), following the same v1 shape as
+// ggml-vulkan-moe-cache.cpp: the scheduler owns one cache session; the CPU
+// MUL_MAT_ID path calls begin/plan/dispatch/collect/end per node.
+//
+// v1 notes:
+//   - synchronous fills (no worker thread), same limitation as the Vulkan
+//     provider; a background uploader is a natural v2 (moe-cache-common.h's
+//     moe_cache_device already carries the queue/worker/inflight fields for
+//     it, unused here)
+//   - fills per plan are bounded by inserts_per_plan (and queue_mb)
+//   - one pool per (expert_size, wtype), allocated lazily in begin()
+//   - slabs and scratch buffers are plain USM device allocations
+//     (sycl::malloc_device); unlike Vulkan, SYCL needs no staging buffer or
+//     UMA/discrete distinction - queue::memcpy handles host<->device
+//     directly regardless of device topology
+//   - dispatch reuses the existing ggml_sycl_mul_mat_vec_q_id() kernel
+//     dispatcher (mmvq.cpp): the slab is addressed exactly like the stacked
+//     expert-weight buffer that function already expects, with slot indices
+//     standing in for expert ids and expert_size as the inter-expert stride
+//   - fused SwiGLU returns NULL (stock CPU path handles the node)
+//
+// Register by calling ggml_sycl_moe_cache_register() from
+// ggml_backend_sycl_reg() after the backend reg struct is set up.
+
+#include "ggml-sycl.h"
+
+#include "common.hpp"
+#include "mem.hpp"
+#include "mmvq.hpp"
+#include "ggml-backend-impl.h"
+#include "ggml-backend.h"
+#include "ggml-impl.h"
+#include "ggml.h"
+#include "../ggml-moe-cache-common.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <mutex>
+#include <unordered_set>
+#include <vector>
+
+// Thread-local session stack (owned by this backend; independent of other backends').
+static thread_local std::vector<moe_cache_scope_frame> g_session_stack;
+static thread_local int g_session_suppressed = 0;
+
+// Global session registry for invalidate()/teardown paths.
+static std::mutex g_registry_mu;
+static std::unordered_set<moe_cache_session *> g_sessions;
+// Live-session count, so invalidate() can bail before taking g_registry_mu.
+static std::atomic<size_t> g_session_count{0};
+
+// Backend registration object this provider was registered under.
+static const void * g_moe_cache_owner = nullptr;
+
+// ---------------------------------------------------------------------------
+// SYCL device extension
+// ---------------------------------------------------------------------------
+
+struct moe_cache_sycl_device : public moe_cache_device {
+    moe_cache_sycl_device(int logical, int physical)
+        : moe_cache_device(logical, physical) {}
+
+    ~moe_cache_sycl_device() { free_resources(); }
+
+    queue_ptr stream = nullptr;
+
+    // USM device slab per pool (parallel to pools).
+    std::vector<void *> pool_slabs;
+
+    // USM device scratch, grown on demand. scratch_reserved_bytes is the
+    // largest per-shape requirement begin() has seen; pool sizing holds it
+    // back from the budget so dispatch() can always allocate it.
+    size_t scratch_reserved_bytes = 0;
+    void * d_ids = nullptr;
+    size_t d_ids_cap = 0;
+    void * d_act = nullptr;
+    size_t d_act_cap = 0;
+    void * d_out = nullptr;
+    size_t d_out_cap = 0;
+
+    // Host scratch for quantized activations (scalar reference quantizer).
+    std::vector<char> h_act;
+
+    void free_resources() {
+        if (!stream) {
+            pool_slabs.clear();
+            return;
+        }
+        try {
+            for (void * slab : pool_slabs) {
+                if (slab) {
+                    sycl::free(slab, *stream);
+                }
+            }
+            if (d_ids) sycl::free(d_ids, *stream);
+            if (d_act) sycl::free(d_act, *stream);
+            if (d_out) sycl::free(d_out, *stream);
+        } catch (...) {
+            // Best-effort: the context may already be torn down.
+        }
+        pool_slabs.clear();
+        d_ids = d_act = d_out = nullptr;
+        d_ids_cap = d_act_cap = d_out_cap = 0;
+        for (auto & pool : pools) {
+            pool->slab = nullptr;
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Quantize activations to Q8_1 (scalar, reference quality; rows are tiny and
+// this runs on the CPU thread that already owns them - not a hot path).
+// ---------------------------------------------------------------------------
+
+static void sycl_moe_quantize_act_q8_1(const float * src, block_q8_1 * dst,
+                                       int64_t n, int64_t padded_n) {
+    const int nb = (int)(padded_n / QK8_1);
+    for (int ib = 0; ib < nb; ib++) {
+        float amax = 0.0f;
+        for (int i = 0; i < QK8_1; i++) {
+            const int64_t idx = (int64_t)ib * QK8_1 + i;
+            const float v = (idx < n) ? src[idx] : 0.0f;
+            amax = std::max(amax, std::fabs(v));
+        }
+        const float d = amax / 127.0f;
+        const float id = (d > 0.0f) ? (1.0f / d) : 0.0f;
+        float sum = 0.0f;
+        for (int i = 0; i < QK8_1; i++) {
+            const int64_t idx = (int64_t)ib * QK8_1 + i;
+            const float v = (idx < n) ? src[idx] : 0.0f;
+            const int8_t q = (int8_t)std::lround(v * id);
+            dst[ib].qs[i] = q;
+            sum += (float)q * d;
+        }
+        dst[ib].ds = sycl::half2(sycl::half(d), sycl::half(sum));
+    }
+}
+
+// Whether ggml_sycl_mul_mat_vec_q_id() (mmvq.cpp) has a dispatch case for
+// this type. Kept as a local copy rather than a shared predicate so this
+// provider has no cross-file dependency on mmvq.{hpp,cpp} beyond the
+// dispatch function itself - keep in sync with that function's switch.
+static bool sycl_moe_wtype_dispatchable(ggml_type wtype) {
+    switch (wtype) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Query functions
+// ---------------------------------------------------------------------------
+
+static int sycl_moe_query_config(int automatic, size_t budget_mib,
+                                 ggml_moe_cache_config * result) {
+    if (!result) {
+        return 0;
+    }
+
+    moe_cache_config config = moe_cache_read_config();
+    if (automatic >= 0) {
+        config.enabled = true;
+        config.automatic = automatic != 0;
+        moe_cache_apply_mode_defaults(config);
+        config.min_compute_capability =
+            moe_cache_min_compute_capability(config.automatic);
+    }
+    if (budget_mib > 0) {
+        config.budget_mb = budget_mib;
+    }
+    if (!config.enabled || config.budget_mb > (SIZE_MAX >> 20) ||
+        config.reserve_mb > (SIZE_MAX >> 20)) {
+        return 0;
+    }
+
+    result->budget_bytes = config.budget_mb << 20;
+    result->reserve_bytes = config.reserve_mb << 20;
+    result->minimum_slab_bytes = config.minimum_slab_bytes;
+    result->min_expert_bytes = config.min_expert_bytes;
+    result->min_expert_explicit = config.min_expert_explicit;
+    result->max_batch = config.max_batch;
+    result->min_compute_capability = config.min_compute_capability;
+    result->min_devices = 1; // SYCL session uses a single device, like Vulkan's v1
+    result->overlap_cpu_rows = config.overlap_cpu_rows;
+    return 1;
+}
+
+static int sycl_moe_query_device(void * opaque, const ggml_moe_cache_config * config,
+                                 ggml_moe_cache_device_caps * result) {
+    if (!opaque || !config || !result || !g_moe_cache_owner) {
+        return 0;
+    }
+
+    ggml_backend_dev_t device = (ggml_backend_dev_t)opaque;
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
+    if ((const void *)reg != g_moe_cache_owner) {
+        return 0;
+    }
+
+    // Identify the device by its index in the SYCL registry:
+    // ggml_backend_sycl_reg() creates one ggml_backend_dev_t per SYCL device
+    // in id order (dev_ctx->device = i), so the registry position is the SYCL
+    // device id - the same value the session records as dev.physical. A
+    // constant 0 made common/fit.cpp merge distinct GPUs into one accounting
+    // entry (minimum free, summed used) whenever several SYCL devices were
+    // selected.
+    int device_index = -1;
+    const size_t n_devices = ggml_backend_reg_dev_count(reg);
+    for (size_t i = 0; i < n_devices; i++) {
+        if (ggml_backend_reg_dev_get(reg, i) == device) {
+            device_index = (int)i;
+            break;
+        }
+    }
+    if (device_index < 0) {
+        return 0;
+    }
+    result->logical_device = device_index;
+    result->physical_device = device_index;
+    result->compute_capability = 800; // no CC concept on SYCL; matches Vulkan's Ampere-equivalent default
+    result->min_expert_bytes = config->min_expert_explicit
+        ? config->min_expert_bytes
+        : moe_cache_default_min_expert_bytes(800);
+    return 1;
+}
+
+// Device scratch a node of this shape can need in dispatch(): f32 output
+// rows plus q8_1-quantized activation rows for the largest node
+// (moe_cache_node_rows_max rows). Shared by query_shape() (host-side fit)
+// and begin() (pool sizing) so the two figures cannot drift. dispatch()
+// also uploads n_hits int32 slot ids (<= 256 B), well under the MiB
+// granularity of every budget figure.
+static size_t sycl_moe_scratch_bytes(int64_t n_in, int64_t n_out) {
+    const size_t out_bytes =
+        moe_cache_node_rows_max * (size_t)n_out * sizeof(float);
+    const size_t act_q8_bytes =
+        moe_cache_node_rows_max *
+        (size_t)((n_in + QK8_1 - 1) / QK8_1) * sizeof(block_q8_1);
+    return out_bytes + act_q8_bytes;
+}
+
+static int sycl_moe_query_shape(int wtype, int64_t n_in, int64_t n_out,
+                                int64_t n_expert, size_t expert_size,
+                                ggml_moe_cache_shape_caps * result) {
+    if (!result || n_in <= 0 || n_out <= 0 || n_expert <= 0) {
+        return 0;
+    }
+    if (!ggml_moe_cache_wtype_supported(wtype) ||
+        !sycl_moe_wtype_dispatchable((ggml_type)wtype)) {
+        return 0;
+    }
+
+    const size_t row_size = ggml_row_size((ggml_type)wtype, n_in);
+    if (row_size == 0 || (uint64_t)n_out > SIZE_MAX / row_size ||
+        expert_size != (size_t)n_out * row_size ||
+        expert_size > SIZE_MAX / moe_cache_pool_slots_min) {
+        return 0;
+    }
+
+    const size_t scratch_bytes = sycl_moe_scratch_bytes(n_in, n_out);
+    const size_t pool_bytes = expert_size * moe_cache_pool_slots_min;
+    if (pool_bytes > SIZE_MAX - scratch_bytes) {
+        return 0;
+    }
+    result->scratch_bytes = scratch_bytes;
+    result->pool_bytes = pool_bytes;
+    result->minimum_bytes = scratch_bytes + pool_bytes;
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Pool lifecycle
+// ---------------------------------------------------------------------------
+
+// Sizing note (documented debt, not fixed here): a pool is keyed by
+// (expert_size, wtype) alone, so every tensor with that shape shares it - but
+// its slot count is capped by whichever tensor's n_expert happened to create
+// it, not the aggregate demand of every tensor that will end up sharing it. A
+// model with many layers using the same expert shape can therefore thrash a
+// pool sized for just one layer's worth of experts (confirmed empirically:
+// this fork's smoke test showed evictions roughly matching fills). A prior
+// version of this function grew the pool incrementally as new tensors were
+// discovered via dev.seen_tensors (already present in the shared header for
+// exactly this purpose), preserving every existing slot's data via a single
+// bulk device-to-device copy - safe on its own, but it turned pool sizing
+// into a greedy, discovery-order-dependent race between (expert_size, wtype)
+// shapes for a shared per-device budget: whichever shape's tensors are
+// discovered first can grow to consume most of the budget before a
+// later-discovered shape ever gets a chance, potentially starving it below
+// moe_cache_pool_slots_min. The correct fix needs the aggregate shape
+// inventory known in advance (or a second pass) to size every pool fairly
+// against the whole model's demand at once, not per-discovery; that's a
+// larger, shared design change and is left as documented debt rather than
+// shipped as a heuristic that trades one imbalance for another.
+static moe_cache_pool * sycl_moe_find_or_create_pool(
+        moe_cache_sycl_device & dev, moe_cache_session & session,
+        size_t expert_size, int wtype, int64_t n_expert, size_t budget_bytes) {
+    const int existing = moe_cache_find_pool(dev, expert_size, wtype);
+    if (existing >= 0) {
+        return dev.pools[existing].get();
+    }
+
+    if (moe_cache_fail(session, "slab")) {
+        MOE_CACHE_LOG("[moe-cache] SYCL: skipped %zu KiB expert pool: allocation failed\n",
+                expert_size >> 10);
+        return nullptr;
+    }
+
+    // Reserve capacity up front so the push_backs below (after the slab is
+    // already allocated) cannot throw and desync these two parallel vectors -
+    // every other access indexes pool_slabs[i] assuming it tracks pools[i].
+    try {
+        dev.pools.reserve(dev.pools.size() + 1);
+        dev.pool_slabs.reserve(dev.pool_slabs.size() + 1);
+    } catch (...) {
+        return nullptr;
+    }
+
+    size_t slots = budget_bytes / expert_size;
+    if (slots < moe_cache_pool_slots_min) {
+        return nullptr;
+    }
+    if ((uint64_t)n_expert > 0 && slots > (size_t)n_expert) {
+        slots = (size_t)n_expert;
+    }
+    if (slots < moe_cache_pool_slots_min) {
+        return nullptr;
+    }
+    if (slots > (size_t)INT_MAX) {
+        slots = INT_MAX;
+    }
+    const size_t slab_bytes = slots * expert_size;
+
+    void * slab = nullptr;
+    try {
+        slab = sycl::malloc_device(slab_bytes, *dev.stream);
+    } catch (...) {
+        slab = nullptr;
+    }
+    if (!slab) {
+        MOE_CACHE_LOG("[moe-cache] SYCL: failed to allocate %zu MiB expert pool\n",
+                slab_bytes >> 20);
+        return nullptr;
+    }
+
+    try {
+        std::unique_ptr<moe_cache_pool> pool(new moe_cache_pool());
+        pool->expert_size = expert_size;
+        pool->wtype = wtype;
+        pool->slab = nullptr; // SYCL slabs are device pointers, tracked in pool_slabs
+        pool->n_slots = (int)slots;
+        pool->covers_all_entries = (uint64_t)slots >= (uint64_t)n_expert;
+        pool->slots.resize(slots);
+        pool->free_slots.reserve(slots);
+        pool->map.reserve(slots);
+        for (int index = (int)slots - 1; index >= 0; index--) {
+            pool->free_slots.push_back(index);
+        }
+        dev.pools.push_back(std::move(pool));
+        dev.pool_slabs.push_back(slab);
+        dev.allocated_bytes += slab_bytes;
+        MOE_CACHE_LOG("[moe-cache] SYCL%d pool[%d]: type=%s expert=%zu KiB slots=%zu entries=%lld coverage=%s total=%zu MiB\n",
+                dev.physical, (int)dev.pools.size() - 1,
+                ggml_type_name((ggml_type)wtype), expert_size >> 10,
+                slots, (long long)n_expert,
+                dev.pools.back()->covers_all_entries ? "complete" : "partial",
+                slab_bytes >> 20);
+        bool expected = false;
+        if (session.enabled_announced.compare_exchange_strong(expected, true)) {
+            MOE_CACHE_LOG("[moe-cache] enabled: first pool allocated on SYCL%d\n",
+                    dev.physical);
+        }
+        return dev.pools.back().get();
+    } catch (...) {
+        try { sycl::free(slab, *dev.stream); } catch (...) {}
+        return nullptr;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session lifecycle
+// ---------------------------------------------------------------------------
+
+static void * sycl_moe_session_create(void * const * backends, int n_backends,
+                                      const ggml_moe_cache_config * supplied_config) {
+    try {
+        moe_cache_config config = moe_cache_read_config();
+        if (supplied_config) {
+            constexpr size_t MiB = 1024 * 1024;
+            if (supplied_config->budget_bytes % MiB != 0 ||
+                supplied_config->reserve_bytes % MiB != 0 ||
+                supplied_config->minimum_slab_bytes % MiB != 0 ||
+                supplied_config->min_expert_bytes == 0 ||
+                supplied_config->min_expert_explicit < 0 ||
+                supplied_config->min_expert_explicit > 1 ||
+                supplied_config->max_batch < 1 ||
+                supplied_config->max_batch > moe_cache_batch_max ||
+                supplied_config->min_devices < 1 ||
+                supplied_config->min_compute_capability < 0 ||
+                supplied_config->min_compute_capability > 999 ||
+                supplied_config->overlap_cpu_rows < -1 ||
+                supplied_config->overlap_cpu_rows > 8) {
+                return nullptr;
+            }
+            config.enabled = true;
+            config.automatic = supplied_config->minimum_slab_bytes > 0;
+            config.budget_mb = supplied_config->budget_bytes / MiB;
+            config.reserve_mb = supplied_config->reserve_bytes / MiB;
+            config.minimum_slab_bytes = supplied_config->minimum_slab_bytes;
+            config.min_expert_bytes = supplied_config->min_expert_bytes;
+            config.min_expert_explicit = supplied_config->min_expert_explicit;
+            if (!config.min_expert_explicit) {
+                // moe_cache_apply_mode_defaults() (in query_config) ties the
+                // 512 KiB/1 MiB default floor to automatic vs. forced mode,
+                // a distinction meant for real compute-capability gaps. SYCL
+                // has none - sycl_moe_query_device() always reports the
+                // Ampere-equivalent 800 - so forced mode otherwise ends up
+                // stricter (1 MiB) than what query_device (and any fit logic
+                // consulting it) already advertised as cacheable (512 KiB),
+                // silently rejecting experts placement already counted on.
+                config.min_expert_bytes = moe_cache_default_min_expert_bytes(800);
+            }
+            config.max_batch = supplied_config->max_batch;
+            config.min_compute_capability = supplied_config->min_compute_capability;
+            config.overlap_cpu_rows = supplied_config->overlap_cpu_rows;
+        }
+        if (!config.enabled) {
+            return nullptr;
+        }
+        // A zero budget can never create a pool; bail before touching the
+        // device. Only the automatic per-scheduler probe (supplied_config ==
+        // nullptr, from ggml_backend_sched_new(), which runs unconditionally
+        // on every SYCL scheduler whether or not the cache was requested)
+        // must treat a zero budget as "stay dormant, do nothing" here - an
+        // explicit request (supplied_config != nullptr, e.g. --moe-cache
+        // on/auto/soft with no positive MiB) still creates a dormant session
+        // (begin() rejects every node on the same zero-budget check below),
+        // matching query_config()'s contract of reporting capability
+        // defaults independent of whether a budget is currently available.
+        if (!supplied_config && config.budget_mb == 0) {
+            return nullptr;
+        }
+
+        // Find the SYCL backend among the scheduler's backends.
+        ggml_backend_t sycl_backend = nullptr;
+        for (int i = 0; i < n_backends; i++) {
+            ggml_backend_t be = (ggml_backend_t)backends[i];
+            if (be && ggml_backend_is_sycl(be)) {
+                sycl_backend = be;
+                break;
+            }
+        }
+        if (!sycl_backend) {
+            MOE_CACHE_LOG("[moe-cache] no SYCL device found\n");
+            return nullptr;
+        }
+
+        ggml_backend_sycl_context * sctx =
+            (ggml_backend_sycl_context *)sycl_backend->context;
+        if (!sctx) {
+            MOE_CACHE_LOG("[moe-cache] SYCL backend has no usable context\n");
+            return nullptr;
+        }
+
+        // --moe-cache on/auto/soft (no explicit MiB) reach here with
+        // budget_mb == 0: arg.cpp encodes "resolve free-minus-reserve" as
+        // zero, and common/fit.cpp separately computes its own projected
+        // free-VRAM figure to decide whether to spill routed experts to host
+        // RAM at all - but that computed figure is never wired back into
+        // cparams.moe_cache_budget_mib (confirmed by reading common.cpp and
+        // llama-context.cpp: both just forward the original, still-zero
+        // params.moe_cache.budget_mib to ggml_backend_sched_set_moe_cache).
+        // Fixing that disconnect is a shared fit/scheduler change spanning
+        // several non-provider files, out of scope here. Deriving the same
+        // free-minus-reserve figure independently at session-create time at
+        // least lets the session engage instead of staying permanently
+        // dormant while fit believes a cache is available.
+        if (supplied_config && config.budget_mb == 0) {
+            // sycl_get_mem_info() rather than ggml_backend_sycl_get_device_memory():
+            // the public wrapper GGML_ABORTs when the query fails and
+            // std::exit()s on a SYCL exception, neither of which the outer
+            // catch below can intercept. An optional cache must decline, not
+            // take model startup down with it.
+            size_t free_bytes = 0, total_bytes = 0;
+            bool mem_ok = false;
+            try {
+                mem_ok = sycl_get_mem_info(sctx->device, &free_bytes, &total_bytes);
+            } catch (...) {
+                mem_ok = false;
+            }
+            if (!mem_ok) {
+                MOE_CACHE_LOG("[moe-cache] SYCL%d: device memory query failed; cannot derive "
+                              "a budget, not caching\n", sctx->device);
+                return nullptr;
+            }
+            MOE_CACHE_LOG("[moe-cache] SYCL%d: device memory query: free=%zu MiB total=%zu MiB\n",
+                          sctx->device, free_bytes >> 20, total_bytes >> 20);
+            // get_memory_size() (ggml-sycl/mem.cpp) falls back to reporting
+            // free == total when neither the Level Zero Sysman API (needs
+            // ZES_ENABLE_SYSMAN=1, not set by default) nor the SYCL
+            // ext_intel_free_memory aspect is available (ggml-sycl/mem.cpp).
+            // Confirmed on this exact box: --list-devices reported "15473
+            // MiB, 15473 MiB free" while a separate process held ~14 GiB of
+            // the same device. That is a fallback constant, not a
+            // measurement, and free-minus-reserve computed from it would
+            // massively overcommit VRAM (starting with this session's own
+            // model weights, already resident by the time this runs).
+            // Refuse rather than trust it.
+            if (free_bytes == total_bytes) {
+                MOE_CACHE_LOG("[moe-cache] SYCL%d: free memory equals total - the memory query "
+                              "could not measure real usage (see ZES_ENABLE_SYSMAN); refusing to "
+                              "derive a budget from it\n", sctx->device);
+                return nullptr;
+            }
+            const size_t reserve_bytes = config.reserve_mb << 20;
+            const size_t usable_bytes = free_bytes > reserve_bytes ? free_bytes - reserve_bytes : 0;
+            config.budget_mb = usable_bytes >> 20;
+            if (config.budget_mb == 0) {
+                MOE_CACHE_LOG("[moe-cache] SYCL%d: free memory (%zu MiB) does not exceed the "
+                              "reserve (%zu MiB); nothing to cache\n",
+                              sctx->device, free_bytes >> 20, config.reserve_mb);
+                return nullptr;
+            }
+        }
+
+        // Automatic mode carries the 1 GiB slab floor (minimum_slab_bytes,
+        // documented in docs/backend/MOE-CACHE.md); forced mode sets it to
+        // zero. common/fit.cpp and llama-context.cpp enforce the floor when
+        // they know the budget, but a budget that arrives through
+        // GGML_CUDA_MOE_CACHE_BUDGET_MB or the free-minus-reserve derivation
+        // above bypasses both, so a sub-floor automatic budget used to create
+        // pools anyway once 64 experts fit.
+        if (config.automatic && (config.budget_mb << 20) < config.minimum_slab_bytes) {
+            MOE_CACHE_LOG("[moe-cache] SYCL%d: budget %zu MiB is below the automatic-mode "
+                          "slab floor (%zu MiB); not caching\n",
+                          sctx->device, config.budget_mb, config.minimum_slab_bytes >> 20);
+            return nullptr;
+        }
+
+        std::unique_ptr<moe_cache_session> session(new (std::nothrow) moe_cache_session());
+        if (!session) {
+            return nullptr;
+        }
+        session->config = std::move(config);
+
+        std::unique_ptr<moe_cache_sycl_device> dev(new (std::nothrow)
+                moe_cache_sycl_device(sctx->device, sctx->device));
+        if (!dev) {
+            return nullptr;
+        }
+        dev->stream = sctx->stream();
+
+        session->devices.push_back(std::move(dev));
+
+        moe_cache_session * result = session.get();
+        try {
+            std::lock_guard<std::mutex> lock(g_registry_mu);
+            g_sessions.insert(result);
+            g_session_count.store(g_sessions.size(), std::memory_order_release);
+        } catch (...) {
+            return nullptr;
+        }
+        MOE_CACHE_LOG("[moe-cache] SYCL session ready (device=%d, budget=%zu MiB)\n",
+                sctx->device, result->config.budget_mb);
+        session.release();
+        return result;
+    } catch (...) {
+        MOE_CACHE_LOG("[moe-cache] SYCL session creation failed\n");
+        return nullptr;
+    }
+}
+
+// Teardown statistics, same field names as the other backends so the log
+// contract is backend-independent.
+static void sycl_moe_log_stats(moe_cache_sycl_device & dev) {
+    size_t used = 0;
+    size_t slots = 0;
+    for (const auto & pool_ptr : dev.pools) {
+        const moe_cache_pool & pool = *pool_ptr;
+        slots += pool.n_slots;
+        used += pool.n_slots - pool.free_slots.size();
+    }
+    const long long total = dev.hits + dev.misses;
+    MOE_CACHE_LOG("[moe-cache] SYCL%d hits=%lld/%lld (%.1f%%) used=%zu/%zu enqueued=%lld filled=%lld fill-fail=%lld evictions=%lld skips=%lld admission=%lld dispatch-fail=%lld collect-fail=%lld bypass=%lld\n",
+            dev.physical, dev.hits, total,
+            total ? 100.0 * (double)dev.hits / (double)total : 0.0,
+            used, slots, dev.inserts, dev.fills, dev.fill_failures,
+            dev.evictions, dev.insert_skips, dev.admission_skips,
+            dev.dispatch_failures, dev.collect_failures, dev.contention_bypasses);
+}
+
+static void sycl_moe_session_destroy(void * opaque) {
+    moe_cache_session * session = (moe_cache_session *)opaque;
+    if (!session) {
+        return;
+    }
+    {
+        std::unique_lock<std::mutex> lock(session->mu);
+        session->stopping = true;
+        session->cv.notify_all();
+        session->idle_cv.wait(lock, [&] {
+            return session->active_scopes == 0 && session->active_nodes == 0;
+        });
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_registry_mu);
+        g_sessions.erase(session);
+        g_session_count.store(g_sessions.size(), std::memory_order_release);
+    }
+    for (auto & dev_ptr : session->devices) {
+        moe_cache_sycl_device & dev =
+            static_cast<moe_cache_sycl_device &>(*dev_ptr);
+        if (dev.nodes > 0 || dev.dispatch_failures > 0 ||
+            dev.collect_failures > 0) {
+            sycl_moe_log_stats(dev);
+        }
+    }
+    delete session;
+}
+
+static void sycl_moe_session_enter(void * opaque) {
+    if (g_session_suppressed > 0) {
+        g_session_suppressed++;
+        return;
+    }
+
+    moe_cache_session * session = (moe_cache_session *)opaque;
+    if (!session || session->dormant.load() || session->stopping) {
+        if (g_session_stack.empty()) {
+            return;
+        }
+        try {
+            g_session_stack.push_back({session, nullptr});
+        } catch (...) {
+            g_session_suppressed++;
+        }
+        return;
+    }
+    try {
+        g_session_stack.push_back({session, session});
+    } catch (...) {
+        g_session_suppressed++;
+        return;
+    }
+    std::lock_guard<std::mutex> lock(session->mu);
+    session->active_scopes++;
+}
+
+static void sycl_moe_session_leave(void * opaque) {
+    if (g_session_suppressed > 0) {
+        g_session_suppressed--;
+        return;
+    }
+    moe_cache_session * expected = (moe_cache_session *)opaque;
+    auto found = std::find_if(
+            g_session_stack.rbegin(), g_session_stack.rend(),
+            [expected](const moe_cache_scope_frame & frame) {
+                return frame.requested == expected;
+            });
+    if (found == g_session_stack.rend()) {
+        return;
+    }
+    moe_cache_session * active = found->active;
+    g_session_stack.erase(std::next(found).base());
+    if (active) {
+        std::lock_guard<std::mutex> lock(active->mu);
+        if (active->active_scopes > 0) {
+            active->active_scopes--;
+        }
+        active->idle_cv.notify_all();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Begin: find pool, create node. Pools are created lazily on first use.
+// ---------------------------------------------------------------------------
+
+static void * sycl_moe_begin(const char * name, const void * host_base,
+                             size_t expert_size, int64_t n_in, int64_t n_out,
+                             int wtype, int64_t n_expert, int64_t n_tokens,
+                             int64_t n_rows) {
+    if (g_session_suppressed > 0 || g_session_stack.empty()) {
+        return nullptr;
+    }
+    moe_cache_session * session = g_session_stack.back().active;
+    if (!session || session->stopping || session->dormant) {
+        return nullptr;
+    }
+    if (!name || !host_base || !moe_cache_tensor_name_supported(name) ||
+        n_tokens < 1 || expert_size < session->config.min_expert_bytes ||
+        n_in <= 0 || n_out <= 0 || n_expert <= 0 ||
+        !ggml_moe_cache_wtype_supported(wtype) ||
+        !sycl_moe_wtype_dispatchable((ggml_type)wtype)) {
+        return nullptr;
+    }
+    if (n_rows < n_tokens || n_rows % n_tokens != 0 ||
+        n_tokens > session->config.max_batch ||
+        n_rows > moe_cache_node_rows_max) {
+        return nullptr;
+    }
+
+    const size_t row_size = ggml_row_size((ggml_type)wtype, n_in);
+    if (row_size == 0 || (uint64_t)n_out > SIZE_MAX / row_size ||
+        expert_size != (size_t)n_out * row_size ||
+        expert_size > SIZE_MAX / moe_cache_pool_slots_min) {
+        return nullptr;
+    }
+
+    if (session->devices.empty()) {
+        return nullptr;
+    }
+    moe_cache_sycl_device & dev =
+        static_cast<moe_cache_sycl_device &>(*session->devices[0]);
+    // A zero budget can never create a pool; skip GPU setup entirely.
+    if (session->config.budget_mb == 0) {
+        return nullptr;
+    }
+
+    std::unique_lock<std::mutex> dispatch_lock;
+    try {
+        dispatch_lock = std::unique_lock<std::mutex>(
+                dev.dispatch_mu, std::try_to_lock);
+    } catch (...) {
+        dev.contention_bypasses++;
+        return nullptr;
+    }
+    if (!dispatch_lock.owns_lock()) {
+        dev.contention_bypasses++;
+        return nullptr;
+    }
+    if (dev.dead.load()) {
+        return nullptr;
+    }
+
+    moe_cache_log_configuration(*session);
+    const size_t total_budget_bytes = session->config.budget_mb << 20;
+    // Each pool draws from what's left of the per-device budget, not the
+    // full figure again - a model with several (expert_size, wtype) shapes
+    // (e.g. mixed q3_K/q4_K experts across layers) would otherwise let every
+    // new pool independently claim the entire configured cap.
+    // Device scratch (d_ids/d_act/d_out, grown on demand in dispatch()) is
+    // shared across pools and sized by the largest shape seen, so hold the
+    // running maximum back before sizing a slab. Same contract the host side
+    // applies (common/fit.cpp: minimum_device_bytes = scratch + pools;
+    // llama-context.cpp: slab <= budget - scratch). Without it a pool could
+    // claim the whole remaining cap and every dispatch() would then fail its
+    // scratch allocation or eat into the reserve.
+    dev.scratch_reserved_bytes = std::max(dev.scratch_reserved_bytes,
+                                          sycl_moe_scratch_bytes(n_in, n_out));
+    const size_t committed_bytes = dev.allocated_bytes + dev.scratch_reserved_bytes;
+    const size_t budget_bytes = total_budget_bytes > committed_bytes
+        ? total_budget_bytes - committed_bytes : 0;
+    moe_cache_pool * pool = sycl_moe_find_or_create_pool(
+            dev, *session, expert_size, wtype, n_expert, budget_bytes);
+    if (!pool) {
+        return nullptr;
+    }
+    const int pool_index = moe_cache_find_pool(dev, expert_size, wtype);
+    if (pool_index < 0) {
+        return nullptr;
+    }
+
+    std::unique_ptr<moe_cache_node> node(new (std::nothrow) moe_cache_node());
+    if (!node) {
+        return nullptr;
+    }
+    node->session = session;
+    node->device = &dev;
+    node->pool = pool;
+    node->pool_index = pool_index;
+    node->host_base = host_base;
+    node->expert_size = expert_size;
+    node->n_in = n_in;
+    node->n_out = n_out;
+    node->n_expert = n_expert;
+    node->n_tokens = n_tokens;
+    node->wtype = wtype;
+    node->dispatch_lock = std::move(dispatch_lock);
+
+    std::lock_guard<std::mutex> session_lock(session->mu);
+    session->active_nodes++;
+    return node.release();
+}
+
+// ---------------------------------------------------------------------------
+// Plan: mark cache hits; sync-fill a bounded number of misses into the slab
+// and serve them in this node. slot_indices[i] >= 0 means cache-served.
+// ---------------------------------------------------------------------------
+
+static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
+                         int32_t * slot_indices) {
+    moe_cache_node * node = (moe_cache_node *)opaque;
+    if (!node || !ids || !slot_indices || n_ids < 0 ||
+        n_ids > moe_cache_node_rows_max || node->planned) {
+        return 0;
+    }
+    node->planned = true;
+    for (int index = 0; index < n_ids; index++) {
+        slot_indices[index] = -1;
+    }
+
+    moe_cache_session & session = *node->session;
+    moe_cache_sycl_device & dev =
+        static_cast<moe_cache_sycl_device &>(*node->device);
+    moe_cache_pool & pool = *node->pool;
+    int hits = 0;
+
+    std::unique_lock<std::mutex> lock(session.mu);
+    if (session.stopping) {
+        return 0;
+    }
+
+    int n_misses = 0;
+    int n_fills = 0;
+    const size_t max_fill_bytes = session.config.queue_mb << 20;
+    if (max_fill_bytes == 0 || node->expert_size > max_fill_bytes) {
+        n_fills = 0;
+    } else {
+        n_fills = std::min((int)session.config.inserts_per_plan,
+                           (int)(max_fill_bytes / node->expert_size));
+    }
+    for (int index = 0; index < n_ids; index++) {
+        const int32_t expert = ids[index];
+        if (expert < 0 || expert >= node->n_expert || dev.dead.load()) {
+            continue;
+        }
+        const moe_cache_key key{node->host_base, expert};
+        if (pool.map.find(key) == pool.map.end() ||
+            pool.slots[pool.map.at(key)].state != moe_cache_slot_state::valid) {
+            n_misses++;
+        }
+    }
+    const int fill_budget = std::min(n_misses, n_fills);
+
+    void * slab = (node->pool_index >= 0 && node->pool_index < (int)dev.pool_slabs.size())
+        ? dev.pool_slabs[node->pool_index] : nullptr;
+
+    // Every ids[] position lands in pending at most once and n_ids <=
+    // moe_cache_node_rows_max (checked on entry), so a fixed array covers the
+    // worst case with no heap allocation. A std::vector here could throw
+    // std::bad_alloc under host memory pressure straight through the C caller
+    // (ggml-cpu MUL_MAT_ID) with the pool lock held; the provider contract is
+    // to return 0 and let the CPU path run instead.
+    struct pending_fill { int slot; int index; };
+    pending_fill pending[moe_cache_node_rows_max];
+    int n_pending = 0;
+
+    int fills_done = 0;
+    for (int index = 0; index < n_ids; index++) {
+        const int32_t expert = ids[index];
+        if (expert < 0 || expert >= node->n_expert || dev.dead.load()) {
+            continue;
+        }
+
+        const moe_cache_key key{node->host_base, expert};
+        auto found = pool.map.find(key);
+        if (found != pool.map.end() &&
+            pool.slots[found->second].state == moe_cache_slot_state::valid) {
+            const int slot_index = found->second;
+            moe_cache_slot & slot = pool.slots[slot_index];
+            slot.readers++;
+            slot.uses++;
+            moe_cache_lru_remove(pool, slot_index);
+            moe_cache_lru_push_back(pool, slot_index);
+            node->pins[node->n_pins++] = {&pool, slot_index};
+            slot_indices[index] = slot_index;
+            dev.hits++;
+            hits++;
+            continue;
+        }
+        // Same expert already queued for fill earlier in this same plan() -
+        // a routed batch commonly picks one popular expert for several
+        // tokens at once. Ride along on the pending fill instead of
+        // emplace()-ing a second map entry for the same key (a silent no-op
+        // that would leak a second slot: copied and promoted, but never
+        // reachable from pool.map again).
+        if (found != pool.map.end() &&
+            pool.slots[found->second].state == moe_cache_slot_state::copying) {
+            pending[n_pending++] = {found->second, index};
+            continue;
+        }
+
+        dev.misses++;
+        if (moe_cache_fail(session, "insert")) {
+            dev.fill_failures++;
+            continue;
+        }
+        if (fills_done >= fill_budget || !slab) {
+            continue; // CPU handles this row
+        }
+        fills_done++;
+
+        int slot_index = -1;
+        if (!pool.free_slots.empty()) {
+            slot_index = pool.free_slots.back();
+            pool.free_slots.pop_back();
+        } else {
+            int candidate = moe_cache_pick_victim(pool, session.config.hot_uses);
+            if (candidate < 0) {
+                continue; // all slots pinned; CPU handles this row
+            }
+            slot_index = candidate;
+            const bool sacrificed_hot =
+                (int)pool.slots[slot_index].uses > session.config.hot_uses;
+            moe_cache_slot_reset(pool, slot_index, false);
+            dev.evictions++;
+            if (sacrificed_hot) {
+                dev.heat_evictions++;
+            }
+        }
+
+        moe_cache_slot & slot = pool.slots[slot_index];
+        slot.key = key;
+        slot.generation++;
+        slot.state = moe_cache_slot_state::copying;
+        const void * source =
+            (const char *)node->host_base + (size_t)expert * node->expert_size;
+        try {
+            pool.map.emplace(key, slot_index);
+        } catch (...) {
+            moe_cache_slot_reset(pool, slot_index, true);
+            dev.insert_skips++;
+            continue;
+        }
+
+        try {
+            dev.stream->memcpy((char *)slab + (size_t)slot_index * node->expert_size,
+                    source, node->expert_size);
+        } catch (...) {
+            moe_cache_slot_reset(pool, slot_index, true);
+            dev.fill_failures++;
+            continue;
+        }
+        pending[n_pending++] = {slot_index, index};
+    }
+
+    // One wait for every queued fill this plan(): SYCL's in-order queue
+    // executes them in submission order, so a single wait confirms all of
+    // them - no per-fill round trip needed.
+    if (n_pending > 0) {
+        bool copy_ok = true;
+        try {
+            dev.stream->wait_and_throw();
+        } catch (...) {
+            copy_ok = false;
+        }
+        if (copy_ok) {
+            for (int p = 0; p < n_pending; p++) {
+                const pending_fill & fill = pending[p];
+                moe_cache_slot & pslot = pool.slots[fill.slot];
+                // Coalesced duplicate experts (above) can list the same slot
+                // more than once here. Only transition state/LRU membership
+                // once per slot - a second moe_cache_lru_push_back on an
+                // already-linked slot corrupts the LRU list (self-loop).
+                // Every entry still gets its own reader/pin, same as two
+                // independent hits on an already-valid slot would.
+                if (pslot.state != moe_cache_slot_state::valid) {
+                    pslot.state = moe_cache_slot_state::valid;
+                    moe_cache_lru_push_back(pool, fill.slot);
+                }
+                pslot.readers++;
+                node->pins[node->n_pins++] = {&pool, fill.slot};
+                slot_indices[fill.index] = fill.slot;
+                dev.inserts++;
+                dev.fills++;
+                dev.hits++;
+                hits++;
+            }
+        } else {
+            // Slab contents are unknown after a failed transfer; roll back
+            // and disable this device's cache so no later node reads stale
+            // entries. Coalesced duplicate experts (above) can put the same
+            // slot in `pending` more than once - guard against resetting an
+            // already-freed slot a second time, which would push it onto
+            // free_slots twice and let two future fills claim the same slot.
+            for (int p = 0; p < n_pending; p++) {
+                const pending_fill & fill = pending[p];
+                if (pool.slots[fill.slot].state != moe_cache_slot_state::free) {
+                    moe_cache_slot_reset(pool, fill.slot, true);
+                }
+                dev.fill_failures++;
+            }
+            dev.dead.store(true);
+            MOE_CACHE_LOG("[moe-cache] SYCL%d: staged fill transfer failed; "
+                          "rolled back %d fills and disabled the device cache\n",
+                          dev.physical, n_pending);
+        }
+    }
+
+    dev.nodes++;
+    return hits;
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch: run the cached-expert matvec over the hit rows, reusing the
+// existing MoE mat-vec-q-id kernel dispatcher (mmvq.cpp). The slab is
+// addressed exactly like the stacked expert-weight buffer that dispatcher
+// expects: slot indices stand in for expert ids, expert_size is the
+// inter-expert stride, and each hit row carries its own activation (a
+// nonzero src1_row_stride), unlike the shared-activation MoE-routing case.
+// ---------------------------------------------------------------------------
+
+static int sycl_moe_dispatch(void * opaque, int wtype, int64_t n_in, int64_t n_out,
+                             int n_hits, const int32_t * slot_indices,
+                             const float * const * act_rows) {
+    moe_cache_node * node = (moe_cache_node *)opaque;
+    if (!node || !node->planned || !slot_indices || !act_rows ||
+        n_hits <= 0 || n_hits > moe_cache_node_rows_max ||
+        n_hits != node->n_pins ||
+        wtype != node->wtype || n_in != node->n_in || n_out != node->n_out) {
+        return 0;
+    }
+
+    moe_cache_sycl_device & dev =
+        static_cast<moe_cache_sycl_device &>(*node->device);
+    if (dev.dead.load() || moe_cache_fail(*node->session, "dispatch")) {
+        std::lock_guard<std::mutex> lock(node->session->mu);
+        dev.dispatch_failures++;
+        return 0;
+    }
+    if (node->pool_index < 0) {
+        return 0;
+    }
+    const size_t pool_index = (size_t)node->pool_index;
+    if (dev.pool_slabs.empty() || pool_index >= dev.pool_slabs.size()) {
+        return 0;
+    }
+    void * slab = dev.pool_slabs[pool_index];
+
+    const int64_t padded_n_in = ((n_in + QK8_1 - 1) / QK8_1) * QK8_1;
+    const int64_t n_blocks = padded_n_in / QK8_1;
+
+    const size_t ids_bytes = (size_t)n_hits * sizeof(int32_t);
+    const size_t act_bytes = (size_t)n_hits * (size_t)n_blocks * sizeof(block_q8_1);
+    const size_t out_bytes = (size_t)n_hits * (size_t)n_out * sizeof(float);
+
+    try {
+        if (act_bytes > dev.h_act.size()) {
+            dev.h_act.resize(act_bytes);
+        }
+        if (ids_bytes > dev.d_ids_cap) {
+            if (dev.d_ids) {
+                sycl::free(dev.d_ids, *dev.stream);
+                dev.d_ids = nullptr;
+                dev.d_ids_cap = 0;
+            }
+            dev.d_ids = sycl::malloc_device(ids_bytes, *dev.stream);
+            dev.d_ids_cap = dev.d_ids ? ids_bytes : 0;
+        }
+        if (act_bytes > dev.d_act_cap) {
+            if (dev.d_act) {
+                sycl::free(dev.d_act, *dev.stream);
+                dev.d_act = nullptr;
+                dev.d_act_cap = 0;
+            }
+            dev.d_act = sycl::malloc_device(act_bytes, *dev.stream);
+            dev.d_act_cap = dev.d_act ? act_bytes : 0;
+        }
+        if (out_bytes > dev.d_out_cap) {
+            if (dev.d_out) {
+                sycl::free(dev.d_out, *dev.stream);
+                dev.d_out = nullptr;
+                dev.d_out_cap = 0;
+            }
+            dev.d_out = sycl::malloc_device(out_bytes, *dev.stream);
+            dev.d_out_cap = dev.d_out ? out_bytes : 0;
+        }
+    } catch (...) {
+        dev.dispatch_failures++;
+        return 0;
+    }
+    if (!dev.d_ids || !dev.d_act || !dev.d_out) {
+        dev.dispatch_failures++;
+        return 0;
+    }
+
+    block_q8_1 * act_q8 = (block_q8_1 *)dev.h_act.data();
+    for (int i = 0; i < n_hits; i++) {
+        if (!act_rows[i]) {
+            dev.dispatch_failures++;
+            return 0;
+        }
+        sycl_moe_quantize_act_q8_1(act_rows[i], act_q8 + (size_t)i * n_blocks,
+                n_in, padded_n_in);
+    }
+
+    try {
+        dev.stream->memcpy(dev.d_ids, slot_indices, ids_bytes);
+        dev.stream->memcpy(dev.d_act, act_q8, act_bytes);
+        dev.stream->wait_and_throw();
+    } catch (...) {
+        dev.dispatch_failures++;
+        return 0;
+    }
+
+    const size_t row_stride_bytes = (size_t)n_blocks * sizeof(block_q8_1);
+    bool ok = false;
+    try {
+        ok = ggml_sycl_mul_mat_vec_q_id(
+                (ggml_type)wtype, slab, dev.d_act, (const int32_t *)dev.d_ids,
+                (float *)dev.d_out, (int)n_in, (int)n_out, n_hits,
+                /*expert_weight_stride=*/ node->expert_size,
+                /*dst_row_stride=*/ (size_t)n_out * sizeof(float),
+                /*src1_row_stride=*/ row_stride_bytes,
+                dev.stream);
+        if (ok) {
+            dev.stream->wait_and_throw();
+        }
+    } catch (...) {
+        ok = false;
+    }
+    if (!ok) {
+        dev.dispatch_failures++;
+        return 0;
+    }
+
+    node->dispatched = true;
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Collect: copy results into dst_rows.
+// ---------------------------------------------------------------------------
+
+static int sycl_moe_collect(void * opaque, int n_hits, float * const * dst_rows,
+                            int64_t n_out) {
+    moe_cache_node * node = (moe_cache_node *)opaque;
+    if (!node || !node->dispatched || n_hits <= 0 ||
+        n_hits > moe_cache_node_rows_max ||
+        node->n_pins != n_hits || !dst_rows || n_out != node->n_out) {
+        return 0;
+    }
+    for (int index = 0; index < n_hits; index++) {
+        if (!dst_rows[index]) {
+            return 0;
+        }
+    }
+
+    moe_cache_sycl_device & dev =
+        static_cast<moe_cache_sycl_device &>(*node->device);
+    moe_cache_session & session = *node->session;
+    bool ok = !dev.dead.load() && !moe_cache_fail(session, "collect");
+    if (ok) {
+        const size_t out_bytes = (size_t)n_hits * (size_t)n_out * sizeof(float);
+        std::vector<float> h_out;
+        try {
+            h_out.resize((size_t)n_hits * (size_t)n_out);
+            dev.stream->memcpy(h_out.data(), dev.d_out, out_bytes);
+            dev.stream->wait_and_throw();
+        } catch (...) {
+            ok = false;
+        }
+        if (ok) {
+            for (int index = 0; index < n_hits; index++) {
+                memcpy(dst_rows[index], h_out.data() + (size_t)index * n_out,
+                       (size_t)n_out * sizeof(float));
+            }
+        }
+    }
+    node->dispatched = false;
+    {
+        std::lock_guard<std::mutex> lock(session.mu);
+        if (!ok) {
+            dev.collect_failures++;
+        }
+        dev.collect_calls++;
+        if (session.config.stats_every > 0 &&
+            dev.collect_calls % session.config.stats_every == 0) {
+            sycl_moe_log_stats(dev);
+        }
+    }
+    return ok ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// End: release slot pins and the node.
+// ---------------------------------------------------------------------------
+
+static void sycl_moe_end(void * opaque) {
+    std::unique_ptr<moe_cache_node> node((moe_cache_node *)opaque);
+    if (!node) {
+        return;
+    }
+    moe_cache_session & session = *node->session;
+    {
+        std::lock_guard<std::mutex> lock(session.mu);
+        for (int index = 0; index < node->n_pins; index++) {
+            const moe_cache_pin & pin = node->pins[index];
+            if (pin.pool && pin.slot >= 0 && pin.slot < pin.pool->n_slots) {
+                moe_cache_slot & slot = pin.pool->slots[pin.slot];
+                if (slot.readers > 0) {
+                    slot.readers--;
+                }
+            }
+        }
+        session.active_nodes--;
+        session.idle_cv.notify_all();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fused SwiGLU - not implemented for v1; stock CPU path handles the node.
+// ---------------------------------------------------------------------------
+
+static void * sycl_moe_fused_begin(const ggml_moe_cache_tensor_desc * up,
+                                   const ggml_moe_cache_tensor_desc * gate,
+                                   int glu_op, float up_min, float up_max,
+                                   float gate_min, float gate_max,
+                                   const int32_t * ids, int n_rows,
+                                   int64_t n_tokens,
+                                   const float * const * act_rows,
+                                   uint64_t * hit_mask) {
+    (void)up; (void)gate; (void)glu_op;
+    (void)up_min; (void)up_max; (void)gate_min; (void)gate_max;
+    (void)ids; (void)n_rows; (void)n_tokens; (void)act_rows; (void)hit_mask;
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Invalidate: drop cached slots whose tensor range overlaps [base, base+size).
+// ---------------------------------------------------------------------------
+
+static void sycl_moe_invalidate(const void * base, size_t size) {
+    if (!base || size == 0) {
+        return;
+    }
+    if (g_session_count.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> registry_lock(g_registry_mu);
+    for (moe_cache_session * session : g_sessions) {
+        std::lock_guard<std::mutex> lock(session->mu);
+        for (auto & dev_ptr : session->devices) {
+            for (auto & pool_ptr : dev_ptr->pools) {
+                for (int i = 0; i < pool_ptr->n_slots; i++) {
+                    const moe_cache_key & key = pool_ptr->slots[i].key;
+                    if (key.tensor &&
+                        moe_cache_ranges_overlap(
+                            (const char *)key.tensor + (size_t)key.expert * pool_ptr->expert_size,
+                            pool_ptr->expert_size, base, size)) {
+                        moe_cache_slot_reset(*pool_ptr, i, true);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+static void sycl_moe_register(const void * owner) {
+    g_moe_cache_owner = owner;
+    ggml_moe_cache_api api = {};
+    api.owner = owner;
+    api.query_config = sycl_moe_query_config;
+    api.query_device = sycl_moe_query_device;
+    api.query_shape = sycl_moe_query_shape;
+    api.session_create = sycl_moe_session_create;
+    api.session_destroy = sycl_moe_session_destroy;
+    api.session_enter = sycl_moe_session_enter;
+    api.session_leave = sycl_moe_session_leave;
+    api.begin = sycl_moe_begin;
+    api.plan = sycl_moe_plan;
+    api.dispatch = sycl_moe_dispatch;
+    api.collect = sycl_moe_collect;
+    api.end = sycl_moe_end;
+    api.fused_begin = sycl_moe_fused_begin;
+    api.invalidate = sycl_moe_invalidate;
+    ggml_moe_cache_register(&api);
+}
+
+// Prior declaration so the definition below does not trip -Wmissing-declarations.
+extern "C" void ggml_sycl_moe_cache_register(void * reg);
+
+extern "C" void ggml_sycl_moe_cache_register(void * reg) {
+    sycl_moe_register(reg);
+}

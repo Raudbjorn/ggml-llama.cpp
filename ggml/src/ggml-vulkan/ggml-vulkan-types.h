@@ -1,8 +1,10 @@
 #pragma once
 
-#include "ggml-vulkan.h"
-
+// the Vulkan header must come first: ggml-vulkan.h declares the moe-cache handle accessors
+// (ggml_backend_vk_get_*) only once VK_VERSION_1_0 is defined, and ggml-vulkan.cpp defines them
 #include <vulkan/vulkan_core.h>
+
+#include "ggml-vulkan.h"
 
 #if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
 #include <chrono>
@@ -955,6 +957,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_cross_entropy_loss_f32, pipeline_cross_entropy_loss_f32_wg512;
     vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
     vk_pipeline pipeline_fwht_f32[4];
+    vk_pipeline pipeline_turbo_wht;
+    vk_pipeline pipeline_tq_rotate_act;
     vk_pipeline pipeline_cumsum_f32;
     vk_pipeline pipeline_cumsum_small_f32;
     vk_pipeline pipeline_cumsum_multipass1_f32;

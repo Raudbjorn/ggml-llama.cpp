@@ -158,6 +158,11 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q8_CR         = 512, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_TQ3_1S        = 43, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_TQ4_1S        = 44, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q5_CR         = 513, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q6_CR         = 514, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
@@ -225,6 +230,13 @@ extern "C" {
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
         LLAMA_CONTEXT_TYPE_MTP     = 1,
+    };
+
+    enum llama_moe_cache_mode {
+        LLAMA_MOE_CACHE_MODE_UNSPECIFIED = -1,
+        LLAMA_MOE_CACHE_MODE_OFF = 0,
+        LLAMA_MOE_CACHE_MODE_AUTO = 1,
+        LLAMA_MOE_CACHE_MODE_ON = 2,
     };
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
@@ -373,6 +385,7 @@ extern "C" {
         uint32_t n_outputs_max_per_seq; // max outputs per sequence (0 = n_outputs_max)
         int32_t  n_threads;             // number of threads to use for generation
         int32_t  n_threads_batch;       // number of threads to use for batch processing
+        bool     gdn_replay; // ingredient-replay rollback [EXPERIMENTAL]
 
         enum llama_context_type      ctx_type;          // set the context type (e.g. MTP)
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
@@ -397,6 +410,8 @@ extern "C" {
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
         size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
+        enum llama_moe_cache_mode moe_cache_mode; // runtime MoE expert cache mode
+        size_t moe_cache_budget_mib;               // 0 uses the provider's available-memory budget
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -415,6 +430,14 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+
+        // mindcontrol-port of --prefetch-experts-slots: MoE expert H2D staging slots.
+        // 0 = off (no memory overhead); >=2 enables full-tensor lookahead prefetch of
+        // host-resident (ncmoe) expert weights for batches routing >= 2*n_expert ids (prefill,
+        // or large batched decode; not single-sequence decode). GPU staging cost = slots * max
+        // expert tensor (plus the same in pinned host memory for mmap-backed weights). Needs a
+        // backend with a private stream (SYCL on Level Zero v1); elsewhere it stays off.
+        int prefetch_experts_slots;  // set via llama_context_default_params() / llama_context_from_params
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -549,6 +572,10 @@ extern "C" {
 
     LLAMA_API void llama_model_free(struct llama_model * model);
 
+    // Create a context for model; release it with llama_free().
+    // Returns NULL for a null model, rejected parameters, or a caught initialization
+    // exception. Quantized cache validation uses the effective per-layer KV types.
+    // Custom YaRN scaling may update model's training context length.
     LLAMA_API struct llama_context * llama_init_from_model(
                      struct llama_model * model,
             struct llama_context_params   params);
@@ -592,6 +619,19 @@ extern "C" {
     LLAMA_API const struct llama_model * llama_get_model   (const struct llama_context * ctx);
     LLAMA_API           llama_memory_t   llama_get_memory  (const struct llama_context * ctx);
     LLAMA_API  enum llama_pooling_type   llama_pooling_type(const struct llama_context * ctx); // TODO: rename to llama_get_pooling_type
+
+    // Return the *effective* K/V cache tensor type currently used by the context's memory.
+    // This can differ from the type_k/type_v requested via llama_context_params: some memory
+    // implementations silently rewrite the requested type at construction time (e.g. TurboQuant
+    // "auto-asymmetric" upgrades K to q8_0 for models with GQA ratio >= 6 when a symmetric turbo
+    // K+V cache was requested, to avoid catastrophic quality loss - see llama_kv_cache's ctor and
+    // its "auto-asymmetric" LLAMA_LOG_WARN).
+    //
+    // Returns GGML_TYPE_COUNT if ctx is NULL, if the memory has no K/V cache at all (e.g. pure
+    // recurrent/Mamba-style memory), or if the memory is a composite of multiple sub-caches that
+    // can legitimately hold different effective types (e.g. DSV4's raw/CSA/HCA/indexer caches).
+    LLAMA_API enum ggml_type llama_get_kv_cache_type_k(const struct llama_context * ctx);
+    LLAMA_API enum ggml_type llama_get_kv_cache_type_v(const struct llama_context * ctx);
 
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
@@ -755,6 +795,9 @@ extern "C" {
     LLAMA_API void llama_memory_clear(
             llama_memory_t mem,
                       bool data);
+
+    // Clear data buffers while preserving per-cache InnerQ calibration metadata.
+    LLAMA_API void llama_memory_clear_data_only(llama_memory_t mem);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
@@ -1034,9 +1077,19 @@ extern "C" {
     //     -3: invalid sequence id
     LLAMA_API int32_t llama_batch_ext_add      (struct llama_batch_ext * batch, llama_seq_id seq_id);
 
-    // Add an input token to the batch, with a specified token ID or token embedding
+    // Add an input token with a specified ID; the caller must still set its position.
+    // Returns its index, or -1 if full, -2 if the ID is outside the vocabulary, -3 for an invalid sequence ID.
+    // A negative return leaves the batch unchanged.
     LLAMA_API int32_t llama_batch_ext_add_token(struct llama_batch_ext * batch, llama_seq_id seq_id, llama_token id);
+
+    // Add an embedding-only entry, copying embd.data; the caller must still set its position.
+    // Returns its index, or -1 if full, -2 for null data or an incompatible embedding size, -3 for an invalid sequence ID.
+    // A negative return leaves the batch unchanged.
     LLAMA_API int32_t llama_batch_ext_add_embd (struct llama_batch_ext * batch, llama_seq_id seq_id, struct llama_embd embd);
+
+    // remove the last entry and its embedding row, e.g. to roll back an add whose follow-up call failed
+    // returns false if the batch is empty
+    LLAMA_API bool llama_batch_ext_remove_last(struct llama_batch_ext * batch);
 
     // Add the token at index idx in the batch to another sequence id. The position will stays the same.
     // Note: this should be called before other _set() functions

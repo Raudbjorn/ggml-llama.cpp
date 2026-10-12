@@ -16,7 +16,10 @@
 #include <cstddef>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 
 #include "base.hpp"
 #include "dpct/helper.hpp"
@@ -46,7 +49,13 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #define GGML_COMMON_IMPL_SYCL
 #define SYCL_FLASH_ATTN //remove it to disable FLASH_ATTENTION in building.
 #define SYCL_FAST_FP16  //don't change. remove it will break fattn-tile.hpp building
-#define GGML_SYCL_FA_ALL_QUANTS //define it to enable all quantization types in flash attention. undefine it to only support F16, Q4_0 and Q8_0 in flash attention.
+// GGML_SYCL_FA_ALL_QUANTS: default OFF. Defining this enables the
+// full mixed-K flash_attn_ext_vec<...,42/43,44,...> dispatch matrix
+// (see ASSUMPTIONS.md:553-583 and RALPH_TASKS.md:1237-1251).
+// Leave commented to keep the restricted default dispatch set in
+// fattn.cpp. To re-enable the full mixed-K FA matrix, uncomment the
+// line below.
+//#define GGML_SYCL_FA_ALL_QUANTS
 
 /* suppress warning spam */
 #pragma clang diagnostic push
@@ -127,6 +136,9 @@ extern int g_ggml_sycl_fa_onednn_max_kv;
 extern int g_ggml_sycl_enable_mkl_fa;
 extern int g_ggml_sycl_memtrace;
 extern int g_ggml_sycl_memtrace_step;
+extern int g_ggml_sycl_fa_force_vec_standard;
+extern int g_ggml_sycl_fa_q8_gqa_tile;
+extern int g_ggml_sycl_graph_eviction_timeout;
 
 
 #define CHECK_TRY_ERROR(expr)                                            \
@@ -153,7 +165,7 @@ extern int g_ggml_sycl_memtrace_step;
 
 // define for XMX in Intel GPU
 // TODO: currently, it's not used for XMX really.
-#if !defined(GGML_SYCL_FORCE_MMQ)
+#if !defined(GGML_SYCL_FORCE_MMQ) && !defined(GGML_SYCL_SCALAR_MMQ)
     #define SYCL_USE_XMX
 #endif
 
@@ -289,6 +301,10 @@ struct sycl_device_info {
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
     bool    usm_system_support; // support for USM system allocations
+#ifdef GGML_SYCL_GRAPH
+    bool    graph_support;        // command graphs can be recorded and replayed
+    bool    graph_update_support; // a finalized command graph can be updated
+#endif
 };
 
 
@@ -377,6 +393,11 @@ struct ggml_tensor_extra_gpu {
 };
 
 extern int g_ggml_sycl_use_level_zero_api;
+
+static inline bool ggml_sycl_tensor_is_kv_q8_quants_first(const ggml_tensor * tensor) {
+    return ggml_tensor_is_kv_q8_quants_first(tensor);
+}
+
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q,
                                ggml_sycl_mem_type type = GGML_SYCL_MEM_DIRECT);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
@@ -395,6 +416,41 @@ struct ggml_sycl_gg_tile {
 };
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
+
+#ifdef GGML_SYCL_GRAPH
+struct ggml_sycl_graph {
+    // Only the fields that affect what got recorded: comparing the raw ggml_tensor (its
+    // struct padding and the tail of its fixed-size name buffer are never fully initialized)
+    // produced spurious mismatches unrelated to any real change.
+    // src data/ne/nb are kept next to the node copy: the scheduler can hand back the same src
+    // pointer with different contents or shape, see https://github.com/ggml-org/llama.cpp/pull/21736
+    struct node_properties {
+        void *      node_data;
+        ggml_type   node_type;
+        ggml_op     node_op;
+        int64_t     node_ne[GGML_MAX_DIMS];
+        size_t      node_nb[GGML_MAX_DIMS];
+        int32_t     node_op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
+        void *      node_src_data_ptrs[GGML_MAX_SRC];
+        int64_t     node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+        size_t      node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    };
+
+    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    std::vector<node_properties> node_props;
+    bool     warmup_complete = false;
+    uint64_t uid             = 0;
+    int64_t  last_used_time  = 0;
+
+    // result of check_graph_compatibility() and graph_needs_reorder(), and the uid they were made for
+    bool     compatible     = false;
+    bool     needs_reorder  = true;
+    uint64_t compatible_uid = 0;
+};
+
+static_assert(std::is_trivial<ggml_sycl_graph::node_properties>::value, "node_properties must be trivial");
+#endif
+
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
@@ -402,10 +458,22 @@ struct ggml_backend_sycl_context {
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
+    // Set only for a backend created through ggml_backend_init_private_stream: an in-order
+    // queue on the device's shared context (USM pointers stay valid) that replaces the
+    // device-wide default queue for this context, so its copies overlap other contexts' work.
+    std::unique_ptr<sycl::queue> private_queue;
+
     explicit ggml_backend_sycl_context(int device) :
         device(device),
         name(GGML_SYCL_NAME + std::to_string(device)) {
         opt_feature = ggml_sycl_info().devices[device].opt_feature;
+    }
+
+    void use_private_queue(sycl::queue q) {
+        private_queue = std::make_unique<sycl::queue>(std::move(q));
+        for (int s = 0; s < GGML_SYCL_MAX_STREAMS; ++s) {
+            qptrs[device][s] = private_queue.get();
+        }
     }
 
     queue_ptr stream(int device, int stream) {
@@ -471,6 +539,7 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     std::vector<mmid_row_mapping> mmid_row_mapping_host;
+    std::vector<mmid_row_mapping> mmid_skipped_row_host;
     std::vector<ggml_sycl_gg_tile> mmid_tile_schedule_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
@@ -489,8 +558,46 @@ struct ggml_backend_sycl_context {
     }
 
 #ifdef GGML_SYCL_GRAPH
-    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    // Map from first node pointer to graph - allows multiple graphs per context when the
+    // computation is split across CPU/GPU (e.g. with --n-cpu-moe)
+    std::unordered_map<const void *, std::unique_ptr<ggml_sycl_graph>> sycl_graphs;
+
+    int64_t last_graph_eviction_sweep = 0;
+
+    ggml_sycl_graph * sycl_graph(const void * first_node_ptr) {
+        const int64_t time_now = ggml_time_us();
+        const int64_t eviction_timeout_us = g_ggml_sycl_graph_eviction_timeout * 1'000'000LL;
+
+        // sweep every half the eviction timeout, evicting graphs unused for >= the eviction timeout.
+        // Never evict the key being looked up on this same call: an interactive caller idling
+        // longer than the timeout between requests should re-warm, not have its own lookup wiped
+        // out by the sweep that runs immediately ahead of it.
+        if (time_now - last_graph_eviction_sweep >= eviction_timeout_us / 2) {
+            last_graph_eviction_sweep = time_now;
+            for (auto it = sycl_graphs.begin(); it != sycl_graphs.end(); ) {
+                if (it->first != first_node_ptr && time_now - it->second->last_used_time >= eviction_timeout_us) {
+                    it = sycl_graphs.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        auto it = sycl_graphs.find(first_node_ptr);
+        if (it == sycl_graphs.end()) {
+            it = sycl_graphs.emplace(first_node_ptr, std::make_unique<ggml_sycl_graph>()).first;
+        }
+        it->second->last_used_time = time_now;
+        return it->second.get();
+    }
 #endif
+
+    // True while the main stream is being recorded into a SYCL command graph.
+    // oneAPI forbids queue::wait()/wait_and_throw() on a queue in that state,
+    // so op code that would otherwise synchronize (e.g. the FA decode timing
+    // profile) must check this and skip. Not gated by GGML_SYCL_GRAPH so it is
+    // always a valid false default when graphs are compiled out.
+    bool graph_recording = false;
 
     ggml_sycl_pool & host_pool(int device) {
         if (host_pools[device] == nullptr) {
@@ -506,21 +613,23 @@ struct ggml_backend_sycl_context {
 
 static __dpct_inline__ float warp_reduce_sum(float x,
     const sycl::nd_item<3>& item_ct1) {
+    auto sg = item_ct1.get_sub_group();
+    const int sg_size = sg.get_local_range()[0];
 #pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        x += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), x, mask);
+    for (int mask = sg_size / 2; mask > 0; mask >>= 1) {
+        x += dpct::permute_sub_group_by_xor(sg, x, mask, sg_size);
     }
     return x;
 }
 
 static __dpct_inline__ sycl::float2
 warp_reduce_sum(sycl::float2 a, const sycl::nd_item<3>& item_ct1) {
+    auto sg = item_ct1.get_sub_group();
+    const int sg_size = sg.get_local_range()[0];
 #pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        a.x() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.x(),
-            mask);
-        a.y() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.y(),
-            mask);
+    for (int mask = sg_size / 2; mask > 0; mask >>= 1) {
+        a.x() += dpct::permute_sub_group_by_xor(sg, a.x(), mask, sg_size);
+        a.y() += dpct::permute_sub_group_by_xor(sg, a.y(), mask, sg_size);
     }
     return a;
 }
@@ -694,6 +803,11 @@ inline bool ggml_sycl_dnnl_has_optimized_gemm(int device) {
 #endif
 
 int ggml_sycl_get_env(const char *env_name, int default_val);
+
+// True when GGML_SYCL_MAX_WG_PER_CU was set and accepted by the device-info parser (an
+// invalid value falls back to the default and does not count). Read by the FA launch
+// planning, which otherwise halves the value for 256-GRF launches.
+bool ggml_sycl_max_wg_per_cu_is_explicit();
 
 template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {

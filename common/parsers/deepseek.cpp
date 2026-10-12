@@ -146,7 +146,10 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
     bool has_tool_calls = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.literal(GEN_PROMPT);
+        // Tool-result continuations can open with whitespace instead of the assistant marker.
+        const size_t think_pos = std::min(data.generation_prompt.find(THINK_START),
+                                          data.generation_prompt.find(THINK_END));
+        auto generation_prompt = p.literal(data.generation_prompt.substr(0, think_pos));
         auto end               = p.end();
 
         // build tool call section first since we might need it in reasoning

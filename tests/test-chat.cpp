@@ -4032,6 +4032,27 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_thoughts)
             .run();
 
+        // Tool-result continuations may put whitespace before the generated <think> tag.
+        common_chat_msg tool_result;
+        tool_result.role    = "tool";
+        tool_result.content = "done";
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .messages({ message_user, message_assist_call, tool_result })
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts)
+            .run();
+
+        // The same tool-result prefix is used with an empty, non-thinking block.
+        tst.test("Hello, world!\nWhat's up?")
+            .messages({ message_user, message_assist_call, tool_result })
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
         // Thinking + tool call (single, string param)
         tst.test(
                "Let me check the time</think>\n\n"
@@ -5222,6 +5243,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(simple_assist_msg("", "I'm thinking about this", "special_function", "{\"arg1\": 1}", "functions.special_function:0"))
             .run();
 
+        tst.test("\n<think>I'm thinking about this</think>Hello!")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I'm thinking about this")
+            .expect_content("Hello!")
+            .run();
+
         // Tool call with content
         tst.test(
                "Hello, world!\nWhat's up?"
@@ -5479,6 +5506,11 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
             .expect_rules({ "tool-0" })
+            .run();
+
+        tst.test("\n<think>I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
             .run();
 
         // Tool call with reasoning and content
@@ -7884,6 +7916,30 @@ static void test_reasoning_budget_tokens_per_request() {
     }
 }
 
+static void test_reasoning_budget_muse_glimmer_delimiters() {
+    LOG_DBG("%s\n", __func__);
+    auto tmpls = read_templates("models/templates/muse-glimmer.jinja");
+
+    server_chat_params opt;
+    opt.tmpls            = std::move(tmpls);
+    opt.use_jinja        = true;
+    opt.enable_thinking  = true;
+    opt.reasoning_budget = 32;
+    opt.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+    json body = {
+        {"messages", json::array({json{{"role", "user"}, {"content", "hello"}}})},
+    };
+    std::vector<raw_buffer> out_files;
+    common_chat_session out_session;
+    auto llama_params = oaicompat_chat_params_parse(nullptr, body, opt, out_files, out_session);
+
+    assert_equals(std::string(" to=self<|message|>"), llama_params.at("reasoning_budget_start_tag").get<std::string>());
+    const auto end_tags = llama_params.at("reasoning_budget_end_tags").get<std::vector<std::string>>();
+    assert_equals(size_t(1), end_tags.size());
+    assert_equals(std::string("<|eom|>"), end_tags.front());
+}
+
 static void test_reasoning_budget_message_per_request() {
     LOG_DBG("%s\n", __func__);
     // Same code path as test_reasoning_budget_tokens_per_request: the Qwen3 template's
@@ -8099,6 +8155,7 @@ int main(int argc, char ** argv) {
         test_reasoning_effort_caps();
         test_chat_session();
         test_reasoning_budget_tokens_per_request();
+        test_reasoning_budget_muse_glimmer_delimiters();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';

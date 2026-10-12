@@ -161,7 +161,6 @@ struct test_context {
             seq_positions[seq_id] = start_pos + tokens.size();
         }
 
-
         printf("Batch contents:\n");
         printf("n_tokens: %d\n", batch.size());
         for (int i = 0; i < batch.size(); i++) {
@@ -521,7 +520,6 @@ static void test_temp(const test_params & params) {
             printf("Sequence 0 sampled token id:%d, string: '%s'\n", token, token_str.c_str());
             GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
         }
-
 
         // Verify sequence 1
         {
@@ -2176,18 +2174,6 @@ static std::vector<const backend_test_case *> collect_tests_to_run(const std::st
             if (!test.enabled_by_default) {
                 continue;
             }
-#ifdef GGML_USE_HIP
-            // TODO: remove this when https://github.com/ggml-org/llama.cpp/pull/26592 is merged
-            if (test.name == "test_penalties"                   ||
-                test.name == "test_set_sampler"                 ||
-                test.name == "test_mixed"                       ||
-                test.name == "test_top_p"                       ||
-                test.name == "test_multi_output_sampling_chain" ||
-                test.name == "test_multi_output_cpu_suffix") {
-                fprintf(stderr, "Skipping test '%s' on HIP backend (no backend TOP_K support)\n", test.name.c_str());
-                continue;
-            }
-#endif // GGML_USE_HIP
             selected.push_back(&test);
         }
     }

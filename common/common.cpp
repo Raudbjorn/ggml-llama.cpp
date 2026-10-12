@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstring>
+#include <cwchar>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -48,9 +49,22 @@
 #include <string.h>
 #include <fcntl.h>
 #include <io.h>
+#ifndef fileno
+#define fileno _fileno
+#endif
+#ifndef isatty
+#define isatty _isatty
+#endif
 #else
 #include <sys/ioctl.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#endif
+#endif
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+extern char ** environ;
 #endif
 
 #if !defined(_WIN32)
@@ -72,6 +86,55 @@ common_time_meas::~common_time_meas() {
     if (t_start_us >= 0) {
         t_acc += ggml_time_us() - t_start_us;
     }
+}
+
+#ifdef _WIN32
+static std::string wide_to_utf8(const wchar_t * ws) {
+    if (!ws || !*ws) {
+        return {};
+    }
+
+    const int len = static_cast<int>(std::wcslen(ws));
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, ws, len, nullptr, 0, nullptr, nullptr);
+    if (bytes == 0) {
+        return {};
+    }
+
+    std::string utf8(bytes, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws, len, utf8.data(), bytes, nullptr, nullptr);
+
+    return utf8;
+}
+#endif
+
+std::vector<std::string> common_get_process_environment() {
+    std::vector<std::string> env;
+
+#ifdef _WIN32
+    LPWCH env_block = GetEnvironmentStringsW();
+    if (!env_block) {
+        return env;
+    }
+    for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
+        env.emplace_back(wide_to_utf8(e));
+    }
+    FreeEnvironmentStringsW(env_block);
+#else
+#if defined(__APPLE__)
+    char *** process_environment_ptr = _NSGetEnviron();
+    char ** process_environment = process_environment_ptr == nullptr ? nullptr : *process_environment_ptr;
+#else
+    char ** process_environment = environ;
+#endif
+    if (process_environment == nullptr) {
+        return env;
+    }
+    for (char ** e = process_environment; *e != nullptr; e++) {
+        env.emplace_back(*e);
+    }
+#endif
+
+    return env;
 }
 
 //
@@ -1241,14 +1304,23 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    if (params.fit_params) {
+    if (common_params_should_fit_device_memory(params)) {
         COM_TRC("%s", "fitting params to device memory ...\n");
         COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
+        // Snapshot the pre-fit state so a failed fit can be rolled back to a
+        // documented fallback instead of continuing with an unproven placement.
+        const llama_model_params mparams_before = mparams;
+        const llama_context_params cparams_before = cparams;
+        const std::vector<float> tensor_split_before(
+                params.tensor_split, params.tensor_split + llama_max_devices());
+        const std::vector<llama_model_tensor_buft_override> tbo_before =
+            params.tensor_buft_overrides;
+        const common_moe_cache_params moe_cache_before = params.moe_cache;
+
 
         // the draft context is created from the same base params and follows the main context, fit both together
         const bool has_draft = params.speculative.has_dft();
-        const bool spec_mtp  = std::find(params.speculative.types.begin(), params.speculative.types.end(),
-            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+        const bool spec_mtp  = params.speculative.has_mtp();
 
         common_params params_dft = common_base_params_to_speculative(params);
 
@@ -1265,14 +1337,44 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             /*.cparams      =*/ &cparams_dft,
             /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
         };
-
-        common_fit_params(params.model.path.c_str(), &mparams, &cparams,
+        const common_params_fit_status fit_status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
             params.tensor_split,
             params.tensor_buft_overrides.data(),
+            &params.moe_cache,
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
             has_draft || spec_mtp ? &extra : nullptr,
             params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+        if (fit_status == COMMON_PARAMS_FIT_STATUS_ERROR) {
+            throw std::runtime_error(
+                "failed to fit parameters to device memory (hard error); retry with -fit off");
+        }
+        if (fit_status != COMMON_PARAMS_FIT_STATUS_SUCCESS) {
+            COM_ERR("%s", "fit could not prove a viable placement; restoring the pre-fit parameters\n");
+            mparams = mparams_before;
+            cparams = cparams_before;
+            std::copy(tensor_split_before.begin(), tensor_split_before.end(), params.tensor_split);
+            params.tensor_buft_overrides = tbo_before;
+            params.moe_cache = moe_cache_before;
+            // Re-point at the restored arrays (the override vector may have moved).
+            mparams.tensor_split = params.tensor_split;
+            mparams.tensor_buft_overrides = params.tensor_buft_overrides.empty()
+                ? nullptr : params.tensor_buft_overrides.data();
+        }
+    }
+
+    if (params.moe_cache.mode_explicit || params.moe_cache.fit_selected) {
+        const char * mode = params.moe_cache.mode == COMMON_MOE_CACHE_MODE_OFF ? "off" :
+            params.moe_cache.mode == COMMON_MOE_CACHE_MODE_AUTO ? "auto" :
+            params.moe_cache.mode == COMMON_MOE_CACHE_MODE_SOFT ? "soft" : "on";
+        const char * placement = params.moe_cache.fit_selected ? " placement=cache-aware-fit" : "";
+        if (params.moe_cache.mode == COMMON_MOE_CACHE_MODE_OFF) {
+            COM_INF("%s", "MoE cache: mode=off\n");
+        } else if (params.moe_cache.budget_mib > 0) {
+            COM_INF("MoE cache: mode=%s budget=%zu MiB/device%s; use -lv 4 for resolved backend state, actual pools, and statistics\n", mode, params.moe_cache.budget_mib, placement);
+        } else {
+            COM_INF("MoE cache: mode=%s budget=free-minus-reserve%s; use -lv 4 for resolved backend state, actual pools, and statistics\n", mode, placement);
+        }
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -1509,7 +1611,11 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
         if (llama_model_has_encoder(model)) {
             common_batch batch = common_batch_get_one(lctx, tmp);
-            llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
+            if (batch.size() != (int32_t) tmp.size()) {
+                LOG_WRN("%s: skipping the encoder warmup, the warmup batch could not be built\n", __func__);
+            } else {
+                llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
+            }
             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
             if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
                 decoder_start_token_id = bos;
@@ -1520,9 +1626,13 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         if (llama_model_has_decoder(model)) {
             tmp.resize(std::min(tmp.size(), (size_t) params.n_batch));
             common_batch batch = common_batch_get_one(lctx, tmp);
-            std::vector<float> zeros;
-            common_batch_set_zero_state(batch, model, zeros);
-            llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            if (batch.size() != (int32_t) tmp.size()) {
+                LOG_WRN("%s: skipping the decoder warmup, the warmup batch could not be built\n", __func__);
+            } else {
+                std::vector<float> zeros;
+                common_batch_set_zero_state(batch, model, zeros);
+                llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            }
         }
         llama_memory_clear(llama_get_memory(lctx), true);
         llama_synchronize(lctx);
@@ -1589,12 +1699,19 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
     int ret;
     {
         common_batch batch = common_batch_get_one(ctx, tmp);
-        std::vector<float> zeros;
-        common_batch_set_zero_state(batch, llama_get_model(ctx), zeros);
-        ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+        if (batch.size() == 0) {
+            COM_ERR("%s", "could not build the probe batch\n");
+            ret = -1;
+        } else {
+            std::vector<float> zeros;
+            common_batch_set_zero_state(batch, llama_get_model(ctx), zeros);
+            ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            if (ret != 0) {
+                COM_ERR("llama_process() failed: %d\n", ret);
+            }
+        }
     }
     if (ret != 0) {
-        COM_ERR("llama_process() failed: %d\n", ret);
         res = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
         goto done;
     }
@@ -1679,7 +1796,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.main_gpu        = params.main_gpu;
     mparams.split_mode      = params.split_mode;
     mparams.load_mode       = params.load_mode;
-    mparams.lazy_mode = params.lazy_mode;
+    mparams.lazy_mode       = params.lazy_mode;
     mparams.tensor_split    = params.tensor_split;
     mparams.check_tensors   = params.check_tensors;
     mparams.use_extra_bufts = !params.no_extra_bufts;
@@ -1702,7 +1819,11 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
-    mparams.load_mtp                    = params.load_mtp || std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    // A separate draft model carries the MTP head, so the target leaves its own MTP block unloaded
+    // and the draft keeps it. The role is marked rather than read from the paths: the same file may
+    // be both. An explicit params.load_mtp still wins.
+    const bool mtp_in_draft = params.speculative.has_dft() && !params.model_is_spec_draft;
+    mparams.load_mtp                    = params.load_mtp || (params.speculative.has_mtp() && !mtp_in_draft);
 
     return mparams;
 }
@@ -1713,10 +1834,18 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
     cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
+    cparams.gdn_replay        = params.gdn_replay;
     cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
     cparams.n_outputs_max_per_seq = std::max(params.n_outputs_max_per_seq, 0);
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
+
+    if (cparams.n_rs_seq > 0) {
+        const uint32_t n_batch_min = cparams.n_rs_seq + 2;
+        cparams.n_batch  = std::max(cparams.n_batch,  n_batch_min);
+        cparams.n_ubatch = std::max(cparams.n_ubatch, n_batch_min);
+    }
+
     cparams.n_threads         = params.cpuparams.n_threads;
     cparams.n_threads_batch   = params.cpuparams_batch.n_threads == -1 ?
                                 params.cpuparams.n_threads : params.cpuparams_batch.n_threads;
@@ -1737,6 +1866,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.no_perf           = params.no_perf;
     cparams.op_offload        = !params.no_op_offload;
+    cparams.prefetch_experts_slots = params.prefetch_experts_slots;
     cparams.swa_full          = params.swa_full;
     cparams.kv_unified        = params.kv_unified;
 
@@ -1744,8 +1874,27 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.type_v = params.cache_type_v;
 
     cparams.moe_cache_size = params.moe_cache_size;
+    if (params.moe_cache.mode_explicit) {
+        switch (params.moe_cache.mode) {
+            case COMMON_MOE_CACHE_MODE_OFF:
+                cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_OFF;
+                break;
+            case COMMON_MOE_CACHE_MODE_AUTO:
+                cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_AUTO;
+                break;
+            case COMMON_MOE_CACHE_MODE_ON:
+            case COMMON_MOE_CACHE_MODE_SOFT:
+                cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_ON;
+                break;
+        }
+    }
+    cparams.moe_cache_budget_mib = params.moe_cache.budget_mib;
 
     return cparams;
+}
+
+bool common_params_should_fit_device_memory(const common_params & params) {
+    return params.fit_params;
 }
 
 //
@@ -1772,8 +1921,12 @@ common_threadpools::~common_threadpools() {
     if (!free_fn) {
         return;
     }
-    free_fn(threadpool);
-    free_fn(threadpool_batch);
+    if (threadpool) {
+        free_fn(threadpool);
+    }
+    if (threadpool_batch) {
+        free_fn(threadpool_batch);
+    }
 }
 
 void common_threadpools::init(llama_context * ctx, const common_params & params) {
@@ -1790,6 +1943,11 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
     auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
     free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
+    if (!ggml_threadpool_new_fn || !free_fn) {
+        COM_WRN("%s", "threadpool functions not found in CPU backend\n");
+        free_fn = nullptr;
+        return;
+    }
 
     struct ggml_threadpool_params tpp_batch =
             ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
@@ -1818,6 +1976,29 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     }
 
     llama_attach_threadpool(ctx, threadpool, threadpool_batch);
+}
+
+void common_batch_clear(struct llama_batch & batch) {
+    batch.n_tokens = 0;
+}
+
+void common_batch_add(
+                 struct llama_batch & batch,
+                        llama_token   id,
+                          llama_pos   pos,
+    const std::vector<llama_seq_id> & seq_ids,
+                               bool   logits) {
+    GGML_ASSERT(batch.seq_id[batch.n_tokens] && "llama_batch size exceeded");
+
+    batch.token   [batch.n_tokens] = id;
+    batch.pos     [batch.n_tokens] = pos;
+    batch.n_seq_id[batch.n_tokens] = seq_ids.size();
+    for (size_t i = 0; i < seq_ids.size(); ++i) {
+        batch.seq_id[batch.n_tokens][i] = seq_ids[i];
+    }
+    batch.logits  [batch.n_tokens] = logits;
+
+    batch.n_tokens++;
 }
 
 //
@@ -2157,7 +2338,10 @@ float lr_opt::get_lr(float epoch) const {
 
 bool common_replay_last_token(struct llama_context * ctx, llama_token last_token, int32_t pos) {
     common_batch batch(ctx);
-    batch.add(last_token, pos, 0, true);
+    if (batch.add(last_token, pos, 0, true) < 0) {
+        LOG_ERR("%s: failed to add token %d to the batch\n", __func__, last_token);
+        return false;
+    }
 
     if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         LOG_ERR("%s: failed to replay last token\n", __func__);
@@ -2169,6 +2353,8 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
 common_batch::common_batch(llama_context * ctx) : batch(llama_batch_ext_init(ctx)) {
     const auto rope_type = llama_model_rope_type(llama_get_model(ctx));
     n_pos = rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE ? GGML_MROPE_SECTIONS : 1;
+    n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+    n_seq_max = llama_n_seq_max(ctx);
 }
 
 void common_batch::clear() {
@@ -2176,6 +2362,12 @@ void common_batch::clear() {
 }
 
 int32_t common_batch::add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output) {
+    if (seq_id < 0 || seq_id >= n_seq_max) {
+        return -3;
+    }
+    if (id < 0 || id >= n_vocab) {
+        return -2;
+    }
     tokens.push_back({ id, { pos, 0, 0, 0 }, seq_id, output, { nullptr, 0, 0 }, { nullptr, 0, 0 }, {} });
     return size() - 1;
 }
@@ -2184,14 +2376,20 @@ int32_t common_batch::add(llama_token id, llama_pos pos, const std::vector<llama
     GGML_ASSERT(!seq_ids.empty());
 
     const int32_t idx = add(id, pos, seq_ids[0], output);
+    if (idx < 0) {
+        return idx;
+    }
     for (size_t s = 1; s < seq_ids.size(); ++s) {
-        add_seq(idx, seq_ids[s]);
+        if (!add_seq(idx, seq_ids[s])) {
+            remove_last();
+            return -3;
+        }
     }
     return idx;
 }
 
 bool common_batch::add_seq(int32_t idx, llama_seq_id seq_id) {
-    if (idx < 0 || idx >= size()) {
+    if (idx < 0 || idx >= size() || seq_id < 0 || seq_id >= n_seq_max) {
         return false;
     }
     tokens[idx].seq_ids_extra.push_back(seq_id);
@@ -2229,6 +2427,15 @@ int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq
     }
     tokens.push_back(t);
     return size() - 1;
+}
+
+// remove the last entry, e.g. to roll back an add() whose set_embd() failed; false if empty
+bool common_batch::remove_last() {
+    if (tokens.empty()) {
+        return false;
+    }
+    tokens.pop_back();
+    return true;
 }
 
 llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
@@ -2279,6 +2486,98 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
     return res;
 }
 
+common_batch common_batch_from_llama_batch(llama_context * ctx, const llama_batch & batch) {
+    common_batch res(ctx);
+
+    const bool has_token = batch.token != nullptr;
+    const bool has_embd  = batch.embd  != nullptr;
+
+    const size_t n_embd = llama_model_n_embd_inp(llama_get_model(ctx));
+
+    // no positions given: the legacy contract is that this batch was just decoded on ctx, so the
+    // memory already holds its rows and pos_max points at the batch's last row of each sequence.
+    // Rebuild the positions that decode used by counting back over the rows the batch holds.
+    // (Taking pos_max + 1 would hand out the positions of the *next* batch instead.)
+    auto * mem = llama_get_memory(ctx);
+    const llama_seq_id n_seq_max = (llama_seq_id) llama_n_seq_max(ctx);
+    std::vector<llama_pos> pos_next(n_seq_max, 0);
+    if (!batch.pos) {
+        // mirror llama_batch_compat::init, which generated the positions at decode: it counts a row
+        // against its first sequence id only, so a row shared with other sequences advanced their
+        // memory without advancing their position counter
+        std::vector<int32_t> n_rows(n_seq_max, 0);
+        for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            const llama_seq_id s = batch.seq_id ? batch.seq_id[i][0] : 0;
+            if (s >= 0 && s < n_seq_max) {
+                n_rows[s]++;
+            }
+        }
+        for (llama_seq_id s = 0; s < n_seq_max; ++s) {
+            pos_next[s] = std::max(0, llama_memory_seq_pos_max(mem, s) + 1 - n_rows[s]);
+        }
+    }
+
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        const int32_t      n_sid  = batch.seq_id && batch.n_seq_id ? batch.n_seq_id[i]  : 1;
+        const llama_seq_id seq_id = batch.seq_id                    ? batch.seq_id[i][0] : 0;
+
+        llama_pos pos[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
+        if (!batch.pos) {
+            // an out-of-range seq_id keeps pos 0 here and fails in add() with its documented error
+            if (seq_id >= 0 && seq_id < n_seq_max) {
+                pos[0] = pos_next[seq_id]++;
+            }
+        } else if (has_token) {
+            pos[0] = batch.pos[i];
+        } else {
+            // embedding batch: section-major layout pos[j*n_tokens + i]
+            for (int32_t j = 0; j < res.n_pos; ++j) {
+                pos[j] = batch.pos[j * batch.n_tokens + i];
+            }
+        }
+
+        const bool output = batch.logits ? batch.logits[i] != 0 : i == batch.n_tokens - 1;
+
+        const llama_embd embd = { has_embd ? batch.embd + (size_t) i * n_embd : nullptr, 1, n_embd };
+
+        int32_t idx;
+        if (has_token) {
+            idx = res.add(batch.token[i], pos[0], seq_id, output);
+            if (idx >= 0 && has_embd && !res.set_embd(idx, embd)) {
+                res.remove_last();
+                idx = -2;
+            }
+        } else {
+            idx = res.add_embd(embd, pos, seq_id, output);
+        }
+        if (idx < 0) {
+            // the caller sees a shorter batch than it passed in and treats that as a failure
+            LOG_ERR("%s: could not convert row %d of %d (error %d): batch full, token outside the vocab, bad row width or seq id\n",
+                    __func__, i, batch.n_tokens, idx);
+            res.clear();
+            return res;
+        }
+
+        if (n_sid > 1) {
+            // the target batch keeps every sequence id; the draft mirror (common_batch::token)
+            // holds one, so the draft implementations see only the first
+            static bool warned = false;
+            if (!warned) {
+                LOG_WRN("%s: token with %d sequence ids, the draft mirror keeps only the first one\n", __func__, n_sid);
+                warned = true;
+            }
+        }
+        for (int32_t s = 1; s < n_sid; ++s) {
+            if (!res.add_seq(idx, batch.seq_id[i][s])) {
+                LOG_ERR("%s: could not add seq id %d to row %d\n", __func__, batch.seq_id[i][s], i);
+                res.clear();
+                return res;
+            }
+        }
+    }
+
+    return res;
+}
 common_batch common_batch_get_one(llama_context * ctx, const llama_token * tokens, int32_t n_tokens) {
     common_batch batch(ctx);
 
@@ -2306,6 +2605,11 @@ bool common_prompt_batch_decode(
                                int   n_batch,
                   std::string_view   state_path,
                               bool   save_state) {
+    // validate before building suffix iterators: an out-of-range n_new would point outside all_tokens
+    if (n_new < 0 || (size_t) n_new > all_tokens.size()) {
+        COM_ERR("n_new = %d is outside [0, %zu]\n", n_new, all_tokens.size());
+        return false;
+    }
     if (n_new == 0) {
         return true;
     }
@@ -2314,7 +2618,10 @@ bool common_prompt_batch_decode(
     if (save_state && n_new > 1) {
         const int n_tokens_before_last = n_new - 1;
 
-        GGML_ASSERT(n_new <= n_batch);
+        if (n_new > n_batch) {
+            COM_ERR("n_new = %d exceeds n_batch = %d\n", n_new, n_batch);
+            return false;
+        }
 
         // Decode all but the last token so we can save the memory state before decoding the last token.
         // This is done so we can restore the session state later and replay the last token.
@@ -2323,6 +2630,10 @@ bool common_prompt_batch_decode(
         // is the reason for this logic.
         llama_tokens prefix_tokens(all_tokens.begin() + offset, all_tokens.begin() + offset + n_tokens_before_last);
         common_batch batch_prefix = common_batch_get_one(ctx, prefix_tokens);
+        if (batch_prefix.size() != (int32_t) prefix_tokens.size()) {
+            COM_ERR("%s", "failed to build the prompt batch\n");
+            return false;
+        }
         if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch_prefix.get())) {
             COM_ERR("%s", "failed to eval\n");
             return false;
@@ -2333,7 +2644,10 @@ bool common_prompt_batch_decode(
         COM_INF("saved session before last token to %s, n_new = %zu\n", state_path.data(), all_tokens.size());
 
         common_batch batch_last(ctx);
-        batch_last.add(all_tokens.back(), n_past, 0, true);
+        if (batch_last.add(all_tokens.back(), n_past, 0, true) < 0) {
+            COM_ERR("%s", "failed to add the last token to the batch\n");
+            return false;
+        }
 
         if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch_last.get())) {
             COM_ERR("%s", "failed to eval last token\n");
@@ -2343,6 +2657,10 @@ bool common_prompt_batch_decode(
     } else {
         llama_tokens new_tokens(all_tokens.begin() + offset, all_tokens.begin() + offset + n_new);
         common_batch batch = common_batch_get_one(ctx, new_tokens);
+        if (batch.size() != (int32_t) new_tokens.size()) {
+            COM_ERR("%s", "failed to build the prompt batch\n");
+            return false;
+        }
         if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             COM_ERR("%s", "failed to eval\n");
             return false;

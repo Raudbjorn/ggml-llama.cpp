@@ -3,6 +3,7 @@
 	import { MODEL_ID } from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
+	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { detectThinkingSupport, detectToolUseSupport, nearViewport, repoOf } from '$lib/utils';
 
@@ -46,10 +47,14 @@
 	});
 
 	let supportsThinking = $derived(
-		declared.includes(ModelCapability.REASONING) || detectThinkingSupport(template)
+		declared.includes(ModelCapability.REASONING) ||
+			modelsStore.props.checkModelSupportsThinking(option.model) ||
+			detectThinkingSupport(template)
 	);
 	let supportsToolUse = $derived(
-		declared.includes(ModelCapability.TOOL_USE) || detectToolUseSupport(template)
+		declared.includes(ModelCapability.TOOL_USE) ||
+			modelsStore.props.checkModelSupportsToolUse(option.model) ||
+			detectToolUseSupport(template)
 	);
 </script>
 

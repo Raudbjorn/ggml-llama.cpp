@@ -4,6 +4,128 @@ if (NOT GGML_SYCL_TARGET MATCHES "^(INTEL)$")
     message(FATAL_ERROR "GGML_SYCL_TARGET: Invalid target, the supported options are [INTEL]")
 endif()
 
+# CMake build tree wants and can work with only one C++ compiler, but
+# - ggml-sycl wants -fsycl capable compiler
+# - ggml-hip wants hipcc
+# thanks ggml backends talking only through C API, we can freely build one backend with it's own compiler
+# so this branch does exactly that: we build this backend as externalproject, an existing pattern from hexagon backend
+if (GGML_SYCL_SEPARATE_BUILD)
+    if (CMAKE_GENERATOR MATCHES "^Visual Studio")
+        # the nested project inherits the Visual Studio generator and its MSVC toolset, and
+        # CMAKE_CXX_COMPILER does not select a toolset there; use Ninja (docs/backend/SYCL.md),
+        # or the non-separate build, which already switches ggml-sycl to the Intel toolset
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD does not support Visual Studio generators, use -G Ninja")
+    endif()
+    if (NOT GGML_BACKEND_DL)
+        # only tested with shared libraries
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD requires GGML_BACKEND_DL")
+    endif()
+    unset(GGML_SYCL_SEPARATE_BUILD_CXX_PATH CACHE)
+    find_program(GGML_SYCL_SEPARATE_BUILD_CXX_PATH ${GGML_SYCL_SEPARATE_BUILD_CXX})
+    if (NOT GGML_SYCL_SEPARATE_BUILD_CXX_PATH)
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD_CXX: ${GGML_SYCL_SEPARATE_BUILD_CXX} not found")
+    endif()
+
+    # select the minimal possible build because we only need one backend
+    set(sycl_args
+        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER=${GGML_SYCL_SEPARATE_BUILD_CXX_PATH}
+        -DCMAKE_SKIP_BUILD_RPATH=ON
+        -DBUILD_SHARED_LIBS=ON
+        -DGGML_BACKEND_DL=ON
+        -DGGML_CPU=OFF
+        -DGGML_BUILD_TESTS=OFF
+        -DGGML_BUILD_EXAMPLES=OFF
+        -DGGML_CCACHE=OFF)
+    # no compiler cache in front of the nested icpx build: an sccache launcher has replaced icpx with
+    # the host c++ on this fork (AGENTS.md, build gotchas). Empty launchers alone are not enough,
+    # because GGML_CCACHE then installs ccache or sccache as a global rule launcher, so it is OFF too.
+    list(APPEND sycl_args -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER=)
+
+    # append everything starting with GGML_SYCL to the flags
+    get_cmake_property(cache_vars CACHE_VARIABLES)
+    foreach (var ${cache_vars})
+        if (var MATCHES "^GGML_SYCL" AND NOT var MATCHES "^GGML_SYCL_SEPARATE_BUILD")
+            string(REPLACE ";" "|" sycl_arg_value "${${var}}")
+            list(APPEND sycl_args "-D${var}=${sycl_arg_value}")
+        endif()
+    endforeach()
+
+    # package discovery and install RPATH settings do not reach the nested configure on their own;
+    # this fork's documented recipe supplies them as cache variables (packaging/arch/PKGBUILD).
+    # list values are joined with | and split again by LIST_SEPARATOR below
+    set(sycl_forward_vars MKL_DIR TBB_DIR IntelSYCL_DIR DNNL_DIR DNNL_GPU_VENDOR CMAKE_PREFIX_PATH
+                          CMAKE_INSTALL_RPATH CMAKE_BUILD_WITH_INSTALL_RPATH CMAKE_MAKE_PROGRAM)
+    get_property(sycl_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if (sycl_multi_config)
+        # custom configurations (e.g. Profile) must exist in the nested project too
+        list(APPEND sycl_forward_vars CMAKE_CONFIGURATION_TYPES)
+    endif()
+    foreach (var ${sycl_forward_vars})
+        if (DEFINED ${var})
+            string(REPLACE ";" "|" sycl_arg_value "${${var}}")
+            list(APPEND sycl_args "-D${var}=${sycl_arg_value}")
+        endif()
+    endforeach()
+    # the nested module is copied into place, never relinked by an install step, so it has to be
+    # linked with the install RPATH itself
+    if (DEFINED CMAKE_INSTALL_RPATH)
+        list(APPEND sycl_args -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON)
+    endif()
+    # Selection stays in the outer cache so its metadata describes the nested build too.
+    foreach(arg IN LISTS GGML_SYCL_SEPARATE_BUILD_ARGS)
+        if (arg MATCHES "^-DGGML_SYCL_(XMX_GATHER|DEVICE_ARCH)(:|=|_)")
+            message(FATAL_ERROR "Set GGML_SYCL_XMX_GATHER and GGML_SYCL_DEVICE_ARCH on the outer configure, not in GGML_SYCL_SEPARATE_BUILD_ARGS")
+        endif()
+    endforeach()
+    list(APPEND sycl_args ${GGML_SYCL_SEPARATE_BUILD_ARGS})
+
+    # multi-config generators put the module under a per-configuration directory and need
+    # --config on the nested build; single-config generators leave both empty
+    if (sycl_multi_config)
+        set(sycl_cfg_arg --config $<CONFIG>)
+        set(sycl_cfg_dir $<CONFIG>/)
+    endif()
+    set(sycl_lib ${CMAKE_SHARED_MODULE_PREFIX}ggml-sycl${CMAKE_SHARED_MODULE_SUFFIX})
+    set(sycl_out ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${sycl_cfg_dir}${sycl_lib})
+    # generator expressions in BYPRODUCTS need CMake 3.20; nothing consumes the module as a build
+    # input, so older CMake with a multi-config generator only loses it from the clean target
+    set(sycl_byproducts ${sycl_out})
+    if (sycl_multi_config AND CMAKE_VERSION VERSION_LESS 3.20)
+        set(sycl_byproducts "")
+    endif()
+
+    # ggml is not built standalone here, so use a wrapper project
+    set(sycl_src ${CMAKE_CURRENT_BINARY_DIR}/nested-src)
+    file(WRITE ${sycl_src}/CMakeLists.txt
+        "cmake_minimum_required(VERSION ${CMAKE_VERSION})\n"
+        "project(ggml-sycl-nested C CXX)\n"
+        "add_subdirectory(\"${CMAKE_CURRENT_SOURCE_DIR}/../..\" ggml)\n")
+
+    include(ExternalProject)
+    ExternalProject_Add(ggml-sycl
+        SOURCE_DIR ${sycl_src}
+        BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/nested
+        LIST_SEPARATOR |
+        CMAKE_ARGS ${sycl_args}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . ${sycl_cfg_arg} --target ggml-sycl
+        BUILD_ALWAYS ON
+        BUILD_BYPRODUCTS ${sycl_byproducts}
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_if_different <BINARY_DIR>/bin/${sycl_cfg_dir}${sycl_lib} ${sycl_out})
+    add_dependencies(ggml ggml-sycl)
+
+    if (GGML_BACKEND_DIR)
+        install(PROGRAMS ${sycl_out} DESTINATION ${GGML_BACKEND_DIR})
+    else()
+        install(PROGRAMS ${sycl_out} DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
+    return()
+endif()
+
+# icpx links temporary objects that are deleted afterwards, so the linker depfile makes ggml-sycl always out of date
+set(CMAKE_LINK_DEPENDS_USE_LINKER OFF)
+
 check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
 
 if (DEFINED ENV{ONEAPI_ROOT})
@@ -25,12 +147,20 @@ ggml_add_backend_library(ggml-sycl
 
 file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
+list(REMOVE_ITEM GGML_SOURCES_SYCL "${CMAKE_CURRENT_SOURCE_DIR}/sycl-mutable-command-list-probe.cpp")
 file(GLOB   SRCS "template-instances/fattn-tile*.cpp")
 list(APPEND GGML_SOURCES_SYCL ${SRCS})
 file(GLOB   SRCS "template-instances/fattn-vec*.cpp")
 list(APPEND GGML_SOURCES_SYCL ${SRCS})
 
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
+
+# LLAMA_BUILD_TESTS covers this fork's canonical build (a llama.cpp superproject
+# build, where GGML_BUILD_TESTS is off by default per docs/); GGML_BUILD_TESTS
+# covers a ggml-standalone test build, where LLAMA_BUILD_TESTS doesn't apply.
+if (LLAMA_BUILD_TESTS OR GGML_BUILD_TESTS)
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_TESTING)
+endif()
 
 if (WIN32)
     # To generate a Visual Studio solution, using Intel C++ Compiler for ggml-sycl is mandatory
@@ -105,6 +235,13 @@ endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
+if (GGML_SYCL_DEVICE_CODE_SPLIT)
+    target_compile_options(ggml-sycl PRIVATE "-fsycl-device-code-split=per_kernel")
+    target_link_options(ggml-sycl PRIVATE "-fsycl-device-code-split=per_kernel")
+endif()
+
+message(STATUS "GGML_SYCL_DEVICE_CODE_SPLIT ${GGML_SYCL_DEVICE_CODE_SPLIT}")
+
 message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO_API ${GGML_SYCL_SUPPORT_LEVEL_ZERO_API}")
 if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
     # Link against Level Zero loader for direct device memory allocation.
@@ -125,6 +262,40 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
                         "Level Zero API is not mandatory for SYCL backend, "
                         "but it is required by the special features for better "
                         "function & performance on Intel GPUs.")
+    endif()
+endif()
+
+if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API AND ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+    get_filename_component(GGML_SYCL_COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_program(GGML_SYCL_OPENCL_CLANG
+                 NAMES clang
+                 HINTS "${GGML_SYCL_COMPILER_BIN_DIR}/compiler"
+                 NO_DEFAULT_PATH)
+    find_program(GGML_SYCL_LLVM_SPIRV NAMES llvm-spirv)
+    if (GGML_SYCL_OPENCL_CLANG AND GGML_SYCL_LLVM_SPIRV)
+        set(MUTABLE_PROBE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/sycl-mutable-command-list-probe.cl")
+        set(MUTABLE_PROBE_BITCODE "${CMAKE_CURRENT_BINARY_DIR}/sycl-mutable-command-list-probe.bc")
+        set(MUTABLE_PROBE_SPIRV "${CMAKE_CURRENT_BINARY_DIR}/sycl-mutable-command-list-probe.spv")
+        add_custom_command(
+            OUTPUT "${MUTABLE_PROBE_SPIRV}"
+            BYPRODUCTS "${MUTABLE_PROBE_BITCODE}"
+            COMMAND "${GGML_SYCL_OPENCL_CLANG}" -cc1 -triple spir64 -cl-std=CL2.0
+                    -finclude-default-header -emit-llvm-bc "${MUTABLE_PROBE_SOURCE}"
+                    -o "${MUTABLE_PROBE_BITCODE}"
+            COMMAND "${GGML_SYCL_LLVM_SPIRV}" "${MUTABLE_PROBE_BITCODE}" -o "${MUTABLE_PROBE_SPIRV}"
+            DEPENDS "${MUTABLE_PROBE_SOURCE}"
+            VERBATIM)
+        add_executable(sycl-mutable-command-list-probe EXCLUDE_FROM_ALL
+                       sycl-mutable-command-list-probe.cpp)
+        target_include_directories(sycl-mutable-command-list-probe PRIVATE "${LEVEL_ZERO_INCLUDE_DIR}")
+        target_link_libraries(sycl-mutable-command-list-probe PRIVATE "${ZE_LOADER_LIB}")
+        target_compile_definitions(
+            sycl-mutable-command-list-probe
+            PRIVATE MUTABLE_PROBE_SPIRV_PATH="${MUTABLE_PROBE_SPIRV}")
+        add_custom_target(sycl-mutable-command-list-probe-spirv DEPENDS "${MUTABLE_PROBE_SPIRV}")
+        add_dependencies(sycl-mutable-command-list-probe sycl-mutable-command-list-probe-spirv)
+    else()
+        message(STATUS "Mutable command-list probe disabled: OpenCL clang or llvm-spirv not found")
     endif()
 endif()
 
@@ -164,13 +335,37 @@ else()
 endif()
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
 
+# 256-GRF variants of the flash-attention kernels (option in ggml/CMakeLists.txt, runtime
+# knob GGML_SYCL_FA_LARGE_GRF). Off by default: every FA tile kernel would carry a second
+# device image, and an AOT build compiles each twice.
+if (GGML_SYCL_FA_LARGE_GRF)
+    if (NOT "${GGML_SYCL_DEVICE_ARCH_NORMALIZED}" STREQUAL "")
+        message(WARNING "GGML_SYCL_FA_LARGE_GRF=ON with GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH}: every flash-attention tile kernel is compiled twice ahead of time; this combination has not been built by the fork")
+    endif()
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_FA_LARGE_GRF_VARIANTS=1)
+else()
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_FA_LARGE_GRF_VARIANTS=0)
+endif()
+message(STATUS "GGML_SYCL_FA_LARGE_GRF ${GGML_SYCL_FA_LARGE_GRF}")
+
+
 if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)
 endif()
 
+option(GGML_SYCL_SCALAR_MMQ "Force scalar MMQ tile sizes (for B70 without XMX kernels)" OFF)
+if (GGML_SYCL_SCALAR_MMQ)
+    add_compile_definitions(GGML_SYCL_SCALAR_MMQ)
+endif()
+
+option(GGML_SYCL_TURBO_QUANT "Enable dispatch to TurboQuant KV cache FA kernels" ON)
+if (GGML_SYCL_TURBO_QUANT)
+    add_compile_definitions(GGML_SYCL_TURBO_QUANT)
+endif()
+
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
-    if (NOT GGML_SYCL_DEVICE_ARCH)
+    if ("${GGML_SYCL_DEVICE_ARCH_NORMALIZED}" STREQUAL "")
         target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
     else()
         message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
@@ -198,12 +393,21 @@ if (GGML_SYCL_HOST_MEM_FALLBACK)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_HOST_MEM_FALLBACK)
 endif()
 
-if (GGML_SYCL_DEVICE_ARCH)
+# Resolve policy in the outer and nested configure; keep mixed-target images separate.
+if (GGML_SYCL_XMX_GATHER_EFFECTIVE STREQUAL "OFF")
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_NO_XMX_GATHER)
+endif()
+target_compile_definitions(ggml-sycl PRIVATE
+    GGML_SYCL_XMX_GATHER_REQUESTED="${GGML_SYCL_XMX_GATHER}"
+    GGML_SYCL_XMX_GATHER_EFFECTIVE="${GGML_SYCL_XMX_GATHER_EFFECTIVE}")
+
+if (NOT "${GGML_SYCL_DEVICE_ARCH_NORMALIZED}" STREQUAL "")
+    set(ggml_sycl_aot_arch "${GGML_SYCL_DEVICE_ARCH_NORMALIZED}")
     message(STATUS "GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} (AOT via spir64_gen)")
     target_compile_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${ggml_sycl_aot_arch}\""
     )
 
     # Pass through parallel job (process) count for parallelising the
@@ -218,7 +422,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${ggml_sycl_aot_arch}\""
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 
@@ -226,7 +430,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     # 16 on Xe-HPC and Xe2 or newer. ocloc fails on the other size, so build only the one that fits.
     # 0 (unknown name, mixed list, or no XMX) builds no XMX tile and the path stays off.
     set(_ggml_sycl_xmx_sg "")
-    string(TOLOWER "${GGML_SYCL_DEVICE_ARCH}" _ggml_sycl_archs)
+    string(TOLOWER "${GGML_SYCL_XMX_GATHER_EFFECTIVE}" _ggml_sycl_archs)
     string(REPLACE "," ";" _ggml_sycl_archs "${_ggml_sycl_archs}")
     foreach(_arch IN LISTS _ggml_sycl_archs)
         if (_arch MATCHES "^(dg2|acm|ats-m|arl-h|xe-hpg|12\\.5[567]\\.|12\\.74\\.)")
@@ -244,4 +448,125 @@ if (GGML_SYCL_DEVICE_ARCH)
     endforeach()
     message(STATUS "GGML_SYCL_DEVICE_ARCH: XMX dequant-GEMM sub-group size ${_ggml_sycl_xmx_sg} (0 = off)")
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_XMX_AOT_SG=${_ggml_sycl_xmx_sg})
+endif()
+
+# Prelink only the gather unit for admitted targets; the backend's other kernels keep the full list.
+if (NOT "${GGML_SYCL_DEVICE_ARCH_NORMALIZED}" STREQUAL "" AND NOT GGML_SYCL_XMX_GATHER_EFFECTIVE STREQUAL "OFF"
+        AND NOT GGML_SYCL_XMX_GATHER_EFFECTIVE STREQUAL GGML_SYCL_DEVICE_ARCH_NORMALIZED)
+    get_target_property(sycl_sources ggml-sycl SOURCES)
+    list(REMOVE_ITEM sycl_sources "${CMAKE_CURRENT_SOURCE_DIR}/fused-gemm.cpp")
+    set_property(TARGET ggml-sycl PROPERTY SOURCES "${sycl_sources}")
+    add_library(ggml-sycl-gather OBJECT fused-gemm.cpp)
+    set_target_properties(ggml-sycl-gather PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    get_target_property(sycl_vs_toolset ggml-sycl VS_PLATFORM_TOOLSET)
+    if (sycl_vs_toolset)
+        set_property(TARGET ggml-sycl-gather PROPERTY VS_PLATFORM_TOOLSET "${sycl_vs_toolset}")
+    endif()
+    foreach(prop COMPILE_OPTIONS COMPILE_DEFINITIONS INCLUDE_DIRECTORIES)
+        set_property(TARGET ggml-sycl-gather PROPERTY ${prop} "$<TARGET_PROPERTY:ggml-sycl,${prop}>")
+    endforeach()
+    target_link_libraries(ggml-sycl-gather PRIVATE $<TARGET_PROPERTY:ggml-sycl,LINK_LIBRARIES>)
+
+    get_filename_component(sycl_compiler_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_program(SYCL_OFFLOAD_BUNDLER NAMES clang-offload-bundler
+        HINTS "${sycl_compiler_dir}/compiler" "${sycl_compiler_dir}")
+    if (NOT SYCL_OFFLOAD_BUNDLER)
+        message(FATAL_ERROR "AOT XMX gather needs clang-offload-bundler beside the SYCL compiler")
+    endif()
+    execute_process(COMMAND "${CMAKE_CXX_COMPILER}" -dumpmachine
+        OUTPUT_VARIABLE sycl_host_triple OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE sycl_triple_result)
+    if (NOT sycl_triple_result EQUAL 0 OR NOT sycl_host_triple)
+        message(FATAL_ERROR "Could not determine the SYCL host triple")
+    endif()
+    if (CMAKE_CONFIGURATION_TYPES AND CMAKE_VERSION VERSION_LESS 3.20)
+        message(FATAL_ERROR "Multi-config AOT XMX gather requires CMake 3.20 or newer")
+    endif()
+    set(gather_config_dir "${CMAKE_CURRENT_BINARY_DIR}")
+    if (CMAKE_CONFIGURATION_TYPES)
+        string(APPEND gather_config_dir "/$<CONFIG>")
+    endif()
+    set(gather_host "${gather_config_dir}/gather-host${CMAKE_CXX_OUTPUT_EXTENSION}")
+    set(gather_device "${gather_config_dir}/gather-device${CMAKE_CXX_OUTPUT_EXTENSION}")
+    set(gather_pic)
+    if (NOT WIN32)
+        set(gather_pic -fPIC)
+    endif()
+    add_custom_command(OUTPUT "${gather_host}" "${gather_device}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${gather_config_dir}"
+        COMMAND "${SYCL_OFFLOAD_BUNDLER}" -unbundle -type=o "-targets=host-${sycl_host_triple}"
+            "-input=$<TARGET_OBJECTS:ggml-sycl-gather>" "-output=${gather_host}"
+        COMMAND "${CMAKE_CXX_COMPILER}" -fsycl ${gather_pic} -fsycl-targets=spir64_gen
+            -fsycl-device-code-split=per_kernel -Xsycl-target-backend=spir64_gen
+            "-device ${GGML_SYCL_XMX_GATHER_EFFECTIVE}" -fsycl-link
+            $<TARGET_OBJECTS:ggml-sycl-gather> -o "${gather_device}"
+        DEPENDS ggml-sycl-gather $<TARGET_OBJECTS:ggml-sycl-gather>
+        VERBATIM COMMAND_EXPAND_LISTS)
+    add_custom_target(ggml-sycl-gather-images DEPENDS "${gather_host}" "${gather_device}")
+    add_dependencies(ggml-sycl ggml-sycl-gather-images)
+    # Bypass a second device link; static archives must carry registration with the host entry points.
+    get_target_property(sycl_library_type ggml-sycl TYPE)
+    if (sycl_library_type STREQUAL "STATIC_LIBRARY")
+        if (WIN32)
+            message(FATAL_ERROR "Mixed-target static XMX gather needs ELF partial linking; use BUILD_SHARED_LIBS=ON, separate target packages, or GGML_SYCL_XMX_GATHER=OFF")
+        endif()
+        find_program(SYCL_OBJCOPY NAMES llvm-objcopy HINTS "${sycl_compiler_dir}/compiler" "${sycl_compiler_dir}")
+        if (NOT SYCL_OBJCOPY)
+            message(FATAL_ERROR "Mixed-target static XMX gather requires llvm-objcopy")
+        endif()
+        set(gather_combined "${gather_config_dir}/gather-combined${CMAKE_CXX_OUTPUT_EXTENSION}")
+        add_custom_command(OUTPUT "${gather_combined}"
+            BYPRODUCTS "${gather_config_dir}/gather-native${CMAKE_CXX_OUTPUT_EXTENSION}"
+            COMMAND "${SYCL_OBJCOPY}" --rename-section=__CLANG_OFFLOAD_BUNDLE__sycl-spir64_gen=.rodata.ggml_sycl_gather
+                "${gather_device}" "${gather_config_dir}/gather-native${CMAKE_CXX_OUTPUT_EXTENSION}"
+            COMMAND "${CMAKE_CXX_COMPILER}" -r -nostdlib "${gather_host}"
+                "${gather_config_dir}/gather-native${CMAKE_CXX_OUTPUT_EXTENSION}" -o "${gather_combined}"
+            DEPENDS "${gather_host}" "${gather_device}" VERBATIM)
+        target_sources(ggml-sycl PRIVATE "${gather_combined}")
+    else()
+        target_sources(ggml-sycl PRIVATE "${gather_host}")
+        target_link_options(ggml-sycl PRIVATE "LINKER:${gather_device}")
+        set_property(TARGET ggml-sycl APPEND PROPERTY LINK_DEPENDS "${gather_device}")
+    endif()
+endif()
+
+if (LLAMA_BUILD_TESTS)
+    add_executable(test-sycl-xmx-gather-stubs
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/test-sycl-xmx-gather-stubs.cpp fused-gemm.cpp)
+    foreach(prop COMPILE_OPTIONS COMPILE_DEFINITIONS INCLUDE_DIRECTORIES)
+        set_property(TARGET test-sycl-xmx-gather-stubs PROPERTY ${prop} "$<TARGET_PROPERTY:ggml-sycl,${prop}>")
+    endforeach()
+    get_target_property(sycl_vs_toolset ggml-sycl VS_PLATFORM_TOOLSET)
+    if (sycl_vs_toolset)
+        set_property(TARGET test-sycl-xmx-gather-stubs PROPERTY VS_PLATFORM_TOOLSET "${sycl_vs_toolset}")
+    endif()
+    target_compile_definitions(test-sycl-xmx-gather-stubs PRIVATE GGML_SYCL_NO_XMX_GATHER)
+    get_target_property(stub_libraries ggml-sycl LINK_LIBRARIES)
+    list(REMOVE_ITEM stub_libraries ggml-base)
+    target_link_libraries(test-sycl-xmx-gather-stubs PRIVATE ${stub_libraries})
+    get_target_property(stub_link_options ggml-sycl LINK_OPTIONS)
+    list(REMOVE_ITEM stub_link_options "LINKER:${gather_device}")
+    target_link_options(test-sycl-xmx-gather-stubs PRIVATE ${stub_link_options})
+endif()
+
+if (LLAMA_BUILD_TESTS AND DEFINED gather_device)
+    add_executable(test-sycl-xmx-gather-images
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/test-sycl-xmx-gather-images.cpp)
+    if (DEFINED gather_combined)
+        add_library(test-sycl-gather-archive STATIC "${gather_combined}")
+        set_target_properties(test-sycl-gather-archive PROPERTIES LINKER_LANGUAGE CXX)
+        target_link_libraries(test-sycl-xmx-gather-images PRIVATE test-sycl-gather-archive)
+    else()
+        target_sources(test-sycl-xmx-gather-images PRIVATE "${gather_host}")
+        target_link_options(test-sycl-xmx-gather-images PRIVATE "LINKER:${gather_device}")
+    endif()
+    add_dependencies(test-sycl-xmx-gather-images ggml-sycl-gather-images)
+    if (sycl_vs_toolset)
+        set_property(TARGET test-sycl-xmx-gather-images PROPERTY VS_PLATFORM_TOOLSET "${sycl_vs_toolset}")
+    endif()
+    foreach(prop COMPILE_OPTIONS COMPILE_DEFINITIONS INCLUDE_DIRECTORIES)
+        set_property(TARGET test-sycl-xmx-gather-images PROPERTY ${prop} "$<TARGET_PROPERTY:ggml-sycl,${prop}>")
+    endforeach()
+    target_link_libraries(test-sycl-xmx-gather-images PRIVATE ${stub_libraries})
+    target_link_options(test-sycl-xmx-gather-images PRIVATE ${stub_link_options})
+    set_property(TARGET test-sycl-xmx-gather-images APPEND PROPERTY LINK_DEPENDS "${gather_device}")
 endif()

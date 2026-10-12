@@ -65,7 +65,9 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Lfm2DSparkDraftModel": "qwen",
     "LingDSparkModel": "qwen",
     "DeepseekV4ForCausalLM": "deepseek",
+    "DFlashLagunaForCausalLM": "laguna",
     "DeepseekV4DSparkModel": "deepseek",
+
     "DistilBertForMaskedLM": "bert",
     "DistilBertForSequenceClassification": "bert",
     "DistilBertModel": "bert",
@@ -349,6 +351,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "MERaLiON2ForConditionalGeneration": "ultravox",
     "MiMoV2ForCausalLM": "mimo",
     "MiniMaxM3SparseForConditionalGeneration": "minimax",
+    "MiniMaxM3VLForConditionalGeneration": "minimax",
     "MiniCPMV4_6ForConditionalGeneration": "minicpm",
     "MiniCPMV4_7ForConditionalGeneration": "minicpm",
     "Mistral3ForConditionalGeneration": "llava",

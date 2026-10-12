@@ -493,6 +493,7 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
         inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->tokens);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
     } else {
+        // [TAG_GEMMA4_IMG_PADDING]
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation
 

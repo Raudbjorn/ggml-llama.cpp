@@ -337,17 +337,17 @@ def test_slot_save_restore_with_two_images(mmproj_server):
     assert res.status_code == 200
     assert res.body["n_restored"] == n_saved
 
-    res = server.make_request("POST", "/completions", data={
+    res_slot0 = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
         "top_k": 1,
         "id_slot": 0,
         "cache_prompt": True,
         "prompt": prompt,
     })
-    assert res.status_code == 200
-    assert res.body["timings"]["cache_n"] == prompt_n_full - 1
-    assert res.body["timings"]["prompt_n"] == 1
-    content = res.body["content"]
+    assert res_slot0.status_code == 200
+    assert res_slot0.body["timings"]["cache_n"] == prompt_n_full - 1
+    assert res_slot0.body["timings"]["prompt_n"] == 1
+    content_slot0 = res_slot0.body["content"]
 
     res = server.make_request("POST", "/slots/1?action=restore", data={
         "filename": "mm_slot_two_images.bin",
@@ -358,16 +358,16 @@ def test_slot_save_restore_with_two_images(mmproj_server):
     res = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
         "top_k": 1,
-        "id_slot": 0,
+        "id_slot": 1,
         "cache_prompt": True,
         "prompt": prompt,
     })
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == prompt_n_full - 1
     assert res.body["timings"]["prompt_n"] == 1
-    content = res.body["content"]
+    content_slot1 = res.body["content"]
 
-    assert res.body["content"] == content
+    assert content_slot1 == content_slot0
 
 
 def test_slot_save_restore_with_image_across_restart(mmproj_server):
@@ -563,8 +563,9 @@ def swa_server():
 
 
 # the non-ASCII name checks that the appendix lands in the same file as the llama state on Windows
-@pytest.mark.parametrize("filename", ["ckpt_slot1.bin", "ckpt_slot1_é.bin"])
-def test_slot_restore_preserves_context_checkpoints(swa_server, filename):
+@pytest.mark.parametrize("filename", ["ckpt_slot1.bin", "ckpt_slot1_\u00e9.bin"])
+@pytest.mark.parametrize("checkpoint_format", ["appendix", "legacy_sidecar"])
+def test_slot_restore_preserves_context_checkpoints(swa_server, filename, checkpoint_format):
     server = swa_server
     server.start()
 
@@ -604,6 +605,21 @@ def test_slot_restore_preserves_context_checkpoints(swa_server, filename):
     assert res.body["n_saved"] > 0
     ckpt_file = os.path.join(server.slot_save_path, filename)
     assert res.body["n_written"] == os.path.getsize(ckpt_file)
+
+    # Both formats must restore the same pre-divergence checkpoint.
+    if checkpoint_format == "legacy_sidecar":
+        with open(ckpt_file, "rb") as state:
+            data = state.read()
+        offset, checkpoints = parse_ckpt_appendix(data)
+        primary = data[:offset]
+        state_hash = 14695981039346656037
+        for value in primary:
+            state_hash = ((state_hash ^ value) * 1099511628211) & ((1 << 64) - 1)
+        with open(ckpt_file, "wb") as state:
+            state.write(primary)
+        with open(ckpt_file + ".ckpt", "wb") as sidecar:
+            sidecar.write(struct.pack("=IIQI", 0x4C434B50, 2, state_hash, len(checkpoints)))
+            sidecar.write(data[offset + 12:])
 
     res = server.make_request("POST", "/completion", data={
         "prompt": "Unrelated text with no common prefix occupies the slot now.",
@@ -789,3 +805,44 @@ def test_slot_restore_checkpoints_draft_kv_type_change(swa_server, ctkd_restore)
     })
     assert res.status_code == 200
     assert res.body["timings"]["prompt_n"] == n_live
+
+
+@pytest.mark.parametrize("damage", ["stale", "truncated", "oversized"])
+def test_slot_restore_ignores_invalid_checkpoint_sidecar(damage):
+    server.start()
+    prompt = "What is the capital of France?"
+    result = server.make_request("POST", "/completion", data={
+        "prompt": prompt, "id_slot": 1, "cache_prompt": True,
+    })
+    assert result.status_code == 200
+    result = server.make_request("POST", "/slots/1?action=save", data={"filename": "checkpoint.bin"})
+    assert result.status_code == 200
+
+    # Make a version-2 sidecar bound to this primary file, then damage it.
+    state_hash = 14695981039346656037
+    checkpoint_path = os.path.join(server.slot_save_path, "checkpoint.bin")
+    with open(checkpoint_path, "rb") as state:
+        primary = state.read()
+    # Remove any current-format appendix so restore exercises the legacy reader.
+    offset = primary.find(struct.pack("<II", 0x504b4353, 1))
+    if offset > 0:
+        primary = primary[:offset]
+        with open(checkpoint_path, "wb") as state:
+            state.write(primary)
+    for value in primary:
+        state_hash = ((state_hash ^ value) * 1099511628211) & ((1 << 64) - 1)
+    if damage == "stale":
+        state_hash ^= 1
+    sidecar = struct.pack("=IIQI", 0x4C434B50, 2, state_hash, 1)
+    if damage == "oversized":
+        sidecar += struct.pack("=qiiQ", 1, 0, 0, 1 << 63)
+    with open(checkpoint_path + ".ckpt", "wb") as output:
+        output.write(sidecar)
+
+    result = server.make_request("POST", "/slots/0?action=restore", data={"filename": "checkpoint.bin"})
+    assert result.status_code == 200
+    result = server.make_request("POST", "/completion", data={
+        "prompt": prompt, "id_slot": 0, "cache_prompt": True,
+    })
+    assert result.status_code == 200
+    assert match_regex("(Whiskers|Flana)+", result.body["content"])

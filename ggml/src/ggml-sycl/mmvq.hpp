@@ -30,6 +30,11 @@ void ggml_sycl_op_mul_mat_vec_q(
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
     const dpct::queue_ptr &stream);
 
+// Whether ggml_sycl_mul_mat_vec_q_id() has a dispatch case for src0_type.
+// Keep in sync with that function's switch. Checks only the weight type, without
+// launching GPU work; callers must check tensor shapes and layouts separately.
+bool ggml_sycl_mul_mat_vec_q_id_supports_type(enum ggml_type src0_type);
+
 // Requires standard (non-reorder) block layout for src0.
 // Returns false if src0_type isn't handled; caller should fall back.
 bool ggml_sycl_mul_mat_vec_q_id(
@@ -46,6 +51,15 @@ bool ggml_sycl_mul_mat_vec_q_id(
     size_t             src1_row_stride,      // 0 = shared src1, else per-expert stride in bytes
     dpct::queue_ptr    stream);
 
+// Fused dense FFN: ffn_gate MUL_MAT + ffn_up MUL_MAT + SwiGLU in one kernel.
+// `gate` and `up` are the two weight tensors; `dst` is the GLU node, whose
+// src[0]->src[1] is the shared activation. Returns false when the shape is not
+// handled, in which case the caller must fall back to the unfused path.
+bool ggml_sycl_mul_mat_vec_q_fused_swiglu(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor * gate,
+    const ggml_tensor * up,
+    ggml_tensor       * dst);
 // Reorder (SoA) variant of the fused MoE expert GEMV.
 // vx_base: each expert slice (stride expert_weight_stride == src0->nb[2]) is a self-contained reorder/SoA layout.
 // vy: src1 quantized with quantize_and_reorder_q8_1_soa (per-row SoA). Returns false if src0_type isn't handled.

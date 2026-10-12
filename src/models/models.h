@@ -1239,7 +1239,6 @@ struct llama_model_deepseek32 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
-
 struct llama_model_dots3note : public llama_model_base {
     llama_model_dots3note(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -1442,6 +1441,15 @@ struct llama_model_dflash : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    // set when dflash.decoder_arch == "laguna": draft layers follow the Laguna
+    // decoder contract (softplus attn gate, per-aux feature norms, context K/V
+    // through input_layernorm, causal noise-block attention)
+    bool decoder_laguna = false;
+
+    // per-aux-feature RMSNorm weights stacked to [n_embd, n_aux], applied
+    // before concat + fc (Laguna drafters)
+    ggml_tensor * aux_norm = nullptr;
+
     template <bool is_enc>
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
@@ -1455,6 +1463,7 @@ struct llama_model_dflash : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
+
 
 
 struct llama_model_mistral4 : public llama_model_deepseek2 {
@@ -2088,7 +2097,6 @@ struct llama_model_hy_v3 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
-
 struct llama_model_hy_v4 : public llama_model_base {
     llama_model_hy_v4(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -2150,7 +2158,6 @@ struct llama_model_hy_v4 : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
-
 
 struct llama_model_hunyuan_vl : public llama_model_base {
     llama_model_hunyuan_vl(const struct llama_model_params & params) : llama_model_base(params) {}
@@ -2901,7 +2908,6 @@ struct llama_model_step35 : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
-
 
 struct llama_model_spark2_5 : public llama_model_base {
     llama_model_spark2_5(const struct llama_model_params & params) : llama_model_base(params) {}

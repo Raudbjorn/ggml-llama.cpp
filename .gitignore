@@ -15,6 +15,7 @@
 *.gguf.json
 *.lastModified
 *.log
+!docs/research/**/*.log
 *.metallib
 *.o
 *.so
@@ -41,6 +42,11 @@
 
 # Build Artifacts
 
+/check_queue
+/repro_l0
+/repro_bcs_reset
+/bcs_owned_memory_control
+/repro_mem_pressure
 /tags
 /.build/
 /build*
@@ -54,6 +60,20 @@
 /tmp/
 /autogen-*.md
 /common/build-info.cpp
+# In-source cmake leaks (cmake -B . or -S . run from repo root)
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/CTestTestfile.cmake
+/DartConfiguration.tcl
+/compile_commands.json
+/Makefile
+/license.cpp
+/llama.pc
+/**/CMakeFiles/
+/**/cmake_install.cmake
+/**/CTestTestfile.cmake
+/**/Makefile
 
 # Deprecated
 

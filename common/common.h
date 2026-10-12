@@ -176,6 +176,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
+    COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE, // MTP with adaptive draft depth
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,  // DSpark speculative decoding (DFlash + Markov head)
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
@@ -328,10 +329,12 @@ struct common_params_model {
 struct common_params_speculative_draft {
     int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
+    int32_t n_min_adaptive = 3; // minimum adaptive MTP draft depth (also the starting depth)
 
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
 
+    bool chain = false; // chained drafting: all n_max tokens in one GPU decode (MTP only)
     bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
     bool probabilistic = false; // sample the draft and verify by rejection, instead of argmax and match
@@ -352,6 +355,13 @@ struct common_params_speculative_draft {
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+    std::list<std::string> tensor_buft_override_patterns; // owns the strings tensor_buft_overrides[].pattern points into
+
+    bool    eagle3                = false; // use EAGLE3 speculative decoding
+    bool    dflash                = false; // use DFlash speculative decoding
+    bool    dflash_defer_injection = true;  // defer encoder KV injection to draft time (set false for higher acceptance on some models)
+    int32_t n_ctx                 = 0;     // draft context size
+
 };
 
 struct common_params_speculative_ngram_mod {
@@ -359,6 +369,7 @@ struct common_params_speculative_ngram_mod {
 
     int32_t n_max = 64;
     int32_t n_min = 48;
+    int32_t n_dead_off = 3;  // consecutive zero-accept ngram-mod drafts before disabling it for a sequence (0 = never)
 };
 
 struct common_params_speculative_ngram_map {
@@ -392,13 +403,22 @@ struct common_params_speculative {
         return !draft.mparams.empty();
     }
 
+    // whether a multi-token prediction head drafts, with a fixed or an adaptive depth
+    bool has_mtp() const {
+        return std::any_of(types.begin(), types.end(), [](auto t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE;
+        });
+    }
+
     bool has_synth() const {
         return synth_len != -1.0 || !synth_rates.empty();
     }
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
@@ -450,6 +470,29 @@ struct lr_opt {
 
 struct ggml_opt_optimizer_params common_opt_lr_pars(void * userdata);
 
+enum common_moe_cache_mode {
+    COMMON_MOE_CACHE_MODE_OFF,
+    COMMON_MOE_CACHE_MODE_AUTO,
+    COMMON_MOE_CACHE_MODE_ON,
+    COMMON_MOE_CACHE_MODE_SOFT,
+};
+
+struct common_moe_cache_params {
+    // Off by default: with a working cache provider registered (SYCL or
+    // Vulkan) and --fit on, fit.cpp's own placement planner evaluates the
+    // cache and can commit to spilling every routed expert to host RAM on
+    // the assumption a cache will absorb the resulting slowdown - but the
+    // budget that assumption is based on is never wired back into the
+    // provider (see PR discussion for feature/sycl-moe-cache), so a session
+    // that ends up dormant or under-provisioned regresses decode versus not
+    // spilling at all. auto|on|soft|N remain fully available, opt-in only,
+    // until that disconnect and the cache's pool-sizing gaps are resolved.
+    common_moe_cache_mode mode = COMMON_MOE_CACHE_MODE_OFF;
+    size_t budget_mib          = 0;
+    bool mode_explicit         = false;
+    bool fit_selected          = false;
+};
+
 struct common_params {
     int32_t n_predict             =    -1; // max. number of new tokens to predict, -1 == no limit
     int32_t n_ctx                 =     0; // context size, 0 == context the model was trained with
@@ -458,9 +501,11 @@ struct common_params {
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_parallel            =     1; // number of parallel sequences to decode
+    bool    n_parallel_explicit   = false; // true if -np/--parallel was passed on the command line
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t n_outputs_max         =     0; // max outputs in a batch (0 = n_batch)
     int32_t n_outputs_max_per_seq =     1; // max outputs per sequence
+    bool    gdn_replay            = false; // DRC: ingredient-replay rollback for GDN models instead of full K-snapshots [EXPERIMENTAL]
     int32_t grp_attn_n            =     1; // group-attention factor
     int32_t grp_attn_w            =   512; // group-attention width
     int32_t n_print               =    -1; // print token count every n tokens (-1 = disabled)
@@ -502,12 +547,14 @@ struct common_params {
     enum llama_pooling_type      pooling_type      = LLAMA_POOLING_TYPE_UNSPECIFIED; // pooling type for embeddings
     enum llama_attention_type    attention_type    = LLAMA_ATTENTION_TYPE_UNSPECIFIED; // attention type for embeddings
     enum llama_flash_attn_type   flash_attn_type   = LLAMA_FLASH_ATTN_TYPE_AUTO; // whether to use Flash Attention
+    int prefetch_experts_slots = 0; // --prefetch-experts-slots: MoE expert H2D staging slots (0 = off, >=2 enables full-tensor lookahead prefetch of ncmoe-offloaded weights in large batches; recommended 3; capped at 4)
 
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_diffusion   diffusion;
 
     struct common_params_model model;
+    bool model_is_spec_draft = false; // model is the separate draft model, set by common_base_params_to_speculative
 
     std::set<std::string> model_alias;     // model aliases                                                 // NOLINT
     std::set<std::string> model_tags;      // model tags (informational, not used for routing)              // NOLINT
@@ -530,6 +577,7 @@ struct common_params {
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+    std::list<std::string> tensor_buft_override_patterns; // owns the strings tensor_buft_overrides[].pattern points into
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_adapter_lora_apply)
     std::vector<common_adapter_lora_info> lora_adapters; // lora adapter path with user defined scale
@@ -537,6 +585,7 @@ struct common_params {
     std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
+    bool    warn_unknown_env            = false;
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
     bool    offline                    = false;
@@ -585,6 +634,7 @@ struct common_params {
     bool check_tensors     = false; // validate tensor data
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
+    common_moe_cache_params moe_cache;
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
     bool load_mtp          = false; // load MTP/NextN layers
 
@@ -637,7 +687,7 @@ struct common_params {
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
     int32_t kv_unified_per_slot = 0;     // max context per parallel slot; 0 = unset
     int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
-    int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
+    int32_t cache_ram_mib       = 8192;  // -1 = half free host RAM at startup, 0 = disable, positive = MiB
 
     std::string public_path   = "";                                                                         // NOLINT
     std::string api_prefix    = "";                                                                         // NOLINT
@@ -649,7 +699,7 @@ struct common_params {
     std::string cors_origins = "*";
     std::string cors_methods = "GET, POST, DELETE, OPTIONS";
     std::string cors_headers = "*";
-    bool cors_credentials = true;
+    bool cors_credentials = false;
     bool cors_origins_explicit = false; // for --agent option
 
     bool enable_chat_template = true;
@@ -673,6 +723,7 @@ struct common_params {
     // UI configs
     bool ui = true;
     bool ui_mcp_proxy = false;
+    std::vector<std::string> ui_mcp_proxy_allow;
     std::string ui_config_json;
 
     // "advanced" endpoints are disabled by default for better security
@@ -683,6 +734,7 @@ struct common_params {
     // enable built-in tools
     std::vector<std::string> server_tools;
     std::string server_tools_runtime;
+    std::string server_tools_cwd_root;
 
     // MCP server configs (Cursor-compatible JSON)
     std::string mcp_servers_config;   // path to JSON file with MCP server definitions
@@ -700,7 +752,9 @@ struct common_params {
     std::string slot_save_path;
     std::string media_path; // path to directory for loading media files
 
-    float slot_prompt_similarity = 0.1f;
+    float   slot_prompt_similarity        = 0.1f;
+    float   slot_cache_key_similarity     = 0.5f;
+    int32_t slot_cache_key_min_prefix     = 32;
 
     // batched-bench params
     bool is_pp_shared   = false;
@@ -911,6 +965,8 @@ std::string fs_path_to_utf8(const std::filesystem::path & path);
 std::string common_get_env(const std::string & name);
 void        common_set_env(const std::string & name, const std::string & value);
 
+std::vector<std::string> common_get_process_environment();
+
 // reads a path from the environment, an unset variable gives an empty path
 std::filesystem::path common_get_path_from_env(const std::string & name);
 
@@ -1005,6 +1061,9 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);
 
+// Return whether device-memory auto-fit was requested through params.fit_params.
+bool common_params_should_fit_device_memory(const common_params & params);
+
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
 
@@ -1048,7 +1107,8 @@ enum common_context_seq_rm_type {
 };
 
 // check if the llama_context can remove sequences
-// note: clears the memory of the context
+// clears context memory when probing; skips the probe if there is no memory or bounded removal is supported
+// returns COMMON_CONTEXT_SEQ_RM_TYPE_NO if the probe cannot be built or decoded
 common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
 
 struct common_memory {
@@ -1067,6 +1127,9 @@ struct common_memory {
 // Batch utils
 //
 
+void common_batch_clear(struct llama_batch & batch);
+void common_batch_add(struct llama_batch & batch, llama_token id, llama_pos pos, const std::vector<llama_seq_id> & seq_ids, bool logits);
+
 // wrapper around llama_batch_ext that provide getter functions for downstream code
 // entries can exceed n_batch, use get_sub_batch() to decode them in chunks
 struct common_batch {
@@ -1076,7 +1139,7 @@ struct common_batch {
         llama_seq_id seq_id; // the first sequence id, see add_seq()
         bool         output;
         llama_embd   embd; // non-owning view of the data passed to add_embd()/set_embd(), data == NULL if none
-        llama_embd   state; // non-owning view of the data passed to set_embd_state(), data == NULL if none
+        llama_embd   state; // target hidden state for MTP
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
     };
@@ -1085,6 +1148,8 @@ struct common_batch {
     llama_batch_ext_ptr batch;
 
     int32_t n_pos = 1; // positions per embedding entry, GGML_MROPE_SECTIONS for MROPE/IMROPE
+    int32_t n_vocab = 0;
+    llama_seq_id n_seq_max = 0;
 
     common_batch() = default;
     common_batch(struct llama_context * ctx);
@@ -1100,7 +1165,7 @@ struct common_batch {
 
     void clear();
 
-    // returns the batch index
+    // returns the batch index, or -2 for an invalid token and -3 for an invalid sequence
     int32_t add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output);
 
     // same, with the entry shared by all seq_ids (must not be empty)
@@ -1114,12 +1179,14 @@ struct common_batch {
     // attach a token embedding to the entry at idx, can only be set once per entry
     bool set_embd(int32_t idx, llama_embd embd);
 
-    // attach a state embedding (e.g. the target hidden state for MTP) to the entry at idx, can only be set once per entry
     bool set_embd_state(int32_t idx, llama_embd state);
 
     // add an embedding-only entry (no token id)
     // pos points to n_pos positions
     int32_t add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output);
+
+    // remove the last entry, e.g. to roll back an add() whose set_embd() failed; false if empty
+    bool remove_last();
 
     int32_t size() const { return (int32_t) tokens.size(); }
 };
@@ -1129,11 +1196,24 @@ struct common_batch {
 common_batch common_batch_get_one(struct llama_context * ctx, const llama_token * tokens, int32_t n_tokens);
 common_batch common_batch_get_one(struct llama_context * ctx, const llama_tokens & tokens);
 
+// convert a legacy llama_batch; missing sequence IDs default to 0 and missing logits select the last token
+// without explicit positions, assumes the batch was just decoded on ctx and counts back from sequence ends,
+// charging each row to its first sequence ID only (as llama_batch_compat does)
+// the embd rows are read at the model input width; the token mirror borrows their data
+// preserves the first sequence ID and any additional sequence IDs in each mirrored token
+// returns an empty batch if any row or additional sequence ID is rejected
+common_batch common_batch_from_llama_batch(struct llama_context * ctx, const llama_batch & batch);
+
 // decodes a single batch of tokens for a prompt and manages session tokens
+// n_new selects the suffix of all_tokens and must be in [0, all_tokens.size()]; otherwise returns false
+// without changing state; n_new == 0 succeeds without changing state
+// advances n_past after each successful decode; returns false if a batch cannot be built or a decode fails
+// earlier progress is retained on failure; state-file save failures do not affect the return value
 //
-// Note: We save state before the last token so that we can replay it to ensure
-// compatibility with all memory types. Recurrent/hybrid models cannot remove
-// tokens from memory, so this approach works across all model architectures.
+// Note: With save_state and n_new > 1, we save state before the last token so we can replay it for
+// compatibility with all memory types (n_new > n_batch returns false without changing state).
+// Recurrent/hybrid models cannot remove tokens from memory, so this approach works across all
+// model architectures.
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
                 const llama_tokens & all_tokens,
@@ -1145,6 +1225,7 @@ bool common_prompt_batch_decode(
 
 // replays the last token after loading state to regenerate logits
 // used after loading session state to ensure the sampling context has valid logits
+// decodes at pos in sequence 0; returns false if adding the token or decoding fails
 bool common_replay_last_token(struct llama_context * ctx, llama_token last_token, int32_t pos);
 
 //
@@ -1248,12 +1329,14 @@ inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
     return { LLM_FFN_EXPS_REGEX, ggml_backend_cpu_buffer_type() };
 }
 
-inline void llm_add_n_cpu_ffn_overrides(int n, const char * ffn_regex, std::vector<llama_model_tensor_buft_override> & overrides) {
-    // keep strings alive and avoid leaking memory by storing them in a static list
-    static std::list<std::string> buft_override_strings;
+// `patterns` must outlive `overrides` (each override's pattern points into it); pass the
+// tensor_buft_override_patterns list on the same params object that owns `overrides`, not a
+// function-local static -- a static here would leak across every params object for the
+// lifetime of the process and would not be thread-safe for concurrent parses.
+inline void llm_add_n_cpu_ffn_overrides(int n, const char * ffn_regex, std::vector<llama_model_tensor_buft_override> & overrides, std::list<std::string> & patterns) {
     for (int i = 0; i < n; ++i) {
-        buft_override_strings.push_back(llm_ffn_block_regex(i, ffn_regex));
-        overrides.push_back({buft_override_strings.back().c_str(), ggml_backend_cpu_buffer_type()});
+        patterns.push_back(llm_ffn_block_regex(i, ffn_regex));
+        overrides.push_back({patterns.back().c_str(), ggml_backend_cpu_buffer_type()});
     }
 }
 

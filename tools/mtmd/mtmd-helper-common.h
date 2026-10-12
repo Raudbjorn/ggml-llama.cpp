@@ -85,9 +85,9 @@ struct decode_embd_batch {
 
     decode_embd_batch(const float * embd, int32_t n_tokens, int n_pos_per_embd, int n_mmproj_embd)
             : n_pos_per_embd(n_pos_per_embd), n_mmproj_embd(n_mmproj_embd), n_tokens(n_tokens), embd(embd) {
-        GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_mmproj_embd > 0);
+        GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_pos_per_embd <= GGML_MROPE_SECTIONS && n_mmproj_embd > 0);
         pos   .resize((size_t) n_tokens * (size_t) n_pos_per_embd);
-        logits.resize(n_tokens);
+        logits.resize(n_tokens, 0);
     }
 
     void set_position_normal(llama_pos pos_0, llama_seq_id seq_id) {
@@ -127,6 +127,8 @@ struct decode_embd_batch {
     }
 
     // describe the entries [offset, offset + n) with section-major positions
+    // requires a nonempty range within the batch; positions are invalidated by the next get_view() or destruction
+    // embeddings remain borrowed from the caller's buffer
     mtmd_helper_embd_batch get_view(int offset, int n) {
         GGML_ASSERT(offset >= 0 && n > 0 && offset + n <= n_tokens);
         pos_view.clear();
@@ -146,6 +148,9 @@ struct decode_embd_batch {
     }
 
     // render the entries [offset, offset + n) into a batch owned by this object, ready for llama_process()
+    // reuses the batch configuration of the first lctx; the next render() replaces the returned batch's contents
+    // aborts for an invalid or empty range; returns nullptr when a row cannot be added
+    // (n larger than the context batch size, invalid sequence ID, or embedding size mismatch)
     llama_batch_ext * render(llama_context * lctx, int offset, int n) {
         GGML_ASSERT(offset >= 0 && n > 0 && offset + n <= n_tokens);
         if (!batch) {
@@ -155,7 +160,9 @@ struct decode_embd_batch {
         for (int i = offset; i < offset + n; i++) {
             const llama_embd e = { embd + (size_t) i * n_mmproj_embd, 1, (size_t) n_mmproj_embd };
             const int32_t idx = llama_batch_ext_add_embd(batch.get(), seq_id, e);
-            GGML_ASSERT(idx >= 0);
+            if (idx < 0) {
+                return nullptr;
+            }
 
             llama_pos p[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
             for (int j = 0; j < n_pos_per_embd; j++) {

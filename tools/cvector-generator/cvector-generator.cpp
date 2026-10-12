@@ -10,13 +10,6 @@
 
 #include <clocale>
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
 
 #include <algorithm>
 #include <climits>
@@ -27,7 +20,6 @@
 #include <string>
 #include <tuple>
 #include <vector>
-
 
 //////////////////////////////////////////////////
 // utils
@@ -52,7 +44,6 @@ static void print_usage(int, char ** argv) {
 }
 
 //////////////////////////////////////////////////
-
 
 // cb_eval is reused for each pair of positive - negative prompt
 struct callback_data {
@@ -412,7 +403,6 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "PCA iterations must by multiply of PCA batch size\n");
         return 1;
     }
-
 
     callback_data cb_data;
 
