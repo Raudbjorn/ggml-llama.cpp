@@ -383,6 +383,8 @@ static void test(void) {
             {"binary_name", "-m", "m.gguf", "--cpu-tp-margin", "512"},
             {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-dev", "none", "-ts", "1,1"},
             {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "--cpu-tp-margin", "-1"},
+            // -dev never names the CPU, so a device list that ends with it was prepared already
+            {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-dev", "CPU", "-ts", "1"},
         };
         for (auto argv_case : invalid) {
             common_params tp_params;

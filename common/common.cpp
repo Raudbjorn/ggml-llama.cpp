@@ -1809,7 +1809,8 @@ std::string common_cpu_tp_prepare(common_params & params) {
     if (cpu == nullptr) {
         return "--cpu-tp: no CPU device";
     }
-    // a second parse of the same params (llama-server reloads) finds the CPU already appended
+    // a second parse of the same params (llama-server reloads) finds the CPU already appended; only
+    // this function puts the CPU there, since -dev and LLAMA_ARG_DEVICE refuse it (parse_device_list)
     if (params.devices.size() >= 2 && params.devices[params.devices.size() - 2] == cpu) {
         return "";
     }
