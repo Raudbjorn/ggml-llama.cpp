@@ -161,6 +161,10 @@ if [ $((DO_GEN + DO_CHECK)) -ne 1 ]; then
     echo "Use exactly one --command." >&2
     exit 1
 fi
+if [ "$CXX" -eq 0 ] && [ -n "$TYPE_MANIFEST" ]; then
+    echo "--type-manifest requires --cxx." >&2
+    exit 1
+fi
 if [ "$CXX" -eq 1 ] && [ "$DO_GEN" -eq 1 ] && ! [ -f "$TYPE_MANIFEST" ]; then
     echo "--cxx generation requires a reviewed --type-manifest file." >&2
     exit 1

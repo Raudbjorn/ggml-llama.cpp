@@ -170,6 +170,17 @@ class WrapperTests(unittest.TestCase):
     def test_cxx_dump_cannot_use_c_mode(self):
         self.assertNotEqual(self.run_check(cxx=False).returncode, 0)
 
+    def test_type_manifest_requires_cxx_for_both_commands(self):
+        for command in (["--check", str(self.old), str(self.new)],
+                        ["--generate", str(self.old), "libsample"]):
+            with self.subTest(command=command):
+                result = subprocess.run(["sh", str(SCRIPTS / "check-apiabi-compat.sh"),
+                                         "--type-manifest", str(self.old / "apiabi/cxx-type-manifest.json"),
+                                         *command], cwd=SCRIPTS.parent, env=self.env,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("--type-manifest requires --cxx", result.stderr)
+
     def test_c_mode_also_fails_tool_errors(self):
         for build in (self.old, self.new):
             (build / "apiabi/mode").write_text("c\n")
