@@ -180,6 +180,8 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
 
         ggml_tensor * inpSA = inpL;
         res->t_layer_inp[il] = inpL;
+        // attn_post_norm is this architecture's router input norm
+        build_moe_spec_router(inpL, model.layers[il].attn_post_norm, model.layers[il].ffn_gate_inp, il);
 
 
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);

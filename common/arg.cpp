@@ -359,6 +359,17 @@ static bool parse_bool_value(const std::string & value) {
     }
 }
 
+// a whole decimal integer in [lo, hi]; std::stoi would accept "12abc"
+static int32_t parse_bounded_int(const std::string & value, long long lo, long long hi) {
+    char * end = nullptr;
+    errno = 0;
+    const long long n = strtoll(value.c_str(), &end, 10);
+    if (errno != 0 || end == value.c_str() || *end != '\0' || n < lo || n > hi) {
+        throw std::invalid_argument(string_format("expected an integer in %lld..%lld", lo, hi));
+    }
+    return (int32_t) n;
+}
+
 [[noreturn]] static void arg_removed(const std::string & msg) {
     throw std::invalid_argument("the argument has been removed. " + msg);
 }
@@ -3013,6 +3024,43 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_pack_profile = value;
         }
     ).set_env("LLAMA_ARG_MOE_PACK_PROFILE"));
+    add_opt(common_arg(
+        {"--spec-router"}, "K",
+        "also trace this many experts per layer from the router evaluated on the layer input before attention "
+        "(qwen3moe, qwen35moe), written to --spec-out, with the recall of the routed experts in the log; "
+        "1..4096, capped at the layer's expert count (default: 0 = off)",
+        [](common_params & params, const std::string & value) {
+            params.moe_spec_router_k = parse_bounded_int(value, 0, 4096);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MOE_TRACE}));
+    add_opt(common_arg(
+        {"--spec-out"}, "FNAME",
+        string_format("trace file of the --spec-router ids, same format as -o (default: '%s')", params.moe_trace_spec_out.c_str()),
+        [](common_params & params, const std::string & value) {
+            if (value.empty()) {
+                throw std::invalid_argument("expected a file name");
+            }
+            params.moe_trace_spec_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MOE_TRACE}));
+    add_opt(common_arg(
+        {"--hidden-out"}, "FNAME",
+        "also write the hidden states of the first --hidden-n decode steps (layer output, residual after "
+        "attention, router input) to a binary file with a text header (default: off)",
+        [](common_params & params, const std::string & value) {
+            if (value.empty()) {
+                throw std::invalid_argument("expected a file name");
+            }
+            params.moe_trace_hidden_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MOE_TRACE}));
+    add_opt(common_arg(
+        {"--hidden-n"}, "N",
+        string_format("decode steps captured by --hidden-out, 1..65536 (default: %d)", params.moe_trace_hidden_n),
+        [](common_params & params, const std::string & value) {
+            params.moe_trace_hidden_n = parse_bounded_int(value, 1, 65536);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MOE_TRACE}));
     add_opt(common_arg(
         {"--moe-pack-slots"}, "N",
         "experts per layer in the static expert pack, 1..4096 (default: 0 = disabled; requires --moe-pack-profile)",

@@ -2031,6 +2031,19 @@ ggml_tensor * llm_graph_context::build_ffn(
     return cur;
 }
 
+void llm_graph_context::build_moe_spec_router(ggml_tensor * inp, ggml_tensor * norm_w, ggml_tensor * gate_inp, int il) {
+    if (cparams.moe_spec_router_k == 0 || inp == nullptr || norm_w == nullptr || gate_inp == nullptr) {
+        return;
+    }
+    // softmax and sigmoid gating select the top k of the logits, so the logits rank the experts
+    const int64_t k = std::min<int64_t>(cparams.moe_spec_router_k, gate_inp->ne[1]);
+    ggml_tensor * x      = build_norm(inp, norm_w, nullptr, LLM_NORM_RMS, il);
+    ggml_tensor * logits = build_lora_mm(gate_inp, x);
+    ggml_tensor * ids    = ggml_argsort_top_k(ctx0, logits, (int) k);
+    cb(ids, "ffn_moe_spec_topk", il);
+    ggml_build_forward_expand(gf, ids);
+}
+
 ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * cur,
          ggml_tensor * gate_inp,

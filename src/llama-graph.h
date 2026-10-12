@@ -1152,6 +1152,11 @@ struct llm_graph_context {
        llm_ffn_gate_type   type_gate,
                      int   il) const;
 
+    // llama-moe-trace diagnostic (cparams.moe_spec_router_k): the top k of this layer's router on
+    // its input before attention, normalized with the router's own RMS norm, named
+    // "ffn_moe_spec_topk-<il>". Nothing consumes it, so the model's output is unchanged.
+    void build_moe_spec_router(ggml_tensor * inp, ggml_tensor * norm_w, ggml_tensor * gate_inp, int il);
+
     // build MoE FFN without bias tensors
     ggml_tensor * build_moe_ffn(
              ggml_tensor * cur,

@@ -445,6 +445,12 @@ extern "C" {
         // backend with a private stream (SYCL on Level Zero v1); elsewhere it stays off.
         int prefetch_experts_slots;  // set via llama_context_default_params() / llama_context_from_params
 
+        // [EXPERIMENTAL] diagnostic for llama-moe-trace: where the architecture supports it (qwen3moe,
+        // qwen35moe), every MoE layer also evaluates its router on the layer input before attention and
+        // exposes the top k ids as "ffn_moe_spec_topk-<il>" to the eval callback. It does not change the
+        // model's output. 0 = off; capped at the layer's expert count.
+        int32_t moe_spec_router_k;
+
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)

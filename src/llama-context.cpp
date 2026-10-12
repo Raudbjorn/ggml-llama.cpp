@@ -431,6 +431,7 @@ llama_context::llama_context(
     cparams.prefetch_experts_slots = params.prefetch_experts_slots;
     cparams.kv_unified = params.kv_unified;
     cparams.sched_async_cpu = params.sched_async_cpu;
+    cparams.moe_spec_router_k = params.moe_spec_router_k > 0 ? (uint32_t) params.moe_spec_router_k : 0;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -4508,6 +4509,7 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sched_async_cpu             =*/ false,
         /*.prefetch_experts_slots      =*/ 0,
+        /*.moe_spec_router_k           =*/ 0,
         /*.samplers                    =*/ nullptr,
         /*.n_samplers                  =*/ 0,
         /*.ctx_other                   =*/ nullptr,

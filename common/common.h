@@ -644,6 +644,12 @@ struct common_params {
     std::string moe_pack_profile; // llama-moe-trace CSV that selects the packed experts
     int32_t     moe_pack_slots = 0; // packed experts per layer, 0 = disabled
 
+    // llama-moe-trace research diagnostics
+    int32_t     moe_spec_router_k  = 0;  // --spec-router: also trace the pre-attention router's top K
+    std::string moe_trace_spec_out = "moe-trace-spec.csv"; // --spec-out
+    std::string moe_trace_hidden_out;    // --hidden-out: binary hidden-state dump, empty = off
+    int32_t     moe_trace_hidden_n = 64; // --hidden-n: decode steps captured in it
+
     bool    cpu_tp        = false; // the CPU as the last tensor-parallel member (--split-mode tensor)
     int32_t cpu_tp_margin = -1;    // MiB left free per accelerator when sizing the split (-1 = -ts gives it)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used

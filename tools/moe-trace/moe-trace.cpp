@@ -12,6 +12,12 @@
 //   pos,layer,id0,...,idK-1     header row, then one row per (token, layer)
 // Prompt rows use pos = -(p + 1) for prompt token p; decode rows use the
 // decode step 0, 1, ... so that pos >= 0 selects decode routing.
+//
+// Research diagnostics, off by default (README.md):
+//   --spec-router K   the top K of each layer's router evaluated on the layer input
+//                     before attention ("ffn_moe_spec_topk-<il>"), to --spec-out in
+//                     the same format, and the recall of the routed experts
+//   --hidden-out F    decode-step hidden states, binary records after a text header
 
 #include "arg.h"
 #include "common.h"
@@ -31,6 +37,16 @@
 #include <vector>
 
 static const char * TOPK_PREFIX = "ffn_moe_topk-";
+static const char * SPEC_PREFIX = "ffn_moe_spec_topk-";
+
+// hidden-state taps; the residual after attention has two names among the builders
+enum hidden_tag : int32_t { HID_LAYER_OUT = 0, HID_RESIDUAL = 1, HID_ROUTER_IN = 2 };
+static const struct { const char * prefix; hidden_tag tag; } HIDDEN_TAPS[] = {
+    { "l_out-",          HID_LAYER_OUT },
+    { "ffn_inp-",        HID_RESIDUAL  },
+    { "attn_residual-",  HID_RESIDUAL  },
+    { "ffn_moe_logits-", HID_ROUTER_IN }, // the router matmul; its src[1] is the router input
+};
 
 struct trace_state {
     FILE *  out          = nullptr;
@@ -43,41 +59,81 @@ struct trace_state {
     uint64_t rows_written  = 0;
     uint64_t rows_unmapped = 0;
 
+    // --spec-router: per layer, the latest decode-step ids of both routers, matched by step
+    FILE *   spec_out  = nullptr;
+    uint64_t spec_rows = 0;
+    std::vector<std::vector<int32_t>> spec_ids, act_ids;
+    std::vector<int64_t>  spec_step, act_step;
+    std::vector<uint64_t> spec_hits, spec_total;
+
+    // --hidden-out
+    FILE *   hid_out     = nullptr;
+    int32_t  hid_n       = 0;
+    uint64_t hid_records = 0;
+
     std::vector<int32_t> buf;
+    std::vector<float>   fbuf;
 };
 
-static bool parse_layer(const char * name, int & layer) {
-    const size_t n = strlen(TOPK_PREFIX);
-    if (strncmp(name, TOPK_PREFIX, n) != 0) {
-        return false;
+// layer index after prefix, or -1
+static int parse_layer(const char * name, const char * prefix) {
+    const size_t n = strlen(prefix);
+    if (strncmp(name, prefix, n) != 0) {
+        return -1;
     }
     char * end = nullptr;
     errno = 0;
     const long v = strtol(name + n, &end, 10);
     if (errno != 0 || end == name + n || *end != '\0' || v < 0 || v > INT32_MAX) {
-        return false;
+        return -1;
     }
-    layer = (int) v;
-    return true;
+    return (int) v;
 }
 
-static bool trace_cb(struct ggml_tensor * t, bool ask, void * user_data) {
-    trace_state * ts = (trace_state *) user_data;
-
-    int layer = -1;
-    const bool is_topk = parse_layer(t->name, layer);
-    if (ask) {
-        return is_topk;
+static int hidden_tap(const char * name, hidden_tag & tag) {
+    for (const auto & tap : HIDDEN_TAPS) {
+        const int layer = parse_layer(name, tap.prefix);
+        if (layer >= 0) {
+            tag = tap.tag;
+            return layer;
+        }
     }
-    if (!is_topk || t->type != GGML_TYPE_I32 || ts->write_failed) {
-        return true;
-    }
+    return -1;
+}
 
+static void ensure_layer(trace_state * ts, int layer) {
+    if ((size_t) layer < ts->spec_step.size()) {
+        return;
+    }
+    const size_t n = (size_t) layer + 1;
+    ts->spec_ids.resize(n);
+    ts->act_ids.resize(n);
+    ts->spec_step.resize(n, -1);
+    ts->act_step.resize(n, -1);
+    ts->spec_hits.resize(n, 0);
+    ts->spec_total.resize(n, 0);
+}
+
+// recall of the routed experts among the predicted ones, once both are known for a step
+static void match_spec(trace_state * ts, int layer) {
+    if (ts->spec_step[layer] < 0 || ts->spec_step[layer] != ts->act_step[layer]) {
+        return;
+    }
+    const std::vector<int32_t> & pred = ts->spec_ids[layer];
+    for (int32_t id : ts->act_ids[layer]) {
+        ts->spec_hits[layer] += std::find(pred.begin(), pred.end(), id) != pred.end();
+    }
+    ts->spec_total[layer] += ts->act_ids[layer].size();
+    ts->spec_step[layer] = ts->act_step[layer] = -1;
+}
+
+// one row per token of an id tensor; the top-k tensors are strided views over the
+// argsort output, so the full byte range is read and indexed with nb[]
+static void write_ids(trace_state * ts, const ggml_tensor * t, int layer, FILE * dst, uint64_t & rows,
+                      std::vector<int64_t> * step, std::vector<std::vector<int32_t>> * keep) {
     const int64_t n_used = t->ne[0];
     const int64_t n_rows = t->ne[1];
 
-    // the topk tensor is a strided view over the argsort output: read the full
-    // byte range and index it with nb[]
     const size_t nbytes = ggml_nbytes(t);
     ts->buf.resize((nbytes + sizeof(int32_t) - 1) / sizeof(int32_t));
     ggml_backend_tensor_get(t, ts->buf.data(), 0, nbytes);
@@ -87,28 +143,91 @@ static bool trace_cb(struct ggml_tensor * t, bool ask, void * user_data) {
     // requested for the last token of each decode call only
     if (n_rows > ts->n_eval) {
         ts->rows_unmapped += (uint64_t) n_rows;
-        return true;
+        return;
     }
     const int64_t first = ts->batch_start + (ts->n_eval - n_rows);
 
     for (int64_t j = 0; j < n_rows; j++) {
         const int64_t pos = ts->prefill ? -(first + j + 1) : ts->decode_step;
-        if (fprintf(ts->out, "%" PRId64 ",%d", pos, layer) < 0) {
+        if (fprintf(dst, "%" PRId64 ",%d", pos, layer) < 0) {
             ts->write_failed = true;
-            return true;
+            return;
         }
         for (int64_t i = 0; i < n_used; i++) {
             const int32_t id = *(const int32_t *)(base + j*t->nb[1] + i*t->nb[0]);
-            if (fprintf(ts->out, ",%d", id) < 0) {
+            if (fprintf(dst, ",%d", id) < 0) {
                 ts->write_failed = true;
-                return true;
+                return;
             }
         }
-        if (fputc('\n', ts->out) == EOF) {
+        if (fputc('\n', dst) == EOF) {
             ts->write_failed = true;
-            return true;
+            return;
         }
-        ts->rows_written++;
+        rows++;
+    }
+
+    if (step && keep && !ts->prefill && n_rows == 1) {
+        ensure_layer(ts, layer);
+        std::vector<int32_t> & ids = (*keep)[layer];
+        ids.resize((size_t) n_used);
+        for (int64_t i = 0; i < n_used; i++) {
+            ids[i] = *(const int32_t *)(base + i*t->nb[0]);
+        }
+        (*step)[layer] = ts->decode_step;
+        match_spec(ts, layer);
+    }
+}
+
+static void write_hidden(trace_state * ts, const ggml_tensor * t, hidden_tag tag, int layer) {
+    if (tag == HID_ROUTER_IN) {
+        t = t->op == GGML_OP_MUL_MAT ? t->src[1] : nullptr; // a LoRA router hides its input
+    }
+    if (t == nullptr || t->type != GGML_TYPE_F32 || t->nb[0] != sizeof(float) || t->ne[2] != 1 || t->ne[3] != 1) {
+        return;
+    }
+    const int64_t n_embd = t->ne[0];
+    const int64_t n_rows = t->ne[1];
+    const size_t nbytes = ggml_nbytes(t);
+    ts->fbuf.resize((nbytes + sizeof(float) - 1) / sizeof(float));
+    ggml_backend_tensor_get(t, ts->fbuf.data(), 0, nbytes);
+    const char * base = (const char *) ts->fbuf.data();
+    for (int64_t j = 0; j < n_rows; j++) {
+        const int32_t hdr[4] = { (int32_t) ts->decode_step, layer, (int32_t) tag, (int32_t) n_embd };
+        if (fwrite(hdr, sizeof(hdr), 1, ts->hid_out) != 1 ||
+            fwrite(base + j*t->nb[1], sizeof(float), (size_t) n_embd, ts->hid_out) != (size_t) n_embd) {
+            ts->write_failed = true;
+            return;
+        }
+        ts->hid_records++;
+    }
+}
+
+static bool trace_cb(struct ggml_tensor * t, bool ask, void * user_data) {
+    trace_state * ts = (trace_state *) user_data;
+
+    const int  layer_topk = parse_layer(t->name, TOPK_PREFIX);
+    const int  layer_spec = ts->spec_out ? parse_layer(t->name, SPEC_PREFIX) : -1;
+    hidden_tag tag        = HID_LAYER_OUT;
+    const bool hidden_now = ts->hid_out && !ts->prefill && ts->decode_step < ts->hid_n;
+    const int  layer_hid  = hidden_now ? hidden_tap(t->name, tag) : -1;
+    if (ask) {
+        return layer_topk >= 0 || layer_spec >= 0 || layer_hid >= 0;
+    }
+    if (ts->write_failed) {
+        return true;
+    }
+    if (layer_hid >= 0) {
+        write_hidden(ts, t, tag, layer_hid);
+    }
+    if (t->type != GGML_TYPE_I32) {
+        return true;
+    }
+    if (layer_topk >= 0) {
+        write_ids(ts, t, layer_topk, ts->out, ts->rows_written,
+                  ts->spec_out ? &ts->act_step : nullptr, ts->spec_out ? &ts->act_ids : nullptr);
+    } else if (layer_spec >= 0) {
+        write_ids(ts, t, layer_spec, ts->spec_out, ts->spec_rows, &ts->spec_step, &ts->spec_ids);
     }
     return true;
 }
@@ -120,7 +239,7 @@ static std::string meta_str(const llama_model * model, const std::string & key) 
 }
 
 static bool write_header(FILE * out, const llama_model * model, const common_params & params,
-                         uint32_t seed, size_t n_prompt, uint64_t session) {
+                         uint32_t seed, size_t n_prompt, uint64_t session, const char * kind) {
     char desc[256] = {};
     llama_model_desc(model, desc, sizeof(desc));
     const std::string arch     = meta_str(model, "general.architecture");
@@ -131,6 +250,9 @@ static bool write_header(FILE * out, const llama_model * model, const common_par
     bool failed = false;
     failed |= fprintf(out, "# llama-moe-trace v1\n") < 0;
     failed |= fprintf(out, "# session=%016" PRIx64 "\n", session) < 0;
+    if (kind) {
+        failed |= fprintf(out, "# %s\n", kind) < 0;
+    }
     failed |= fprintf(out, "# model=%s\n", params.model.path.c_str()) < 0;
     failed |= fprintf(out, "# model_desc=%s\n", desc) < 0;
     failed |= fprintf(out, "# model_size=%" PRIu64 "\n", llama_model_size(model)) < 0;
@@ -150,10 +272,63 @@ static bool write_header(FILE * out, const llama_model * model, const common_par
     return !failed;
 }
 
+// text lines up to "end\n", then the records; the records are in the byte order the header names
+static bool write_hidden_header(FILE * out, const llama_model * model, const common_params & params, uint64_t session) {
+    char desc[256] = {};
+    llama_model_desc(model, desc, sizeof(desc));
+    bool failed = false;
+    failed |= fprintf(out, "llama-moe-trace hidden v1\n") < 0;
+    failed |= fprintf(out, "session=%016" PRIx64 "\n", session) < 0;
+    failed |= fprintf(out, "byte_order=little\n") < 0;
+    failed |= fprintf(out, "model=%s\n", params.model.path.c_str()) < 0;
+    failed |= fprintf(out, "model_desc=%s\n", desc) < 0;
+    failed |= fprintf(out, "model_size=%" PRIu64 "\n", llama_model_size(model)) < 0;
+    failed |= fprintf(out, "arch=%s\n", meta_str(model, "general.architecture").c_str()) < 0;
+    failed |= fprintf(out, "n_layer=%d\n", llama_model_n_layer(model)) < 0;
+    failed |= fprintf(out, "n_embd=%d\n", llama_model_n_embd(model)) < 0;
+    failed |= fprintf(out, "n_decode=%d\n", params.moe_trace_hidden_n) < 0;
+    failed |= fprintf(out, "tags=0:layer_out,1:residual_after_attention,2:router_input\n") < 0;
+    failed |= fprintf(out, "record=pos:i32,layer:i32,tag:i32,n:i32,values:f32[n]\n") < 0;
+    failed |= fprintf(out, "end\n") < 0;
+    return !failed;
+}
+
 static uint64_t new_session_id() {
     std::random_device rd;
     const uint64_t t = (uint64_t) std::chrono::system_clock::now().time_since_epoch().count();
     return t ^ ((uint64_t) rd() << 32) ^ rd();
+}
+
+// closes f and reports whether everything written to it reached the file
+static bool close_file(FILE *& f) {
+    if (f == nullptr) {
+        return true;
+    }
+    const bool flush_failed = fflush(f) != 0 || ferror(f) != 0;
+    const bool close_failed = fclose(f) != 0;
+    f = nullptr;
+    return !flush_failed && !close_failed;
+}
+
+static void log_spec_recall(const trace_state & ts, int32_t k) {
+    uint64_t hits = 0, total = 0;
+    double lo = 1.0, hi = 0.0;
+    for (size_t il = 0; il < ts.spec_total.size(); il++) {
+        if (ts.spec_total[il] == 0) {
+            continue;
+        }
+        hits  += ts.spec_hits[il];
+        total += ts.spec_total[il];
+        const double r = (double) ts.spec_hits[il] / (double) ts.spec_total[il];
+        lo = std::min(lo, r);
+        hi = std::max(hi, r);
+    }
+    if (total == 0) {
+        LOG_WRN("%s: no decode step had both routers; recall unknown\n", __func__);
+        return;
+    }
+    LOG_INF("%s: spec router K=%d: recall %.4f of %" PRIu64 " routed decode experts (layers %.4f..%.4f)\n",
+            __func__, k, (double) hits / (double) total, total, lo, hi);
 }
 
 // returns 0 on a complete trace; owns the model and context so that they are
@@ -186,14 +361,53 @@ static int run_trace(common_params & params, trace_state & ts) {
         return 1;
     }
     const uint32_t seed = llama_sampler_get_seed(common_sampler_get(smpl.get()));
+    const uint64_t session = new_session_id();
+
+    if (params.moe_spec_router_k > 0) {
+        const std::string arch     = meta_str(model, "general.architecture");
+        const std::string n_expert = arch.empty() ? std::string() : meta_str(model, arch + ".expert_count");
+        if (!n_expert.empty() && params.moe_spec_router_k > atoi(n_expert.c_str())) {
+            LOG_ERR("%s: --spec-router %d exceeds the model's %s experts\n", __func__, params.moe_spec_router_k, n_expert.c_str());
+            return 1;
+        }
+    }
 
     ts.out = fopen(params.out_file.c_str(), "w");
     if (ts.out == nullptr) {
         LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, params.out_file.c_str(), strerror(errno));
         return 1;
     }
-    if (!write_header(ts.out, model, params, seed, tokens.size(), new_session_id())) {
+    if (!write_header(ts.out, model, params, seed, tokens.size(), session, nullptr)) {
         ts.write_failed = true;
+    }
+    if (params.moe_spec_router_k > 0) {
+        ts.spec_out = fopen(params.moe_trace_spec_out.c_str(), "w");
+        if (ts.spec_out == nullptr) {
+            LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, params.moe_trace_spec_out.c_str(), strerror(errno));
+            close_file(ts.out);
+            return 1;
+        }
+        const std::string kind = "kind=spec-router k=" + std::to_string(params.moe_spec_router_k);
+        if (!write_header(ts.spec_out, model, params, seed, tokens.size(), session, kind.c_str())) {
+            ts.write_failed = true;
+        }
+    }
+    if (!params.moe_trace_hidden_out.empty()) {
+        ts.hid_out = fopen(params.moe_trace_hidden_out.c_str(), "wb");
+        if (ts.hid_out == nullptr) {
+            LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, params.moe_trace_hidden_out.c_str(), strerror(errno));
+            close_file(ts.out);
+            close_file(ts.spec_out);
+            return 1;
+        }
+        ts.hid_n = params.moe_trace_hidden_n;
+        if (!write_hidden_header(ts.hid_out, model, params, session)) {
+            ts.write_failed = true;
+        }
+        const double max_mib = (double) std::min(params.n_predict, ts.hid_n) * llama_model_n_layer(model) * 3 *
+                               (16.0 + 4.0 * llama_model_n_embd(model)) / 1048576.0;
+        LOG_INF("%s: hidden states of up to %d decode steps, at most %.1f MiB, to '%s'\n",
+                __func__, ts.hid_n, max_mib, params.moe_trace_hidden_out.c_str());
     }
 
     // one ubatch per decode call keeps the position of every captured row exact
@@ -232,15 +446,15 @@ static int run_trace(common_params & params, trace_state & ts) {
         n_decoded++;
     }
 
-    const bool flush_failed = fflush(ts.out) != 0 || ferror(ts.out) != 0;
-    const bool close_failed = fclose(ts.out) != 0;
-    ts.out = nullptr;
+    const bool out_ok  = close_file(ts.out);
+    const bool spec_ok = close_file(ts.spec_out);
+    const bool hid_ok  = close_file(ts.hid_out);
 
     if (ts.rows_unmapped > 0) {
         LOG_WRN("%s: %" PRIu64 " rows had more tokens than the decode call and were skipped\n", __func__, ts.rows_unmapped);
     }
-    if (ts.write_failed || flush_failed || close_failed) {
-        LOG_ERR("%s: writing '%s' failed: %s\n", __func__, params.out_file.c_str(), strerror(errno));
+    if (ts.write_failed || !out_ok || !spec_ok || !hid_ok) {
+        LOG_ERR("%s: writing the trace failed: %s\n", __func__, strerror(errno));
         return 1;
     }
     if (!decode_ok) {
@@ -251,6 +465,17 @@ static int run_trace(common_params & params, trace_state & ts) {
         LOG_ERR("%s: no '%s*' tensors were observed: the model has no MoE layers or a backend fused them away\n",
                 __func__, TOPK_PREFIX);
         return 1;
+    }
+    if (params.moe_spec_router_k > 0) {
+        if (ts.spec_rows == 0) {
+            LOG_ERR("%s: no '%s*' tensors were observed: the architecture has no pre-attention router (qwen3moe and "
+                    "qwen35moe do)\n", __func__, SPEC_PREFIX);
+            return 1;
+        }
+        log_spec_recall(ts, params.moe_spec_router_k);
+    }
+    if (!params.moe_trace_hidden_out.empty()) {
+        LOG_INF("%s: wrote %" PRIu64 " hidden-state records to '%s'\n", __func__, ts.hid_records, params.moe_trace_hidden_out.c_str());
     }
     LOG_INF("%s: wrote %" PRIu64 " rows (%zu prompt tokens, %d decode steps) to '%s'\n",
             __func__, ts.rows_written, tokens.size(), n_decoded, params.out_file.c_str());
@@ -267,6 +492,16 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: -n must be positive (got %d); the trace is bounded by design\n", __func__, params.n_predict);
         common_log_flush(common_log_main());
         return 1;
+    }
+    {
+        const uint16_t probe = 1;
+        uint8_t first = 0;
+        memcpy(&first, &probe, 1);
+        if (!params.moe_trace_hidden_out.empty() && first != 1) {
+            LOG_ERR("%s: --hidden-out writes little-endian records and this host is big-endian\n", __func__);
+            common_log_flush(common_log_main());
+            return 1;
+        }
     }
 
     common_init();

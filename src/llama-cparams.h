@@ -61,6 +61,8 @@ struct llama_cparams {
     bool pipeline_parallel;
     bool training;           // set by llama_opt_init()
 
+    uint32_t moe_spec_router_k = 0; // llama-moe-trace diagnostic, see llama_context_params
+
     int prefetch_experts_slots = 0; // --prefetch-experts-slots: MoE expert H2D staging slots (0 = off, >=2 enables full-tensor lookahead prefetch; capped at 4)
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer

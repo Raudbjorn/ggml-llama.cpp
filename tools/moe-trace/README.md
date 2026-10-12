@@ -43,6 +43,70 @@ token; layer 0 always has every prompt token.
   the tool then exits with an error instead of writing an empty trace.
 - `-n` must be positive and the prompt plus `-n` must fit the context.
 
+## Expert prediction diagnostics (experimental)
+
+Two opt-in outputs for measuring whether expert routing can be predicted early
+enough to prefetch. Neither changes what the model computes: the test checks that
+the routed experts of every row are the same with and without them.
+
+```bash
+llama-moe-trace -m model.gguf -ngl 99 --n-cpu-moe 99 -f prompt.txt -n 256 --seed 1 -o work.csv \
+    --spec-router 16 --spec-out spec.csv --hidden-out work.hid --hidden-n 64
+```
+
+`--spec-router K` evaluates every MoE layer's router on the layer input, before
+attention, through the router's own RMS norm, and traces its top K as
+`ffn_moe_spec_topk-<il>`. It is a heuristic built from the existing router weights,
+not a trained predictor. Its lead time is the layer's attention block, because the
+prediction depends only on the layer input. The ids go to `--spec-out` in the trace
+format above, with a `# kind=spec-router k=K` line and the session id of the main
+trace. The log reports the recall: the share of the routed decode experts that were
+among the K predicted ones, overall and for the worst and best layer. K is
+1..4096, at most the model's expert count. Supported: qwen3moe and qwen35moe. On
+any other architecture the tool exits with an error.
+
+`--hidden-out FILE` writes, for the first `--hidden-n` decode steps (1..65536,
+default 64), three float32 vectors per layer and step:
+
+| tag | name | tensor |
+| --- | --- | --- |
+| 0 | `layer_out` | `l_out-<il>`, the next layer's input |
+| 1 | `residual_after_attention` | `ffn_inp-<il>` or `attn_residual-<il>` |
+| 2 | `router_input` | the input of the router matmul `ffn_moe_logits-<il>` |
+
+The file starts with text lines: `llama-moe-trace hidden v1`, then `key=value`
+lines (session, `byte_order=little`, model path, description and size, arch,
+`n_layer`, `n_embd`, `n_decode`, the tag and record layouts), then `end`. Records
+follow: `pos`, `layer`, `tag`, `n` as int32, then `n` float32 values. The file is at
+most `n_decode x n_layer x 3 x (16 + 4 n_embd)` bytes; the tool logs that bound.
+`hidden.py` reads it (stdlib only) and prints the header and record counts.
+
+Validation: `tests/moe_trace_oracle.py` (run by `test-moe-trace` when numpy is
+available) recomputes on the host, from the dumped vectors and the fixture's F32
+weights, the routed experts of every decode row (from tag 2) and the spec ids of
+layer 1 (from layer 0's output). Both must match on the CPU, Vulkan and OpenVINO.
+With K equal to the expert count the recall must be exactly 1.
+
+### Why there is no dynamic ring
+
+The source fork appends a refilled ring of slots to the static pack, driven by this
+prediction (`fable5/expert-prediction`). It was not ported:
+
+- The ring and its maps are mutable state of the shared model. Contexts that share a
+  model would overwrite experts that another context's graph is still reading.
+- Its staging fallback can point async copies at a reused host buffer, and it takes
+  a second `ggml_backend_dev_init` as a separate upload stream. The target's
+  equivalent contract is `ggml_backend_init_private_stream`, which only SYCL on
+  Level Zero v1 provides; it cannot be exercised on the backends available to the
+  test host.
+- Runtime admission already exists as `--moe-cache`. A predictor would be an
+  admission or prefetch policy of that provider, with its ownership and fallback
+  rules, and not a second model-global cache.
+
+The recall numbers above are what decide whether that is worth building. A useful
+predictor needs high recall at a K whose transfer cost fits in the attention time of
+one layer on the target link.
+
 ## Simulator
 
 `simulate.py` scores decode rows only. Per-layer policies use `S = budget x
@@ -59,5 +123,6 @@ state carried over. The cost columns appear only when `--slab-mb`,
 `--ram-gbs` and `--link-gbs` are all given; they are an assumed model that
 excludes kernels, activation transfers, synchronization and compilation.
 
-Tests: `tests/test-moe-trace.sh` (ctest `test-moe-trace`) and
-`tests/test_moe_trace_simulate.py` (ctest `test-moe-trace-simulate`).
+Tests: `tests/test-moe-trace.sh` (ctest `test-moe-trace`, with
+`tests/moe_trace_oracle.py`) and `tests/test_moe_trace_simulate.py` (ctest
+`test-moe-trace-simulate`).
