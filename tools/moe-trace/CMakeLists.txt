@@ -9,11 +9,15 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 # end-to-end test; registered here because tests/ is configured before tools/
 if (LLAMA_BUILD_TESTS AND TARGET test-llama-archs)
     find_program(LLAMA_MOE_TRACE_TEST_BASH NAMES bash)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
     if (LLAMA_MOE_TRACE_TEST_BASH)
         set(MOE_TRACE_TEST_ARGS
             ${PROJECT_SOURCE_DIR}/tests/test-moe-trace.sh
             $<TARGET_FILE:test-llama-archs>
             $<TARGET_FILE:${TARGET}>)
+        if (Python3_Interpreter_FOUND)
+            list(APPEND MOE_TRACE_TEST_ARGS ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/simulate.py)
+        endif()
         add_test(NAME test-moe-trace COMMAND ${LLAMA_MOE_TRACE_TEST_BASH} ${MOE_TRACE_TEST_ARGS})
         set_tests_properties(test-moe-trace PROPERTIES LABELS "main" TIMEOUT 300)
     endif()

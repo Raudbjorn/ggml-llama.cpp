@@ -507,6 +507,14 @@ if (LLAMA_TEST_BASH AND TARGET test-llama-archs AND TARGET test-export-graph-ops
     )
 endif()
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_Interpreter_FOUND)
+    add_test(NAME test-moe-trace-simulate
+        COMMAND ${Python3_EXECUTABLE} -m unittest test_moe_trace_simulate
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(test-moe-trace-simulate PROPERTIES LABELS "python" TIMEOUT 60)
+endif()
+
 # Fork-specific TurboQuant and SYCL tests.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat grep hostname
