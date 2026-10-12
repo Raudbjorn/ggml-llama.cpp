@@ -457,7 +457,11 @@ static int run_trace(common_params & params, trace_state & ts) {
     }
 
     // the continuation is sampled with the command-line sampling flags so that
-    // the routing follows the generated tokens a server would see
+    // the routing follows the generated tokens a server would see; like a server, the
+    // sampler's history (repeat, presence, frequency and DRY penalties) starts with the prompt
+    for (llama_token t : tokens) {
+        common_sampler_accept(smpl.get(), t, false);
+    }
     ts.prefill = false;
     ts.n_eval  = 1;
     int n_decoded = 0;
