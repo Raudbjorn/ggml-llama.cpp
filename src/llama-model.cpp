@@ -2220,10 +2220,6 @@ const char * moe_pack_device_unsupported(ggml_backend_dev_t dev) {
     if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
         return "the layer does not run on a GPU";
     }
-    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-    if (reg != nullptr && strcmp(ggml_backend_reg_name(reg), "OPENVINO") == 0) {
-        return "OpenVINO lowers expert id -1 to the last expert";
-    }
     return nullptr;
 }
 
@@ -2330,6 +2326,28 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
         moe_packs.resize(layers.size());
     }
 
+    // the id maps stay in host memory: the remap is tiny, and some backends (OpenVINO) take
+    // only float or quantized weight tensors
+    ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    ggml_backend_buffer_type_t map_buft = cpu_dev ? ggml_backend_dev_buffer_type(cpu_dev) : nullptr;
+    if (map_buft == nullptr) {
+        LLAMA_LOG_WARN("%s: no CPU buffer type for the expert maps - packs disabled\n", __func__);
+        moe_packs.clear();
+        return;
+    }
+
+    // a real buffer, or in the memory-fit pass a dummy one that memory_breakdown() sizes
+    const auto alloc_ctx = [&](ggml_context * c, ggml_backend_buffer_type_t bt) {
+        if (!ml.no_alloc) {
+            return ggml_backend_alloc_ctx_tensors_from_buft(c, bt);
+        }
+        ggml_backend_buffer_t b = ggml_backend_buft_alloc_buffer(bt, 0);
+        for (ggml_tensor * t = ggml_get_first_tensor(c); b != nullptr && t != nullptr; t = ggml_get_next_tensor(c, t)) {
+            t->buffer = b;
+        }
+        return b;
+    };
+
     std::vector<uint8_t> slab;
     for (const auto & [dev, entries] : by_dev) {
         ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
@@ -2340,12 +2358,18 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
         }
 
         ggml_init_params ctx_params = {
-            /*.mem_size   =*/ (6*entries.size() + 8)*ggml_tensor_overhead(),
+            /*.mem_size   =*/ (4*entries.size() + 8)*ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_init_params maps_params = {
+            /*.mem_size   =*/ (2*entries.size() + 8)*ggml_tensor_overhead(),
             /*.mem_buffer =*/ nullptr,
             /*.no_alloc   =*/ true,
         };
         ggml_context_ptr ctx(ggml_init(ctx_params));
-        if (!ctx) {
+        ggml_context_ptr ctx_maps(ggml_init(maps_params));
+        if (!ctx || !ctx_maps) {
             LLAMA_LOG_WARN("%s: cannot create a context for %s\n", __func__, ggml_backend_dev_name(dev));
             continue;
         }
@@ -2374,25 +2398,15 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
             pk.up          = new_slots(pk.up_src,      slots, "ffn_up_exps_pack",      il);
             pk.gate_up     = new_slots(pk.gate_up_src, slots, "ffn_gate_up_exps_pack", il);
             pk.down        = new_slots(pk.down_src,    slots, "ffn_down_exps_pack",    il);
-            pk.map_hot     = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 1, n_exp);
-            pk.map_cold    = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 1, n_exp);
+            pk.map_hot     = ggml_new_tensor_2d(ctx_maps.get(), GGML_TYPE_I32, 1, n_exp);
+            pk.map_cold    = ggml_new_tensor_2d(ctx_maps.get(), GGML_TYPE_I32, 1, n_exp);
             ggml_format_name(pk.map_hot,  "blk.%d.moe_pack_map_hot",  il);
             ggml_format_name(pk.map_cold, "blk.%d.moe_pack_map_cold", il);
             packs.push_back(pk);
         }
 
         const size_t need = ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.get(), buft);
-        ggml_backend_buffer_t buf = nullptr;
-        if (ml.no_alloc) {
-            buf = ggml_backend_buft_alloc_buffer(buft, 0); // dummy buffer, sized by memory_breakdown()
-            if (buf != nullptr) {
-                for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
-                    t->buffer = buf;
-                }
-            }
-        } else {
-            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
-        }
+        ggml_backend_buffer_t buf = alloc_ctx(ctx.get(), buft);
         if (buf == nullptr) {
             size_t free = 0, total = 0;
             ggml_backend_dev_memory(dev, &free, &total);
@@ -2404,6 +2418,12 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
         }
         ggml_backend_buffer_ptr buf_ptr(buf);
         ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        ggml_backend_buffer_ptr maps_ptr(alloc_ctx(ctx_maps.get(), map_buft));
+        if (!maps_ptr) {
+            LLAMA_LOG_WARN("%s: allocating the expert maps failed - %zu layer(s) without a pack\n", __func__, entries.size());
+            continue;
+        }
+        ggml_backend_buffer_set_usage(maps_ptr.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
         if (!ml.no_alloc) {
             // the hot matmuls must run on the pack device, or every evaluation copies the pack
@@ -2439,34 +2459,42 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
                 map_cold.resize(n_exp);
                 std::iota(map_cold.begin(), map_cold.end(), 0);
 
-                const ggml_tensor * srcs[4] = { pk.gate_src, pk.up_src, pk.gate_up_src, pk.down_src };
-                ggml_tensor *       dsts[4] = { pk.gate, pk.up, pk.gate_up, pk.down };
-                for (int64_t s = 0; s < S && ok; s++) {
+                for (int64_t s = 0; s < S; s++) {
                     const int64_t e = ranked[s].second;
                     map_hot[e]  = (int32_t) s;
                     map_cold[e] = -1;
-                    for (int t = 0; t < 4 && ok; t++) {
-                        if (srcs[t] == nullptr) {
-                            continue;
-                        }
-                        const auto * w = ml.get_weight(ggml_get_name(srcs[t]));
-                        const size_t nb = srcs[t]->nb[2];
-                        if (w == nullptr || w->tensor->type != srcs[t]->type || ggml_nbytes(w->tensor) != ggml_nbytes(srcs[t])) {
-                            LLAMA_LOG_WARN("%s: no file data matches '%s'\n", __func__, ggml_get_name(srcs[t]));
-                            ok = false;
-                            break;
-                        }
-                        slab.resize(nb);
+                }
+
+                // each pack tensor is assembled on the host and written whole: some backends
+                // (OpenVINO) convert weights only on a full-tensor write
+                const ggml_tensor * srcs[4] = { pk.gate_src, pk.up_src, pk.gate_up_src, pk.down_src };
+                ggml_tensor *       dsts[4] = { pk.gate, pk.up, pk.gate_up, pk.down };
+                for (int t = 0; t < 4 && ok; t++) {
+                    if (srcs[t] == nullptr) {
+                        continue;
+                    }
+                    const auto * w = ml.get_weight(ggml_get_name(srcs[t]));
+                    const size_t nb = srcs[t]->nb[2];
+                    if (w == nullptr || w->tensor->type != srcs[t]->type || ggml_nbytes(w->tensor) != ggml_nbytes(srcs[t])) {
+                        LLAMA_LOG_WARN("%s: no file data matches '%s'\n", __func__, ggml_get_name(srcs[t]));
+                        ok = false;
+                        break;
+                    }
+                    slab.resize((size_t) S*nb);
+                    for (int64_t s = 0; s < S && ok; s++) {
+                        const int64_t e = ranked[s].second;
                         try {
                             llama_file * file = ml.files.at(w->idx).get();
                             file->seek(w->offs + (size_t) e*nb, SEEK_SET);
-                            file->read_raw(slab.data(), nb);
+                            file->read_raw(slab.data() + (size_t) s*nb, nb);
                         } catch (const std::exception & ex) {
                             LLAMA_LOG_WARN("%s: reading '%s' expert %lld failed: %s\n", __func__, ggml_get_name(srcs[t]), (long long) e, ex.what());
                             ok = false;
-                            break;
                         }
-                        ggml_backend_tensor_set(dsts[t], slab.data(), (size_t) s*nb, nb);
+                    }
+                    if (ok) {
+                        GGML_ASSERT(ggml_nbytes(dsts[t]) == (size_t) S*nb);
+                        ggml_backend_tensor_set(dsts[t], slab.data(), 0, (size_t) S*nb);
                     }
                 }
                 if (ok) {
@@ -2488,6 +2516,8 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
         n_moe_pack_layers += (int32_t) entries.size();
         pimpl->ctxs_bufs.emplace_back(std::move(ctx), std::vector<ggml_backend_buffer_ptr>{});
         pimpl->ctxs_bufs.back().second.emplace_back(std::move(buf_ptr));
+        pimpl->ctxs_bufs.emplace_back(std::move(ctx_maps), std::vector<ggml_backend_buffer_ptr>{});
+        pimpl->ctxs_bufs.back().second.emplace_back(std::move(maps_ptr));
 
         LLAMA_LOG_INFO("%s: static expert packs on %s: %zu layer(s), up to %lld slot(s) per layer, %.2f MiB%s\n",
                 __func__, ggml_backend_dev_name(dev), entries.size(), (long long) max_slots, need/1048576.0, dry);

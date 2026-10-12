@@ -2288,9 +2288,18 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
 
     if (pack) {
-        ggml_tensor * ids_flat = ggml_cont_1d(ctx0, selected_experts, n_expert_used*n_tokens); // topk is a strided view
-        ggml_tensor * ids_hot  = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, pack->map_hot,  ids_flat), n_expert_used, n_tokens);
-        ggml_tensor * ids_cold = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, pack->map_cold, ids_flat), n_expert_used, n_tokens);
+        ggml_tensor * ids_flat  = ggml_cont_1d(ctx0, selected_experts, n_expert_used*n_tokens); // topk is a strided view
+        ggml_tensor * rows_hot  = ggml_get_rows(ctx0, pack->map_hot,  ids_flat);
+        ggml_tensor * rows_cold = ggml_get_rows(ctx0, pack->map_cold, ids_flat);
+        if (backend_cpu) {
+            // the maps live in host memory; keep the remap on the CPU even when another
+            // backend accepts host buffers. ids_flat stays with the router, so only a
+            // contiguous id tensor crosses to the CPU
+            ggml_backend_sched_set_tensor_backend(sched, rows_hot,  backend_cpu);
+            ggml_backend_sched_set_tensor_backend(sched, rows_cold, backend_cpu);
+        }
+        ggml_tensor * ids_hot  = ggml_reshape_2d(ctx0, rows_hot,  n_expert_used, n_tokens);
+        ggml_tensor * ids_cold = ggml_reshape_2d(ctx0, rows_cold, n_expert_used, n_tokens);
         cb(ids_hot,  "ffn_moe_ids_hot",  il);
         cb(ids_cold, "ffn_moe_ids_cold", il);
 

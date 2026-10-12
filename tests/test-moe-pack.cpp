@@ -6,7 +6,9 @@
 // equal the logits without one: bit-identical for F32 weights, and within a
 // small NMSE when the CPU experts are repacked Q4_0 and the pack is plain Q4_0.
 // When a GPU device is present the pack is also placed on it, with every layer
-// offloaded and the routed experts pinned to the CPU.
+// offloaded and the routed experts pinned to the CPU. Those logits must match
+// either the device without a pack or the CPU: a device's own deviation from the
+// CPU can change with the graph splits (OpenVINO), and a pack adds splits.
 //
 // usage: test-moe-pack MODEL.gguf WORK_DIR
 //   MODEL is a MoE fixture with separate gate/up/down experts and at least
@@ -106,10 +108,15 @@ static ggml_backend_dev_t first_gpu() {
 
 static llama_model_params model_params(const char * profile, int32_t slots, placement place) {
     static llama_model_tensor_buft_override experts_on_cpu[2] = {};
+    static ggml_backend_dev_t cpu_only[2] = {};
     llama_model_params mp = llama_model_default_params();
     mp.moe_pack_profile = profile;
     mp.moe_pack_slots   = slots;
     if (place == PLACE_CPU) {
+        // no accelerator takes part, not even for offloaded ops
+        cpu_only[0]     = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        cpu_only[1]     = nullptr;
+        mp.devices      = cpu_only;
         mp.n_gpu_layers = 0;
     } else {
         experts_on_cpu[0] = { "\\.ffn_(gate|up|down|gate_up)_exps", ggml_backend_dev_buffer_type(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) };
@@ -227,8 +234,11 @@ static bool contains(const std::string & s, const char * needle) {
     return s.find(needle) != std::string::npos;
 }
 
+// oracle: the CPU result, for device runs whose own deviation from it can change with the
+// graph splits, which a pack changes
 static void expect_equivalent(const char * name, const run_result & base, const run_result & packed,
-                              const char * placed, bool exact) {
+                              const char * placed, bool exact, const run_result * oracle = nullptr) {
+    const int failures_before = g_failures;
     CHECK(packed.ok, "%s: packed run failed", name);
     if (!packed.ok) {
         return;
@@ -249,18 +259,30 @@ static void expect_equivalent(const char * name, const run_result & base, const 
         // repacked and plain Q4_0 kernels accumulate in different orders; wrong
         // uploaded bytes would give an nmse near 1
         const double e = nmse(base.logits, packed.logits);
-        CHECK(e < 1e-4, "%s: logits nmse %.3g", name, e);
-        printf("    nmse %.3g\n", e);
+        if (oracle && oracle->logits.size() == packed.logits.size()) {
+            // agreeing with either reference still rules out a wrong remap or upload
+            const double eo = nmse(oracle->logits, packed.logits);
+            CHECK(e < 1e-4 || eo < 1e-4, "%s: logits nmse %.3g, %.3g vs CPU", name, e, eo);
+            printf("    nmse %.3g, %.3g vs CPU\n", e, eo);
+        } else {
+            CHECK(e < 1e-4, "%s: logits nmse %.3g", name, e);
+            printf("    nmse %.3g\n", e);
+        }
     }
-    printf("ok: %s\n", name);
+    if (g_failures == failures_before) {
+        printf("ok: %s\n", name);
+    }
 }
 
 static void expect_disabled(const char * name, const run_result & base, const run_result & r, const char * reason) {
+    const int failures_before = g_failures;
     CHECK(r.ok, "%s: the model must still load", name);
     CHECK(contains(r.log, reason), "%s: missing '%s'", name, reason);
     CHECK(!contains(r.log, "static expert packs on"), "%s: a pack was built", name);
     CHECK(r.logits == base.logits, "%s: logits changed without a pack", name);
-    printf("ok: %s\n", name);
+    if (g_failures == failures_before) {
+        printf("ok: %s\n", name);
+    }
 }
 
 int main(int argc, char ** argv) {
@@ -358,11 +380,12 @@ int main(int argc, char ** argv) {
     llama_model_quantize_params qp = llama_model_quantize_default_params();
     qp.ftype   = LLAMA_FTYPE_MOSTLY_Q4_0;
     qp.nthread = 2;
+    run_result qbase;
     if (llama_model_quantize(f32.c_str(), q40.c_str(), &qp) != 0) {
         fprintf(stderr, "FAIL: quantizing %s failed\n", f32.c_str());
         g_failures++;
     } else {
-        const run_result qbase = run_model(q40, nullptr, 0);
+        qbase = run_model(q40, nullptr, 0);
         CHECK(qbase.ok, "q4_0 baseline run failed");
         if (qbase.ok) {
             expect_equivalent("q4_0 mixed hot/cold, 2 slots", qbase, run_model(q40, p_mixed.c_str(), 2),
@@ -374,18 +397,22 @@ int main(int argc, char ** argv) {
         const std::string placed = std::string("static expert packs on ") + ggml_backend_dev_name(gpu) + ": 2 layer(s), up to 2 slot(s)";
         const run_result dbase = run_model(f32, nullptr, 0, PLACE_DEVICE);
         CHECK(dbase.ok, "device baseline run failed");
+        if (dbase.ok && dbase.logits.size() == base.logits.size()) {
+            // the scale of the device's own deviation, for reading the device case results
+            printf("    %s without a pack vs CPU: nmse %.3g\n", ggml_backend_dev_name(gpu), nmse(base.logits, dbase.logits));
+        }
         if (dbase.ok) {
             // the hot experts now run on the GPU and the cold ones on the CPU
             expect_equivalent("device f32 mixed hot/cold, 2 slots", dbase, run_model(f32, p_mixed.c_str(), 2, PLACE_DEVICE),
-                    placed.c_str(), false);
+                    placed.c_str(), false, &base);
             const std::string all = std::string("static expert packs on ") + ggml_backend_dev_name(gpu) + ": 1 layer(s), up to 8 slot(s)";
             expect_equivalent("device f32 every expert hot in layer 0", dbase, run_model(f32, p_all.c_str(), 8, PLACE_DEVICE),
-                    all.c_str(), false);
+                    all.c_str(), false, &base);
         }
         const run_result dqbase = run_model(q40, nullptr, 0, PLACE_DEVICE);
         if (dqbase.ok) {
             expect_equivalent("device q4_0 mixed hot/cold, 2 slots", dqbase, run_model(q40, p_mixed.c_str(), 2, PLACE_DEVICE),
-                    placed.c_str(), false);
+                    placed.c_str(), false, qbase.ok ? &qbase : nullptr);
         }
     } else {
         printf("skip: device cases (no GPU device)\n");

@@ -66,7 +66,6 @@ counts it under a reason (`-lv 4`):
 - the expert tensors are CPU-resident (host buffers, including the CPU repack
   buffer);
 - the layer itself runs on a GPU or iGPU device, which is where its pack goes;
-- the device is not OpenVINO, which lowers expert id `-1` to the last expert;
 - the split mode is not `tensor`.
 
 The graph then uses a pack only when `build_moe_ffn` receives exactly the
@@ -100,6 +99,13 @@ Zero Sysman), so the hint can be optimistic.
   fork's `op_params[0] = 1` "may contain -1" hint would disable the SYCL grouped
   GEMM, which requires `GGML_PREC_DEFAULT` there. The `-1` skip is
   unconditional on CPU (including repack), SYCL and Vulkan.
+- The two id maps of a layer (expert to pack slot or `-1`, expert to itself or
+  `-1`) live in host memory and the remap `GET_ROWS` is pinned to the CPU; only
+  the router's contiguous top-k ids cross to it. OpenVINO accepts no I32 weight
+  tensor, and it would otherwise take the remap because it accepts host buffers.
+- Each pack tensor is assembled in host memory and written in one call, since
+  OpenVINO converts weights only on a full-tensor write. The load therefore holds
+  one pack tensor (slots x one expert slab) of transient host memory.
 - Every packed layer adds about ten nodes (id remap, a second gate/up/down
   chain, the add); the graph node budget grows by 16 per packed layer.
 
@@ -124,6 +130,18 @@ with their expert scale tensors stripped:
   and Q4_0 about 7e-6 against the same placement without a pack.
   `GGML_SCHED_DEBUG=2` shows the CPU split holding only the cold chain and the
   hot chain and merge in the following Vulkan split.
+
+- OpenVINO (2026.4.1 wheel, `GGML_OPENVINO_DEVICE=CPU`) in the same placement:
+  with every layer packed the logits match the CPU within NMSE 4e-7 (qwen3moe)
+  and 9e-6 (qwen35moe), while the same placement without a pack deviates from the
+  CPU by 7e-3 and 1.3e-3. That deviation is the backend's own: it sits in the
+  prompt logits of a few tokens, needs no pack, and disappears when a pack in the
+  last layer splits that layer's graph. With only layer 0 packed the result
+  follows the unpacked OpenVINO run (NMSE 2e-5). The test therefore accepts a
+  device run that matches either the unpacked device run or the CPU within 1e-4.
+  It needed two backend fixes, both in this tree: `MUL_MAT_ID` and `ADD_ID`
+  honor `-1` ids, and a view read by a later split gets its source written back
+  (before, the pack's hot chain read a stale `ffn_norm`).
 
 `llama-bench --moe-pack off,PROFILE:SLOTS` compares the arms in one run and
 reports a `moe-pack` column; an instance with a pack runs with `moe-cache off`.
