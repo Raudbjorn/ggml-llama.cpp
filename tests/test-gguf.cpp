@@ -416,12 +416,15 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         }
         helper_write(file, name.data(), name.length());
 
-        uint32_t n_dims = (hft == HANDCRAFTED_TENSORS_NE_TOO_BIG || hft == HANDCRAFTED_TENSORS_NE_AT_MAX || hft == HANDCRAFTED_TENSORS_NBYTES_TOO_BIG) ? 2 : 1;
+        uint32_t n_dims = (hft == HANDCRAFTED_TENSORS_NE_TOO_BIG || hft == HANDCRAFTED_TENSORS_NBYTES_TOO_BIG) ? 2 : 1;
         for (int i = GGML_MAX_DIMS-1; i >= 1; --i) {
             if (shape[i] != 1) {
                 n_dims = i + 1;
                 break;
             }
+        }
+        if (hft == HANDCRAFTED_TENSORS_NE_AT_MAX) {
+            n_dims = 1;
         }
         if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
             n_dims = 2;
@@ -442,8 +445,8 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
             const int64_t zero_shape[2] = { shape[0], 0 };
             helper_write(file, zero_shape, 2*sizeof(int64_t));
         } else if (hft == HANDCRAFTED_TENSORS_NE_AT_MAX) {
-            const int64_t max_shape[2] = { 1, INT64_MAX };
-            helper_write(file, max_shape, sizeof(max_shape));
+            const int64_t max_shape = INT64_MAX;
+            helper_write(file, max_shape);
         } else if (hft == HANDCRAFTED_TENSORS_NE_TOO_BIG){
             const int64_t big_dim = 4*int64_t(INT32_MAX);
             for (uint32_t j = 0; j < n_dims; ++j) {
