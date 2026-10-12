@@ -84,7 +84,10 @@ earlier), the tag and record layouts), then `end`. Records follow: `pos`, `layer
 `tag`, `n` as int32, then `n` float32 values. The file is at most
 `max_decode x n_layer x 3 x (16 + 4 n_embd)` bytes; the tool logs that bound. `-o`,
 `--spec-out` and `--hidden-out` must name different files, and none may name an
-input (any shard of the model, or the `-f`/`-bf` prompt file).
+input (any shard of the model, or the `-f`/`-bf` prompt file). An output replaces
+only an empty file or one llama-moe-trace wrote; any other existing file is
+refused before the model loads, which protects adapters, control vectors and
+grammar or schema files too.
 `hidden.py` reads it (stdlib only) and prints the header and record counts.
 
 Validation: `tests/moe_trace_oracle.py` (run by `test-moe-trace` when numpy is

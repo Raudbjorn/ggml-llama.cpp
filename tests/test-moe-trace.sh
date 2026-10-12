@@ -161,7 +161,7 @@ if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work
     fail "--spec-out hard-linked to the -o file must be rejected"
 fi
 grep -q "must name different files" "$work_dir/link.log" || fail "hard-linked outputs: missing diagnostic"
-# an output must never be the model: opening it would truncate the mapped GGUF (on a copy)
+# an output replaces only a file llama-moe-trace wrote: never the mapped model (on a copy)
 cp "$work_dir/qwen3moe-moe.gguf" "$work_dir/victim.gguf"
 victim_size=$(wc -c < "$work_dir/victim.gguf")
 for opt in "-o" "--spec-out"; do
@@ -169,16 +169,17 @@ for opt in "-o" "--spec-out"; do
             --spec-out "$work_dir/v-spec.csv" "$opt" "$work_dir/victim.gguf" > "$work_dir/victim.log" 2>&1; then
         fail "$opt naming the model must be rejected"
     fi
-    grep -q "must not name the input file" "$work_dir/victim.log" || fail "$opt naming the model: missing diagnostic"
+    grep -q "was not written by llama-moe-trace" "$work_dir/victim.log" || fail "$opt naming the model: missing diagnostic"
     [ "$(wc -c < "$work_dir/victim.gguf")" = "$victim_size" ] || fail "$opt naming the model truncated it"
 done
-# nor any other input: the prompt file, or a later shard of a split model
+# nor any other input: the prompt file, a later shard of a split model, an adapter, a control
+# vector or a grammar file (stand-ins: the check runs before anything is loaded)
 printf 'hello\n' > "$work_dir/prompt.txt"
 if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -f "$work_dir/prompt.txt" -n 1 -c 64 \
         -o "$work_dir/prompt.txt" > "$work_dir/pf.log" 2>&1; then
     fail "-o naming the prompt file must be rejected"
 fi
-grep -q "must not name the input file" "$work_dir/pf.log" || fail "-o naming the prompt file: missing diagnostic"
+grep -q "was not written by llama-moe-trace" "$work_dir/pf.log" || fail "-o naming the prompt file: missing diagnostic"
 [ "$(cat "$work_dir/prompt.txt")" = "hello" ] || fail "-o naming the prompt file truncated it"
 split_bin="$(dirname "$trace_bin")/llama-gguf-split"
 if [ -x "$split_bin" ]; then
@@ -193,11 +194,35 @@ if [ -x "$split_bin" ]; then
     if "$trace_bin" -m "$first" -p "hello" -n 1 -c 64 -o "$last" > "$work_dir/shard.log" 2>&1; then
         fail "-o naming a later model shard must be rejected"
     fi
-    grep -q "must not name the input file" "$work_dir/shard.log" || fail "-o naming a shard: missing diagnostic"
+    grep -q "was not written by llama-moe-trace" "$work_dir/shard.log" || fail "-o naming a shard: missing diagnostic"
     [ "$(wc -c < "$last")" = "$last_size" ] || fail "-o naming a shard truncated it"
 else
     printf 'skip: shard aliasing (no %s)\n' "$split_bin"
 fi
+cp "$work_dir/qwen3moe-moe.gguf" "$work_dir/adapter.gguf"
+printf 'root ::= "a"\n' > "$work_dir/g.gbnf"
+for opt in "--lora $work_dir/adapter.gguf" "--control-vector $work_dir/adapter.gguf" "--grammar-file $work_dir/g.gbnf"; do
+    victim=${opt#* }
+    before=$(cksum < "$victim")
+    # shellcheck disable=SC2086
+    if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 $opt -o "$victim" > "$work_dir/in.log" 2>&1; then
+        fail "-o naming the $opt file must be rejected"
+    fi
+    grep -q "was not written by llama-moe-trace" "$work_dir/in.log" || fail "-o naming the $opt file: missing diagnostic"
+    [ "$(cksum < "$victim")" = "$before" ] || fail "-o naming the $opt file changed it"
+done
+# a trace may be replaced, unless it is also the prompt file
+for _ in 1 2; do
+    "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/again.csv" > "$work_dir/again.log" 2>&1 \
+        || fail "replacing an earlier trace failed: $(tail -n 2 "$work_dir/again.log")"
+done
+before=$(cksum < "$work_dir/again.csv")
+if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -f "$work_dir/again.csv" -n 1 -c 2048 -o "$work_dir/again.csv" \
+        > "$work_dir/again-pf.log" 2>&1; then
+    fail "-o naming a trace that is also the prompt file must be rejected"
+fi
+grep -q "must not name the input file" "$work_dir/again-pf.log" || fail "trace as prompt file: missing diagnostic"
+[ "$(cksum < "$work_dir/again.csv")" = "$before" ] || fail "-o naming the prompt file changed it"
 printf 'ok: colliding output paths rejected\n'
 
 if "$trace_bin" -m "$work_dir/llama-moe.gguf" -p "hello world" -n 2 -c 64 -o "$work_dir/lm.csv" \

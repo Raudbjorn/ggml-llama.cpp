@@ -370,7 +370,42 @@ static void log_spec_recall(const trace_state & ts, int32_t k) {
 
 // returns 0 on a complete trace; owns the model and context so that they are
 // freed before the backend
+// an output may replace only a file this tool wrote: a non-empty regular file must start with
+// one of its headers. That protects every input (adapters, control vectors, grammar and schema
+// files, whose paths common_params does not keep) without listing them.
+static bool written_by_trace(const std::string & path) {
+    std::error_code ec;
+    const auto st = std::filesystem::status(path, ec);
+    if (ec || !std::filesystem::is_regular_file(st) || std::filesystem::file_size(path, ec) == 0 || ec) {
+        return true; // absent, a device such as /dev/null, or empty; fopen reports the rest
+    }
+    FILE * f = fopen(path.c_str(), "rb");
+    if (f == nullptr) {
+        return true;
+    }
+    char head[32] = {};
+    const size_t n = fread(head, 1, sizeof(head), f);
+    fclose(f);
+    const std::string h(head, n);
+    return h.rfind("# llama-moe-trace v1\n", 0) == 0 || h.rfind("llama-moe-trace hidden v1\n", 0) == 0;
+}
+
 static int run_trace(common_params & params, trace_state & ts) {
+    std::vector<std::string> outs = { params.out_file };
+    if (params.moe_spec_router_k > 0) {
+        outs.push_back(params.moe_trace_spec_out);
+    }
+    if (!params.moe_trace_hidden_out.empty()) {
+        outs.push_back(params.moe_trace_hidden_out);
+    }
+    for (const std::string & out : outs) {
+        if (!written_by_trace(out)) {
+            LOG_ERR("%s: '%s' exists and was not written by llama-moe-trace; remove it or choose another output\n",
+                    __func__, out.c_str());
+            return 1;
+        }
+    }
+
     common_init_result_ptr llama_init = common_init_from_params(params);
     llama_model   * model = llama_init ? llama_init->model()   : nullptr;
     llama_context * lctx  = llama_init ? llama_init->context() : nullptr;
