@@ -34,7 +34,10 @@ llama-server -m model.gguf -sm tensor --cpu-tp --cpu-tp-margin 1536
 - Automatic sizing sums the tensor data of every file of a split GGUF (the source read the size of
   the first file only), gives each accelerator its reported free memory minus the margin, and the
   CPU the rest. It is an estimate of weights only: the margin must hold the KV cache, the compute
-  buffers and any draft model on each accelerator. An accelerator with no more free memory than the
+  buffers and any draft model on each accelerator. It also treats every tensor as split: tensors
+  the meta backend mirrors (norms, router weights, some biases) take their full size on every
+  accelerator on top of its share, while the input embedding is counted but stays on the CPU.
+  When memory is tight, give `-ts` instead. An accelerator with no more free memory than the
   margin, or a model whose tensors already fit, is an error rather than a silent change of devices.
 - `--fit` is not implemented for split mode tensor; it reports that and leaves the parameters as
   given. The source disabled `--fit` itself.
