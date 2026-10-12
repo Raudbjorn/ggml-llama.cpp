@@ -317,6 +317,29 @@ static void test(void) {
     argv = {"binary_name", "-lm", "hello"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
 
+    // static expert pack flags: both or neither, strict slot count, exclusive with --moe-cache
+    {
+        const std::vector<std::vector<std::string>> invalid = {
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-slots", "4"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "0"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4x"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "-1"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4097"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4", "--moe-cache", "on"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4", "--moe-cache", "2048"},
+        };
+        for (auto argv_case : invalid) {
+            common_params pack_params;
+            assert(false == common_params_parse(argv_case.size(), list_str_to_char(argv_case).data(), pack_params, LLAMA_EXAMPLE_COMMON));
+        }
+        std::vector<std::string> ok_case = {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4", "--moe-cache", "off"};
+        common_params pack_params;
+        assert(true == common_params_parse(ok_case.size(), list_str_to_char(ok_case).data(), pack_params, LLAMA_EXAMPLE_COMMON));
+        assert(pack_params.moe_pack_profile == "p.csv");
+        assert(pack_params.moe_pack_slots == 4);
+    }
+
     printf("test-arg-parser: test valid usage\n\n");
 
     argv = {"binary_name", "-m", "model_file.gguf"};

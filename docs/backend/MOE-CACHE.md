@@ -26,6 +26,10 @@ compilation step and no manual staging buffer - `sycl::queue::memcpy` moves
 data between host and USM device allocations directly regardless of device
 topology, which is simpler than the Vulkan provider's UMA-vs-discrete split.
 
+For a residency chosen once from a routing profile, with exact memory
+accounting and GPU execution at every batch size, see the static expert packs
+in [MOE-PACK.md](MOE-PACK.md). A run uses either the packs or this cache.
+
 ## Usage
 
 Build with `GGML_VULKAN=ON` or `GGML_SYCL=ON`, then select the device reported

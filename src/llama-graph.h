@@ -780,6 +780,25 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
 
 class llm_graph_result;
 
+// static MoE expert pack of one layer (llama_model::moe_packs)
+struct llama_moe_pack_layer {
+    // the CPU-resident expert tensors the pack mirrors: the graph uses the pack
+    // only when build_moe_ffn receives exactly these tensors; either gate and up
+    // or the merged gate_up is set
+    const ggml_tensor * gate_src    = nullptr;
+    const ggml_tensor * up_src      = nullptr;
+    const ggml_tensor * gate_up_src = nullptr;
+    const ggml_tensor * down_src    = nullptr;
+
+    ggml_tensor * gate    = nullptr; // [ne0, ne1, n_slots], source type, on the layer's device
+    ggml_tensor * up      = nullptr;
+    ggml_tensor * gate_up = nullptr;
+    ggml_tensor * down    = nullptr;
+
+    ggml_tensor * map_hot  = nullptr; // I32 [1, n_expert]: slot of a packed expert, else -1
+    ggml_tensor * map_cold = nullptr; // I32 [1, n_expert]: the expert id if not packed, else -1
+};
+
 struct llm_graph_params {
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
@@ -799,6 +818,8 @@ struct llm_graph_params {
     const llama_cross            * cross;
 
     const llama_prec_policy * prec_policy = nullptr;
+
+    const std::vector<llama_moe_pack_layer> * moe_packs = nullptr;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -967,6 +988,9 @@ public:
 
     int64_t max_nodes;
 
+    // number of MoE layers that used their static expert pack in this graph
+    int32_t n_moe_pack_used = 0;
+
 private:
     // keep a copy of the previous graph parameters
     // we will use this to determine whether the graph can be reused by comparing them with the new parameters
@@ -1039,6 +1063,8 @@ struct llm_graph_context {
     const llama_cross            * cross;
 
     const llama_prec_policy * prec_policy;
+
+    const std::vector<llama_moe_pack_layer> * moe_packs;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 

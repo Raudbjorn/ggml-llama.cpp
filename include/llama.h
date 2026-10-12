@@ -358,6 +358,12 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // static MoE expert pack: a llama-moe-trace CSV whose decode rows select, for every
+        // layer with CPU-resident experts, the moe_pack_slots most routed experts to keep
+        // resident on the device that runs the layer (NULL or moe_pack_slots <= 0: disabled)
+        const char * moe_pack_profile;
+        int32_t      moe_pack_slots;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool check_tensors;   // validate model tensor data

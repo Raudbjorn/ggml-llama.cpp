@@ -636,6 +636,10 @@ struct common_params {
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     common_moe_cache_params moe_cache;
+
+    // static MoE expert packs (exclusive with an explicit --moe-cache other than off)
+    std::string moe_pack_profile; // llama-moe-trace CSV that selects the packed experts
+    int32_t     moe_pack_slots = 0; // packed experts per layer, 0 = disabled
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
     bool load_mtp          = false; // load MTP/NextN layers
 

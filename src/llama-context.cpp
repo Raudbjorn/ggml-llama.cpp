@@ -790,6 +790,11 @@ static bool llama_model_has_cacheable_moe_weights(
         LLAMA_LOG_INFO("%s: MoE cache disabled (mode=off)\n", __func__);
         return false;
     }
+    if (model.n_moe_pack_layers > 0) {
+        // one residency mechanism per run: shared ownership and budgets are not defined
+        LLAMA_LOG_INFO("%s: MoE cache disabled (static expert packs are active)\n", __func__);
+        return false;
+    }
     if (!api.query_config || !api.query_device || !api.query_shape) {
         LLAMA_LOG_INFO("%s: MoE cache disabled (no provider registered)\n", __func__);
         return false;
@@ -1020,6 +1025,16 @@ void llama_context::sched_reserve() {
         n_nodes_pp         = ggml_graph_n_nodes(gf);
         n_inputs_pp        = get_gf_res_reserve()->inputs.size();
         n_input_tensors_pp = this->n_input_tensors;
+
+        if (model.n_moe_pack_layers > 0) {
+            const int32_t n_used = get_gf_res_reserve()->n_moe_pack_used;
+            if (n_used < model.n_moe_pack_layers) {
+                LLAMA_LOG_WARN("%s: the graph uses %d of %d static expert packs; -lv 4 logs why a layer does not\n",
+                        __func__, n_used, model.n_moe_pack_layers);
+            } else {
+                LLAMA_LOG_INFO("%s: the graph uses all %d static expert packs\n", __func__, n_used);
+            }
+        }
     }
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
@@ -3068,6 +3083,9 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         }
     }
 
+    // a packed MoE layer adds the id remap and a second gate/up/down chain
+    res += 16u * (uint32_t) model.n_moe_pack_layers;
+
     if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
         // Only actual chain rows unroll a projection, block, head and sampler.
         // Retain the high watermark across sequential/chain mode switches.
@@ -3255,6 +3273,7 @@ llm_graph_params llama_context::graph_params(llm_graph_result *             res,
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
         /*.prec_policy =*/ &model.prec_policy,
+        /*.moe_packs   =*/ model.moe_packs.empty() ? nullptr : &model.moe_packs,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),

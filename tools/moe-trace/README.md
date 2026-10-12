@@ -2,9 +2,9 @@
 
 Records which experts every MoE layer routes to, for a prompt and a sampled
 continuation, and replays those traces against residency policies. Use it to
-decide whether a model's routing is skewed enough for a static expert pack or
-the dynamic `--moe-cache` to pay, and to build the profile a pack is selected
-from.
+decide whether a model's routing is skewed enough for a static expert pack
+([`--moe-pack-profile`](../../docs/backend/MOE-PACK.md)) or the dynamic
+`--moe-cache` to pay, and to build the profile a pack is selected from.
 
 ```bash
 # record: the prompt is decoded one ubatch at a time, then -n tokens are sampled

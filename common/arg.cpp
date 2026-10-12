@@ -960,6 +960,14 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     }
 
+    if (params.moe_pack_profile.empty() != (params.moe_pack_slots == 0)) {
+        throw std::invalid_argument("error: --moe-pack-profile and --moe-pack-slots must be given together\n");
+    }
+    if (!params.moe_pack_profile.empty() && params.moe_cache.mode_explicit &&
+        params.moe_cache.mode != COMMON_MOE_CACHE_MODE_OFF) {
+        throw std::invalid_argument("error: --moe-pack-profile and --moe-cache are mutually exclusive\n");
+    }
+
     if (params.moe_cache.mode == COMMON_MOE_CACHE_MODE_ON && !params.no_extra_bufts) {
         LOG_INF("explicit MoE cache mode disables weight repacking\n");
         params.no_extra_bufts = true;
@@ -2963,6 +2971,31 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_MOE_CACHE"));
+    add_opt(common_arg(
+        {"--moe-pack-profile"}, "FNAME",
+        "llama-moe-trace CSV whose decode routing selects the experts of every CPU-resident MoE layer "
+        "to keep resident on the GPU that runs the layer (static expert pack; requires --moe-pack-slots; "
+        "exclusive with --moe-cache)",
+        [](common_params & params, const std::string & value) {
+            if (value.empty()) {
+                throw std::invalid_argument("expected a file name");
+            }
+            params.moe_pack_profile = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_PACK_PROFILE"));
+    add_opt(common_arg(
+        {"--moe-pack-slots"}, "N",
+        "experts per layer in the static expert pack, 1..4096 (default: 0 = disabled; requires --moe-pack-profile)",
+        [](common_params & params, const std::string & value) {
+            char * end = nullptr;
+            errno = 0;
+            const long long n = strtoll(value.c_str(), &end, 10);
+            if (errno != 0 || end == value.c_str() || *end != '\0' || n < 0 || n > 4096) {
+                throw std::invalid_argument("expected an integer in 0..4096");
+            }
+            params.moe_pack_slots = (int32_t) n;
+        }
+    ).set_env("LLAMA_ARG_MOE_PACK_SLOTS"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

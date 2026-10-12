@@ -1780,6 +1780,12 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.use_extra_bufts = !params.no_extra_bufts;
     mparams.no_host         = params.no_host;
 
+    // the pack profile describes the main model's routing, never the draft's
+    if (!params.model_is_spec_draft && !params.moe_pack_profile.empty()) {
+        mparams.moe_pack_profile = params.moe_pack_profile.c_str();
+        mparams.moe_pack_slots   = params.moe_pack_slots;
+    }
+
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {

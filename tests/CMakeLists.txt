@@ -515,6 +515,19 @@ if (Python3_Interpreter_FOUND)
     set_tests_properties(test-moe-trace-simulate PROPERTIES LABELS "python" TIMEOUT 60)
 endif()
 
+if (LLAMA_TEST_BASH AND TARGET test-llama-archs)
+    llama_build(test-moe-pack.cpp)
+    llama_test_cmd(
+        ${LLAMA_TEST_BASH}
+        NAME test-moe-pack
+        ARGS
+            ${CMAKE_CURRENT_SOURCE_DIR}/test-moe-pack.sh
+            $<TARGET_FILE:test-llama-archs>
+            $<TARGET_FILE:test-moe-pack>
+    )
+    set_tests_properties(test-moe-pack PROPERTIES TIMEOUT 300)
+endif()
+
 # Fork-specific TurboQuant and SYCL tests.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat grep hostname

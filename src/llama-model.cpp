@@ -2019,6 +2019,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     if (ml.no_alloc) {
+        init_moe_packs(ml);
         return true;
     }
 
@@ -2043,7 +2044,457 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    init_moe_packs(ml);
+
     return true;
+}
+
+//
+// static MoE expert packs
+//
+
+namespace {
+
+struct moe_pack_profile {
+    std::map<int64_t, std::map<int64_t, int64_t>> freq; // layer -> expert -> decode routings
+    std::string arch;
+    int64_t n_layer  = -1;
+    int64_t n_expert = -1;
+};
+
+// whole-field decimal integer; rejects empty fields, signs other than a leading
+// '-', trailing characters and overflow
+bool moe_pack_parse_i64(const char * b, const char * e, int64_t & out) {
+    if (b == e) {
+        return false;
+    }
+    bool neg = false;
+    if (*b == '-') {
+        neg = true;
+        if (++b == e) {
+            return false;
+        }
+    }
+    int64_t v = 0;
+    for (; b != e; ++b) {
+        if (*b < '0' || *b > '9') {
+            return false;
+        }
+        if (v > (INT64_MAX - (*b - '0')) / 10) {
+            return false;
+        }
+        v = v * 10 + (*b - '0');
+    }
+    out = neg ? -v : v;
+    return true;
+}
+
+// llama-moe-trace v1 CSV: '#' provenance lines, a "pos,..." header and
+// "pos,layer,id0,..." rows; only decode rows (pos >= 0) are counted
+bool moe_pack_read_profile(const char * path, moe_pack_profile & prof, std::string & err) {
+    constexpr size_t   max_line  = 64 * 1024;
+    constexpr uint64_t max_bytes = 1ull << 30;
+
+    std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(path, "rb"), fclose);
+    if (!f) {
+        err = format("cannot open '%s': %s", path, strerror(errno));
+        return false;
+    }
+    std::vector<char> line(max_line + 2);
+    uint64_t n_bytes = 0;
+    int64_t  lineno  = 0;
+    int64_t  n_rows  = 0;
+    while (fgets(line.data(), (int) line.size(), f.get())) {
+        lineno++;
+        size_t len = strlen(line.data());
+        n_bytes += len;
+        if (n_bytes > max_bytes) {
+            err = format("'%s' is larger than %llu bytes", path, (unsigned long long) max_bytes);
+            return false;
+        }
+        const bool has_newline = len > 0 && line[len - 1] == '\n';
+        if (!has_newline && !feof(f.get())) {
+            err = format("'%s':%lld: line longer than %zu bytes", path, (long long) lineno, max_line);
+            return false;
+        }
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        const char * p   = line.data();
+        const char * end = p + len;
+        if (len == 0) {
+            continue;
+        }
+        if (*p == '#') {
+            std::string kv(p + 1, end);
+            const size_t b = kv.find_first_not_of(' ');
+            kv = b == std::string::npos ? std::string() : kv.substr(b);
+            const size_t eq = kv.find('=');
+            if (eq == std::string::npos) {
+                continue;
+            }
+            const std::string key = kv.substr(0, eq);
+            const std::string val = kv.substr(eq + 1);
+            int64_t v = 0;
+            if (key == "arch") {
+                prof.arch = val;
+            } else if (key == "n_layer" || key == "n_expert") {
+                if (!moe_pack_parse_i64(val.data(), val.data() + val.size(), v) || v <= 0) {
+                    err = format("'%s':%lld: invalid %s '%s'", path, (long long) lineno, key.c_str(), val.c_str());
+                    return false;
+                }
+                (key == "n_layer" ? prof.n_layer : prof.n_expert) = v;
+            }
+            continue;
+        }
+        if (strncmp(p, "pos,", 4) == 0) {
+            continue;
+        }
+        int64_t fields[2 + LLAMA_MAX_EXPERTS];
+        int     n_fields = 0;
+        while (true) {
+            const char * comma = (const char *) memchr(p, ',', end - p);
+            const char * fend  = comma ? comma : end;
+            if (n_fields == (int) (sizeof(fields) / sizeof(fields[0])) ||
+                !moe_pack_parse_i64(p, fend, fields[n_fields])) {
+                err = format("'%s':%lld: malformed row", path, (long long) lineno);
+                return false;
+            }
+            n_fields++;
+            if (!comma) {
+                break;
+            }
+            p = comma + 1;
+        }
+        if (n_fields < 3 || fields[1] < 0) {
+            err = format("'%s':%lld: expected pos,layer,id0,...", path, (long long) lineno);
+            return false;
+        }
+        for (int i = 2; i < n_fields; i++) {
+            if (fields[i] < 0) {
+                err = format("'%s':%lld: negative expert id", path, (long long) lineno);
+                return false;
+            }
+        }
+        if (fields[0] < 0) {
+            continue; // prompt routing
+        }
+        auto & layer = prof.freq[fields[1]];
+        for (int i = 2; i < n_fields; i++) {
+            layer[fields[i]]++;
+        }
+        n_rows++;
+    }
+    if (ferror(f.get())) {
+        err = format("read error on '%s'", path);
+        return false;
+    }
+    if (n_rows == 0) {
+        err = format("'%s' has no decode rows (pos >= 0)", path);
+        return false;
+    }
+    return true;
+}
+
+bool moe_pack_tensor_on_cpu(const ggml_tensor * t) {
+    if (t == nullptr || t->buffer == nullptr) {
+        return false;
+    }
+    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(t->buffer);
+    if (ggml_backend_buft_is_host(buft)) {
+        return true;
+    }
+    ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+    return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
+// why the layer device cannot hold a pack, or nullptr
+const char * moe_pack_device_unsupported(ggml_backend_dev_t dev) {
+    if (dev == nullptr) {
+        return "no device";
+    }
+    const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+    if (getenv("LLAMA_MOE_PACK_TEST_CPU") != nullptr && type == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        return nullptr; // test hook: build CPU-resident packs to check graph equivalence without a GPU
+    }
+    if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+        return "the layer does not run on a GPU";
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (reg != nullptr && strcmp(ggml_backend_reg_name(reg), "OPENVINO") == 0) {
+        return "OpenVINO lowers expert id -1 to the last expert";
+    }
+    return nullptr;
+}
+
+} // namespace
+
+void llama_model_base::init_moe_packs(llama_model_loader & ml) {
+    const char *  path    = params.moe_pack_profile;
+    const int32_t n_slots = params.moe_pack_slots;
+    if (path == nullptr || path[0] == '\0' || n_slots <= 0) {
+        return;
+    }
+    const char * dry = ml.no_alloc ? " (memory fit pass)" : "";
+
+    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+        LLAMA_LOG_WARN("%s: static expert packs are not supported with split mode tensor - packs disabled\n", __func__);
+        return;
+    }
+
+    moe_pack_profile prof;
+    std::string err;
+    if (!moe_pack_read_profile(path, prof, err)) {
+        LLAMA_LOG_ERROR("%s: %s - packs disabled\n", __func__, err.c_str());
+        return;
+    }
+    const std::string arch_str = arch_name();
+    if (!prof.arch.empty() && prof.arch != arch_str) {
+        LLAMA_LOG_ERROR("%s: profile '%s' was traced on arch '%s', model is '%s' - packs disabled\n",
+                __func__, path, prof.arch.c_str(), arch_str.c_str());
+        return;
+    }
+    if ((prof.n_layer  > 0 && prof.n_layer  != (int64_t) hparams.n_layer()) ||
+        (prof.n_expert > 0 && prof.n_expert != (int64_t) hparams.n_expert)) {
+        LLAMA_LOG_ERROR("%s: profile '%s' has n_layer=%lld n_expert=%lld, model has %u and %u - packs disabled\n",
+                __func__, path, (long long) prof.n_layer, (long long) prof.n_expert, hparams.n_layer(), hparams.n_expert);
+        return;
+    }
+
+    const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // as in build_moe_ffn
+    const int  n_layer_dev       = (int) std::min(layers.size(), pimpl->dev_layer.size());
+
+    // rejected layers are counted by reason so a profile never silently does nothing
+    std::map<std::string, int> skipped;
+    std::map<ggml_backend_dev_t, std::vector<std::pair<int, int64_t>>> by_dev; // device -> (layer, slots)
+    for (const auto & [il64, freq] : prof.freq) {
+        if (il64 >= n_layer_dev) {
+            LLAMA_LOG_ERROR("%s: profile '%s' routes layer %lld, the model has %d - packs disabled\n",
+                    __func__, path, (long long) il64, n_layer_dev);
+            return;
+        }
+        const int il = (int) il64;
+        const llama_layer & l = layers[il];
+        const bool merged   = l.ffn_gate_up_exps && !l.ffn_gate_exps && !l.ffn_up_exps;
+        const bool separate = l.ffn_gate_exps && l.ffn_up_exps && !l.ffn_gate_up_exps;
+        if (!l.ffn_down_exps || (!merged && !separate)) {
+            skipped["no gate/up and down experts"]++;
+            continue;
+        }
+        const ggml_tensor * srcs[3] = { l.ffn_gate_exps, l.ffn_up_exps, l.ffn_gate_up_exps };
+        const int64_t n_exp = l.ffn_down_exps->ne[2];
+        if (freq.rbegin()->first >= n_exp) {
+            LLAMA_LOG_ERROR("%s: profile '%s' routes expert %lld in layer %d, which has %lld - packs disabled\n",
+                    __func__, path, (long long) freq.rbegin()->first, il, (long long) n_exp);
+            return;
+        }
+        bool same_count = true;
+        bool on_cpu     = moe_pack_tensor_on_cpu(l.ffn_down_exps);
+        for (const ggml_tensor * t : srcs) {
+            if (t) {
+                same_count = same_count && t->ne[2] == n_exp;
+                on_cpu     = on_cpu && moe_pack_tensor_on_cpu(t);
+            }
+        }
+        if (!same_count) {
+            skipped["mismatched expert counts"]++;
+            continue;
+        }
+        if (l.ffn_gate_exps_s || l.ffn_up_exps_s || l.ffn_down_exps_s ||
+            l.ffn_gate_exps_b || l.ffn_up_exps_b || l.ffn_gate_up_exps_b || l.ffn_down_exps_b || weight_before_ffn ||
+            hparams.swiglu_clamp_exp[il] > 1e-6f) {
+            skipped["expert scales, biases, clamp or pre-FFN weighting"]++;
+            continue;
+        }
+        if (!on_cpu) {
+            skipped["experts not CPU-resident"]++;
+            continue;
+        }
+        ggml_backend_dev_t dev = dev_layer(il);
+        if (const char * why = moe_pack_device_unsupported(dev)) {
+            skipped[why]++;
+            continue;
+        }
+        const int64_t slots = std::min<int64_t>({ (int64_t) n_slots, n_exp, (int64_t) freq.size() });
+        by_dev[dev].push_back({ il, slots });
+    }
+    for (const auto & [why, n] : skipped) {
+        LLAMA_LOG_INFO("%s: %d profiled layer(s) without a pack: %s\n", __func__, n, why.c_str());
+    }
+    if (by_dev.empty()) {
+        LLAMA_LOG_WARN("%s: profile '%s' selected no layer for a static expert pack%s\n", __func__, path, dry);
+        return;
+    }
+
+    if (moe_packs.empty()) {
+        moe_packs.resize(layers.size());
+    }
+
+    std::vector<uint8_t> slab;
+    for (const auto & [dev, entries] : by_dev) {
+        ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
+        if (buft == nullptr) {
+            LLAMA_LOG_WARN("%s: %s has no buffer type - %zu layer(s) without a pack\n",
+                    __func__, ggml_backend_dev_name(dev), entries.size());
+            continue;
+        }
+
+        ggml_init_params ctx_params = {
+            /*.mem_size   =*/ (6*entries.size() + 8)*ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context_ptr ctx(ggml_init(ctx_params));
+        if (!ctx) {
+            LLAMA_LOG_WARN("%s: cannot create a context for %s\n", __func__, ggml_backend_dev_name(dev));
+            continue;
+        }
+
+        std::vector<llama_moe_pack_layer> packs;
+        size_t bytes_per_slot = 0;
+        const auto new_slots = [&](const ggml_tensor * src, int64_t slots, const char * suffix, int il) {
+            if (src == nullptr) {
+                return (ggml_tensor *) nullptr;
+            }
+            ggml_tensor * t = ggml_new_tensor_3d(ctx.get(), src->type, src->ne[0], src->ne[1], slots);
+            ggml_format_name(t, "blk.%d.%s", il, suffix);
+            bytes_per_slot += src->nb[2];
+            return t;
+        };
+        for (const auto & [il, slots] : entries) {
+            const llama_layer & l = layers[il];
+            const int64_t n_exp = l.ffn_down_exps->ne[2];
+
+            llama_moe_pack_layer pk;
+            pk.gate_src    = l.ffn_gate_exps;
+            pk.up_src      = l.ffn_up_exps;
+            pk.gate_up_src = l.ffn_gate_up_exps;
+            pk.down_src    = l.ffn_down_exps;
+            pk.gate        = new_slots(pk.gate_src,    slots, "ffn_gate_exps_pack",    il);
+            pk.up          = new_slots(pk.up_src,      slots, "ffn_up_exps_pack",      il);
+            pk.gate_up     = new_slots(pk.gate_up_src, slots, "ffn_gate_up_exps_pack", il);
+            pk.down        = new_slots(pk.down_src,    slots, "ffn_down_exps_pack",    il);
+            pk.map_hot     = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 1, n_exp);
+            pk.map_cold    = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 1, n_exp);
+            ggml_format_name(pk.map_hot,  "blk.%d.moe_pack_map_hot",  il);
+            ggml_format_name(pk.map_cold, "blk.%d.moe_pack_map_cold", il);
+            packs.push_back(pk);
+        }
+
+        const size_t need = ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.get(), buft);
+        ggml_backend_buffer_t buf = nullptr;
+        if (ml.no_alloc) {
+            buf = ggml_backend_buft_alloc_buffer(buft, 0); // dummy buffer, sized by memory_breakdown()
+            if (buf != nullptr) {
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
+                    t->buffer = buf;
+                }
+            }
+        } else {
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+        }
+        if (buf == nullptr) {
+            size_t free = 0, total = 0;
+            ggml_backend_dev_memory(dev, &free, &total);
+            LLAMA_LOG_WARN("%s: allocating %.2f MiB of expert packs on %s failed (reported free %.2f of %.2f MiB; "
+                    "some backends report free = total); at most %zu slot(s) per layer could fit the reported free memory "
+                    "- %zu layer(s) without a pack\n", __func__, need/1048576.0, ggml_backend_dev_name(dev),
+                    free/1048576.0, total/1048576.0, bytes_per_slot ? free / bytes_per_slot : (size_t) 0, entries.size());
+            continue;
+        }
+        ggml_backend_buffer_ptr buf_ptr(buf);
+        ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+        if (!ml.no_alloc) {
+            // the hot matmuls must run on the pack device, or every evaluation copies the pack
+            ggml_init_params op_params = { 4*ggml_tensor_overhead(), nullptr, true };
+            ggml_context_ptr op_ctx(ggml_init(op_params));
+            ggml_tensor * g0  = packs[0].gate ? packs[0].gate : packs[0].gate_up;
+            ggml_tensor * b   = ggml_new_tensor_3d(op_ctx.get(), GGML_TYPE_F32, g0->ne[0], 1, 1);
+            ggml_tensor * ids = ggml_new_tensor_2d(op_ctx.get(), GGML_TYPE_I32, 1, 1);
+            ggml_tensor * op  = ggml_mul_mat_id(op_ctx.get(), g0, b, ids);
+            if (!ggml_backend_dev_supports_op(dev, op)) {
+                LLAMA_LOG_WARN("%s: %s cannot run MUL_MAT_ID on %s experts - %zu layer(s) without a pack\n",
+                        __func__, ggml_backend_dev_name(dev), ggml_type_name(g0->type), entries.size());
+                continue;
+            }
+
+            // upload the selected experts from the model file in their stored layout; the
+            // CPU-side tensors may have been repacked and are not read back
+            std::vector<int32_t> map_hot, map_cold;
+            bool ok = true;
+            for (size_t i = 0; i < entries.size() && ok; i++) {
+                const int il    = entries[i].first;
+                const int64_t S = entries[i].second;
+                const llama_moe_pack_layer & pk = packs[i];
+                const int64_t n_exp = pk.down_src->ne[2];
+
+                std::vector<std::pair<int64_t, int64_t>> ranked; // (-count, expert)
+                for (const auto & [e, c] : prof.freq.at(il)) {
+                    ranked.push_back({ -c, e });
+                }
+                std::sort(ranked.begin(), ranked.end());
+
+                map_hot.assign(n_exp, -1);
+                map_cold.resize(n_exp);
+                std::iota(map_cold.begin(), map_cold.end(), 0);
+
+                const ggml_tensor * srcs[4] = { pk.gate_src, pk.up_src, pk.gate_up_src, pk.down_src };
+                ggml_tensor *       dsts[4] = { pk.gate, pk.up, pk.gate_up, pk.down };
+                for (int64_t s = 0; s < S && ok; s++) {
+                    const int64_t e = ranked[s].second;
+                    map_hot[e]  = (int32_t) s;
+                    map_cold[e] = -1;
+                    for (int t = 0; t < 4 && ok; t++) {
+                        if (srcs[t] == nullptr) {
+                            continue;
+                        }
+                        const auto * w = ml.get_weight(ggml_get_name(srcs[t]));
+                        const size_t nb = srcs[t]->nb[2];
+                        if (w == nullptr || w->tensor->type != srcs[t]->type || ggml_nbytes(w->tensor) != ggml_nbytes(srcs[t])) {
+                            LLAMA_LOG_WARN("%s: no file data matches '%s'\n", __func__, ggml_get_name(srcs[t]));
+                            ok = false;
+                            break;
+                        }
+                        slab.resize(nb);
+                        try {
+                            llama_file * file = ml.files.at(w->idx).get();
+                            file->seek(w->offs + (size_t) e*nb, SEEK_SET);
+                            file->read_raw(slab.data(), nb);
+                        } catch (const std::exception & ex) {
+                            LLAMA_LOG_WARN("%s: reading '%s' expert %lld failed: %s\n", __func__, ggml_get_name(srcs[t]), (long long) e, ex.what());
+                            ok = false;
+                            break;
+                        }
+                        ggml_backend_tensor_set(dsts[t], slab.data(), (size_t) s*nb, nb);
+                    }
+                }
+                if (ok) {
+                    ggml_backend_tensor_set(pk.map_hot,  map_hot.data(),  0, n_exp*sizeof(int32_t));
+                    ggml_backend_tensor_set(pk.map_cold, map_cold.data(), 0, n_exp*sizeof(int32_t));
+                }
+            }
+            if (!ok) {
+                LLAMA_LOG_WARN("%s: %zu layer(s) on %s without a pack\n", __func__, entries.size(), ggml_backend_dev_name(dev));
+                continue;
+            }
+        }
+
+        int64_t max_slots = 0;
+        for (size_t i = 0; i < entries.size(); i++) {
+            moe_packs[entries[i].first] = packs[i];
+            max_slots = std::max(max_slots, entries[i].second);
+        }
+        n_moe_pack_layers += (int32_t) entries.size();
+        pimpl->ctxs_bufs.emplace_back(std::move(ctx), std::vector<ggml_backend_buffer_ptr>{});
+        pimpl->ctxs_bufs.back().second.emplace_back(std::move(buf_ptr));
+
+        LLAMA_LOG_INFO("%s: static expert packs on %s: %zu layer(s), up to %lld slot(s) per layer, %.2f MiB%s\n",
+                __func__, ggml_backend_dev_name(dev), entries.size(), (long long) max_slots, need/1048576.0, dry);
+    }
+    if (n_moe_pack_layers == 0) {
+        moe_packs.clear();
+    }
 }
 
 ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
@@ -3047,6 +3498,8 @@ llama_model_params llama_model_default_params() {
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
+        /*.moe_pack_profile            =*/ nullptr,
+        /*.moe_pack_slots              =*/ 0,
         /*.vocab_only                  =*/ false,
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,

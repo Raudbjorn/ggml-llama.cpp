@@ -741,6 +741,10 @@ struct llama_model {
 
     std::vector<llama_layer> layers;
 
+    // static MoE expert packs, indexed by layer; empty unless moe_pack_profile is set
+    std::vector<llama_moe_pack_layer> moe_packs;
+    int32_t n_moe_pack_layers = 0;
+
     //Dense linear projections for SentenceTransformers models like embeddinggemma
     // For Sentence Transformers models structure see
     // https://sbert.net/docs/sentence_transformer/usage/custom_models.html#structure-of-sentence-transformer-models
@@ -872,6 +876,10 @@ struct llama_model_base : public llama_model {
     void load_hparams(llama_model_loader & ml) override;
     void load_vocab  (llama_model_loader & ml) override;
     bool load_tensors(llama_model_loader & ml) override;
+
+    // build the static expert packs selected by params.moe_pack_profile; a pack
+    // that cannot be built is logged and skipped, never fatal
+    void init_moe_packs(llama_model_loader & ml);
 
     // model must define these
     void load_arch_hparams(llama_model_loader & ml) override = 0;
