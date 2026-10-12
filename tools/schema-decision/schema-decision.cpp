@@ -998,6 +998,18 @@ outcome<field_spec> make_field(const std::string & name, const std::string & typ
             return bad("unsupported keyword \"" + e.key() + "\"");
         }
     }
+    // a value constraint the type does not implement would let values outside the schema through
+    // ({"type": "boolean", "enum": [true]} could return false); integers report a step themselves
+    const bool known_type = type == "boolean" || type == "enum" || type == "string" || type == "integer" || type == "number";
+    for (const char * key : { "enum", "choices", "minimum", "maximum", "step", "multipleOf" }) {
+        const std::string k = key;
+        const bool applies  = k == "enum" || k == "choices"      ? type == "enum" || type == "string" :
+                              k == "minimum" || k == "maximum"   ? type == "integer" || type == "number" :
+                                                                   type == "integer" || type == "number";
+        if (known_type && spec.contains(k) && !applies) {
+            return bad("\"" + k + "\" does not apply to " + type + " fields");
+        }
+    }
 
     if (type == "boolean") {
         f.type    = "boolean";

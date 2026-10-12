@@ -140,6 +140,9 @@ static void test_schema() {
     }
 
     // keywords the compiler does not implement are refused, not ignored
+    expect_schema_error("boolean enum", R"({"type": "object", "properties": {"b": {"type": "boolean", "enum": [true]}}})", "does not apply");
+    expect_schema_error("integer enum", R"({"n": {"type": "integer", "minimum": 0, "maximum": 3, "enum": [1], "description": "d"}})", "does not apply");
+    expect_schema_error("enum bounds", R"({"e": {"type": "enum", "choices": ["a"], "minimum": 0, "description": "d"}})", "does not apply");
     expect_schema_error("exclusiveMinimum", R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 0, "maximum": 1, "multipleOf": 0.5, "exclusiveMinimum": 0}}})", "exclusiveMinimum");
     expect_schema_error("pattern", R"({"type": "object", "properties": {"s": {"type": "string", "enum": ["a"], "pattern": "a"}}})", "pattern");
     expect_schema_error("anyOf at the top", R"({"type": "object", "properties": {"b": {"type": "boolean"}}, "anyOf": []})", "anyOf");

@@ -101,8 +101,10 @@ effect; every field is always answered).
 Numbers must be finite, within 1e15 in magnitude, and need at most 9 decimals; every value of a
 field prints with the same number of decimals. `aggregate` (or `x-aggregate`) picks the answer of
 a numeric `tree` field: `mode` (default, the most likely value), `median`, or `mean` (the grid
-value nearest to the expected value). Any other keyword (`exclusiveMinimum`, `const`, `pattern`,
-`anyOf`, ...) is an error. At most 32 fields, 256-byte names, 4 KiB descriptions.
+value nearest to the expected value); integer aggregates are exact over the full 64-bit range,
+the reported `mean` is a double. A key of another type (`enum` on a `boolean`, `minimum` on an
+`enum`) and any other keyword (`exclusiveMinimum`, `const`, `pattern`, `anyOf`, ...) are errors.
+At most 32 fields, 256-byte names, 4 KiB descriptions.
 
 ## Tokenization
 
