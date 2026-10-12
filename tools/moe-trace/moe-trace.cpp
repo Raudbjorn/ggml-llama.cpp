@@ -295,9 +295,12 @@ static bool write_hidden_header(FILE * out, const llama_model * model, const com
     return !failed;
 }
 
-// two output paths that name the same file, also through another spelling
+// two output paths that name the same file, also through another spelling or a hard link
 static bool same_file(const std::string & a, const std::string & b) {
     std::error_code ec;
+    if (std::filesystem::equivalent(a, b, ec) && !ec) {
+        return true;
+    }
     const auto ca = std::filesystem::weakly_canonical(a, ec);
     if (ec) {
         return a == b;

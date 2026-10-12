@@ -154,6 +154,13 @@ if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work
     fail "--spec-out naming the -o file must be rejected"
 fi
 grep -q "must name different files" "$work_dir/same.log" || fail "colliding outputs: missing diagnostic"
+: > "$work_dir/link-a.csv"
+ln -f "$work_dir/link-a.csv" "$work_dir/link-b.csv"
+if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/link-a.csv" \
+        --spec-router 1 --spec-out "$work_dir/link-b.csv" > "$work_dir/link.log" 2>&1; then
+    fail "--spec-out hard-linked to the -o file must be rejected"
+fi
+grep -q "must name different files" "$work_dir/link.log" || fail "hard-linked outputs: missing diagnostic"
 printf 'ok: colliding output paths rejected\n'
 
 if "$trace_bin" -m "$work_dir/llama-moe.gguf" -p "hello world" -n 2 -c 64 -o "$work_dir/lm.csv" \
