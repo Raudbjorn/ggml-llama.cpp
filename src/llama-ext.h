@@ -146,7 +146,7 @@ LLAMA_API bool llama_model_shares_target_kv(const struct llama_model * model);
 // row's in-graph argmax and hidden state. One decode drafts n_tokens tokens.
 LLAMA_API void llama_set_mtp_chain(struct llama_context * ctx, bool value);
 
-// Marks the entries that a joint decision head (clef) reads, the default is 0
+// Marks the entries that a decision head (clef, vllm-decision2) reads, the default is 0
 // See https://github.com/ggml-org/llama.cpp/pull/29831 for details
 // A run of entries with the same value is one span, spans must be separated by entries with value 0
 // An option belongs to the last question before it

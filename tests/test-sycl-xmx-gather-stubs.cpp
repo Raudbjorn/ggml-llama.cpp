@@ -22,11 +22,11 @@ int main() {
 
     // Valid shapes still return false without reading buffers or requiring a device queue.
     const bool results[] = {
-        ggml_sycl_fused_dequant_gemm_f16_device_ok(nullptr),
-        ggml_sycl_fused_dequant_gemm_f16(
-            GGML_TYPE_IQ4_NL, nullptr, nullptr, nullptr, 16, 32, 256, 16, pool, nullptr),
-        ggml_sycl_grouped_dequant_gemm_f16(
-            GGML_TYPE_IQ4_NL, nullptr, 0, nullptr, nullptr, offsets,
+        ggml_sycl_fused_dequant_gemm(
+            GGML_TYPE_IQ4_NL, nullptr, nullptr, GGML_TYPE_F32, GGML_PREC_UNDEFINED,
+            nullptr, 16, 32, 256, 16, pool, nullptr),
+        ggml_sycl_grouped_dequant_gemm(
+            GGML_TYPE_IQ4_NL, false, nullptr, 0, nullptr, GGML_PREC_UNDEFINED, nullptr, offsets,
             1, 16, 256, 32, tiles, pool, nullptr),
     };
     for (size_t i = 0; i < sizeof(results) / sizeof(results[0]); ++i) {

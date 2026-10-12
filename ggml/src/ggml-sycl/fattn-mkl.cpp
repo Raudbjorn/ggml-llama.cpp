@@ -9,7 +9,6 @@
 #include "common.hpp"
 #include "fattn-common.hpp"
 #include "fattn-mkl.hpp"
-#include "fattn-buffers.hpp"
 #include "convert.hpp"
 #include "fattn.hpp"
 
@@ -288,8 +287,10 @@ static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, 
     d.ts   = (int64_t)ggml_type_size(T->type);
 
     if (T->type == GGML_TYPE_F16) {
-        d.mode = interleaved ? MKL_FA_KV_MODE_F16_INTERLEAVED
-                             : MKL_FA_KV_MODE_F16_DENSE;
+        // MLA's V cache is a 512-wide view of 576-wide K rows. Treat any
+        // padded row stride as strided even when there is only one KV head.
+        d.mode = interleaved || d.nb1 != d.D * (int64_t)sizeof(sycl::half)
+            ? MKL_FA_KV_MODE_F16_INTERLEAVED : MKL_FA_KV_MODE_F16_DENSE;
     } else if (ggml_is_contiguously_allocated(T) && !interleaved) {
         d.mode = MKL_FA_KV_MODE_QUANT_CONTIG;
     } else {

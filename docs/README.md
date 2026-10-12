@@ -7,6 +7,7 @@ the fork's own; [development/upstream-merge.md](development/upstream-merge.md) l
 
 - [GUIDE.md](GUIDE.md) - condensed repository field guide, task routes, source map and evidence boundaries
 - [benchmarks/README.md](benchmarks/README.md) - separate inventory and guide to the local benchmark campaign collection
+- [history/README.md](history/README.md) - fork history, benchmark/functionality progression, Hindsight evidence, dead ends, integration mistakes, and the pinned upstream comparison
 
 ## build/ - building and installing
 
@@ -21,6 +22,7 @@ the fork's own; [development/upstream-merge.md](development/upstream-merge.md) l
 
 - [SYCL.md](backend/SYCL.md) - SYCL on Intel GPUs, the fork's primary backend
 - [OPENVINO.md](backend/OPENVINO.md) - OpenVINO backend
+- [AOCL.md](backend/AOCL.md) - AMD AOCL-BLAS through the generic BLAS backend
 - [MOE-CACHE.md](backend/MOE-CACHE.md) - MoE expert cache
 - [ops.md](ops.md) - op support per backend, generated from [ops/](ops/) by `scripts/create_ops_docs.py`.
   The tables come from `test-backend-ops support --output csv` per backend. The Vulkan, SYCL and

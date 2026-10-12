@@ -13,7 +13,8 @@
 // worker computes the same splits, and in decode the hot chain overlaps the
 // cold one with the merge moved to the CPU, an exact f32 add either way. An
 // abort raised by the CPU split on the worker fails the decode, and the context
-// decodes the same logits afterwards.
+// decodes the same logits afterwards. A layer with Hadamard-folded experts gets no
+// pack, and the device MoE cache (moe_cache_size) leaves a packed layer to its pack.
 //
 // usage: test-moe-pack MODEL.gguf WORK_DIR
 //   MODEL is a MoE fixture with separate gate/up/down experts and at least
@@ -25,6 +26,7 @@
 
 #include "../src/llama-ext.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -89,6 +91,38 @@ static bool strip_expert_scales(const std::string & src, const std::string & dst
     return ok;
 }
 
+// copy a GGUF that declares every routed expert weight Hadamard-folded; the weights stay
+// random, the graph applies the transform to their inputs all the same
+static bool fold_expert_hadamard(const std::string & src, const std::string & dst) {
+    ggml_context * meta = nullptr;
+    gguf_init_params params = { /*no_alloc =*/ false, /*ctx =*/ &meta };
+    gguf_context * in = gguf_init_from_file(src.c_str(), params);
+    if (!in) {
+        return false;
+    }
+    gguf_context * out = gguf_init_empty();
+    gguf_set_kv(out, in);
+    std::vector<const char *> names;
+    for (int64_t i = 0; i < gguf_get_n_tensors(in); i++) {
+        const char * name = gguf_get_tensor_name(in, i);
+        if (strstr(name, "_exps.weight")) {
+            names.push_back(name);
+        }
+        gguf_add_tensor(out, ggml_get_tensor(meta, name));
+    }
+    gguf_set_val_u32(out, "prism.hadamard.version", 1);
+    gguf_set_val_u32(out, "prism.hadamard.block_size", 64);
+    gguf_set_val_str(out, "prism.hadamard.transform", "normalized-sylvester-walsh-hadamard");
+    gguf_set_val_str(out, "prism.hadamard.axis", "input-last-dimension");
+    gguf_set_val_str(out, "prism.hadamard.sign_mode", "identity");
+    gguf_set_arr_str(out, "prism.hadamard.weight_names", names.data(), names.size());
+    const bool ok = !names.empty() && gguf_write_to_file(out, dst.c_str(), false);
+    gguf_free(out);
+    gguf_free(in);
+    ggml_free(meta);
+    return ok;
+}
+
 struct run_result {
     bool ok = false;
     int  abort_rc = 0;         // llama_decode result of the aborted first decode
@@ -140,9 +174,10 @@ static llama_model_params model_params(const char * profile, int32_t slots, plac
 }
 
 // a prompt of 12 tokens in one batch, then 4 single-token steps; logits for every token.
-// abort_first: an aborted decode of the prompt and a cleared memory come first
+// abort_first: an aborted decode of the prompt and a cleared memory come first;
+// moe_cache_size: the device MoE cache for the experts in host memory, 0 = none
 static run_result run_model(const std::string & path, const char * profile, int32_t slots, placement place = PLACE_CPU,
-                            bool async = false, bool abort_first = false) {
+                            bool async = false, bool abort_first = false, size_t moe_cache_size = 0) {
     run_result r;
     {
         std::lock_guard<std::mutex> lock(g_log_mutex);
@@ -160,6 +195,7 @@ static run_result run_model(const std::string & path, const char * profile, int3
     cp.n_threads       = 2;
     cp.n_threads_batch = 2;
     cp.sched_async_cpu = async;
+    cp.moe_cache_size  = moe_cache_size;
     llama_context * ctx = llama_init_from_model(model, cp);
     if (!ctx) {
         llama_model_free(model);
@@ -270,6 +306,22 @@ static bool async_counts(const std::string & log, unsigned long long & splits, u
         }
     }
     return found;
+}
+
+// the layers the MoE cache serves, summed over its groups ("N layers, TYPE: S slots")
+static int cache_layers(const std::string & log) {
+    static const char key[] = " layers, ";
+    int n = 0;
+    for (size_t at = log.find(key); at != std::string::npos; at = log.find(key, at + 1)) {
+        size_t b = at;
+        while (b > 0 && isdigit((unsigned char) log[b - 1])) {
+            b--;
+        }
+        if (b < at && log.find(" slots (", at) < log.find('\n', at)) {
+            n += atoi(log.c_str() + b);
+        }
+    }
+    return n;
 }
 
 static size_t bitwise_diff(const std::vector<float> & a, const std::vector<float> & b) {
@@ -446,6 +498,18 @@ int main(int argc, char ** argv) {
     expect_disabled("spec-router trace as a profile", base, run_model(f32, p_spec.c_str(), 2), "holds no routing");
     expect_disabled("sessions from two models", base, run_model(f32, p_two.c_str(), 2), "conflicts with 'llama'");
 
+    // a pack copy of a Hadamard-folded expert would get unrotated activations
+    {
+        const std::string hdm = work + "/hadamard.gguf";
+        CHECK(fold_expert_hadamard(f32, hdm), "cannot write %s", hdm.c_str());
+        const run_result hbase = run_model(hdm, nullptr, 0);
+        CHECK(hbase.ok, "Hadamard baseline run failed");
+        if (hbase.ok) {
+            CHECK(bitwise_diff(base.logits, hbase.logits) > 0, "the Hadamard metadata did not change the logits");
+            expect_disabled("Hadamard-folded experts", hbase, run_model(hdm, p_mixed.c_str(), 2), "Hadamard-folded experts");
+        }
+    }
+
     // the memory-fit pass must account for exactly the bytes a real load allocates
     {
         size_t dry_base = 0, dry_pack = 0, real_base = 0, real_pack = 0;
@@ -513,6 +577,20 @@ int main(int argc, char ** argv) {
         if (dqbase.ok) {
             expect_equivalent("device q4_0 mixed hot/cold, 2 slots", dqbase, run_model(q40, p_mixed.c_str(), 2, PLACE_DEVICE),
                     placed.c_str(), false, qbase.ok ? &qbase : nullptr);
+        }
+        // the MoE cache leaves a packed layer to its pack
+        const size_t cache_bytes = 64u << 20;
+        const run_result cbase = run_model(f32, nullptr, 0, PLACE_DEVICE, false, false, cache_bytes);
+        const int n_cached = cbase.ok ? cache_layers(cbase.log) : 0;
+        if (n_cached > 0) {
+            const std::string one = std::string("static expert packs on ") + ggml_backend_dev_name(gpu) + ": 1 layer(s), up to 1 slot(s)";
+            const run_result cpack = run_model(f32, p_layer1.c_str(), 1, PLACE_DEVICE, false, false, cache_bytes);
+            printf("    MoE cache: %d layer(s), %d beside a pack\n", n_cached, cache_layers(cpack.log));
+            expect_equivalent("device pack beside the MoE cache", cbase, cpack, one.c_str(), false, &base);
+            CHECK(cache_layers(cpack.log) == n_cached - 1, "the MoE cache serves %d layer(s) beside a pack, %d without",
+                    cache_layers(cpack.log), n_cached);
+        } else {
+            printf("skip: device pack beside the MoE cache (no MoE cache on %s)\n", ggml_backend_dev_name(gpu));
         }
     } else {
         printf("skip: device cases (no GPU device)\n");

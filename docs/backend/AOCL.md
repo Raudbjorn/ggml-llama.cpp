@@ -1,14 +1,14 @@
 # AMD AOCL-BLAS
 
 > [!NOTE]
-> The [ZenDNN backend](ZenDNN.md) is the recommended path for inference on AMD CPUs. Refer to its documentation for the currently supported operations and data types. This page covers AOCL-BLAS as a vendor option for the generic `GGML_BLAS` backend.
+> This fork supports AOCL-BLAS through the generic `GGML_BLAS` backend. The upstream ZenDNN backend is not shipped.
 
 AOCL-BLAS is AMD's BLAS library, optimized for AMD EPYC and Ryzen CPUs.
 llama.cpp can link against it through the existing BLAS backend (`GGML_BLAS`).
 
 The BLAS backend can use AOCL-BLAS for eligible large prompt GEMMs and generally does not participate in token generation.
 F32 weights are passed to `cblas_sgemm` directly. Other types are converted to F32 first, so a quantized model can be slower than the native CPU kernels.
-See [BLAS Build](../build.md#blas-build).
+See [BLAS Build](../build/build.md#blas-build).
 
 AOCL download / install: https://www.amd.com/en/developer/aocl.html
 

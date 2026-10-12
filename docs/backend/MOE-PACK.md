@@ -76,10 +76,15 @@ counts it under a reason (`-lv 4`):
   `ffn_up_exps` or a merged `ffn_gate_up_exps`;
 - no per-expert scales or biases, no SwiGLU clamp, and no pre-FFN weighting
   (Llama 4);
+- no expert tensor is Hadamard-folded (`prism.hadamard.weight_names`): the
+  graph rotates the input only for the source tensor, not for a pack copy;
 - the expert tensors are CPU-resident (host buffers, including the CPU repack
   buffer);
 - the layer itself runs on a GPU or iGPU device, which is where its pack goes;
 - the split mode is not `tensor`.
+
+The device MoE cache (`--moe-cache-mib`) skips a layer that has a pack; the
+other host-resident layers keep it.
 
 The graph then uses a pack only when `build_moe_ffn` receives exactly the
 pack's source tensors with `LLM_FFN_SILU` and no LoRA adapter on them.

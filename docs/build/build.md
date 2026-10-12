@@ -102,6 +102,8 @@ cmake --build build --config Release
 
 ### BLIS / AMD AOCL-BLAS
 
+For AOCL setup, CMake vendor selection and threading, see [AOCL.md](../backend/AOCL.md).
+
 `GGML_BLAS_VENDOR=FLAME` selects BLIS (headers found through the `blis` pkg-config module). `AOCL` and `AOCL_mt` (CMake 3.27+) select AMD AOCL-BLAS. All three build the BLIS code path of the BLAS backend (`ggml/src/ggml-blas/CMakeLists.txt`).
 
 ```bash

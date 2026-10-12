@@ -1,0 +1,26 @@
+{
+  "fork": "2f623c6607c078d1069dac23e9d8af9cb146e771",
+  "upstream": "5c8854fd88319125125dc4b836c98b1b215b0f23",
+  "last_snapshot_source": "7049ff0cbeb1f5ead231de4522af6b75d8d773c0",
+  "initial_first_parent_base": "b3d758750a268bf93f084ccfa3060fb9a203192a",
+  "first_divergent_first_parent_commit": "0b37448748d57191c99b7d43969f08c66cec5798",
+  "latest_merge_bases": [
+    "81bc6b83f827df746eb129235488d325c49cae52"
+  ],
+  "all_post_divergence_commits": 3528,
+  "master_first_parent_commits": 516,
+  "fork_only_commits": 1135,
+  "upstream_not_ancestors": 357,
+  "upstream_after_snapshot": 125,
+  "current_delta_paths": 11629,
+  "snapshot_delta_paths": 11290,
+  "first_parent_committer_months": {
+    "2026-04": 169,
+    "2026-05": 18,
+    "2026-06": 27,
+    "2026-07": 190,
+    "2026-08": 13,
+    "2026-09": 84,
+    "2026-10": 15
+  }
+}

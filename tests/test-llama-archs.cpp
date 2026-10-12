@@ -86,7 +86,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 // expert counts of the generated MoE fixtures (--n-expert / --n-expert-used)
-static uint32_t g_n_expert      = 2;
+static uint32_t g_n_expert      = 0; // 0: 2, or 64 where host_experts_test asks for it
 static uint32_t g_n_expert_used = 2;
 
 static void usage(char ** argv) {
@@ -96,7 +96,7 @@ static void usage(char ** argv) {
     LOG("  -s, --seed <seed>        Set the random seed for tensor initialization and token generation\n");
     LOG("  -d, --stdev <stdev>      Set the standard deviation of the tensor initialization distribution (default: 0.1f)\n");
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
-    LOG("  --n-expert <N>           Experts per MoE layer in the generated models (default: 2)\n");
+    LOG("  --n-expert <N>           Experts per MoE layer in the generated models (default: 2, 64 for deepseek2)\n");
     LOG("  --n-expert-used <N>      Experts routed per token in the generated models (default: 2)\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
@@ -117,6 +117,16 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
         ret.push_back(dis(gen));
     }
     return ret;
+}
+
+// MoE archs that are also tested with the experts in host memory
+static bool host_experts_test(const llm_arch arch) {
+    switch (arch) {
+        case LLM_ARCH_DEEPSEEK2:
+            return true;
+        default:
+            return false;
+    }
 }
 
 static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
@@ -190,6 +200,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
+
+    if (arch == LLM_ARCH_K2_HORIZON) {
+        ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, 128.0f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   4.0f);
+    }
 
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         std::vector<uint32_t> n_ff_per_layer;
@@ -428,13 +443,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);  // distinct from n_ff so a saver key-clobber surfaces on reload
         ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
-        ms.add_kv(LLM_KV_EXPERT_COUNT,               g_n_expert);
+        // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them;
+        // --n-expert sets the count explicitly
+        ms.add_kv(LLM_KV_EXPERT_COUNT,               g_n_expert ? g_n_expert : uint32_t(host_experts_test(arch) ? 64 : 2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          g_n_expert_used);
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
         ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,
                 arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DFLASH ? uint32_t(4) : uint32_t(2)); // sqrtsoftplus : sigmoid
         ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
+        if (arch == LLM_ARCH_K2_HORIZON) {
+            ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      uint32_t(2));
+            ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT, uint32_t(2));
+        }
     }
 
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
@@ -487,7 +508,8 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -495,6 +517,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     devs_copy.push_back(nullptr);
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
+    model_params.tensor_buft_overrides = tensor_buft_overrides;
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -502,6 +525,11 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     ctx_params.n_threads_batch = 4;
     if (!encode) {
         ctx_params.n_ubatch = 64;
+    }
+    if (moe_cache_size > 0) {
+        // the MoE cache is only used for small ubatches
+        ctx_params.moe_cache_size = moe_cache_size;
+        ctx_params.n_ubatch = 2;
     }
 
     tensor_data_params tensor_params = { seed, stdev };
@@ -708,6 +736,7 @@ static bool moe_implemented(const llm_arch arch) {
         case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_LLAMA_EMBED:
+        case LLM_ARCH_K2_HORIZON:
             return true;
         default:
             return false;
@@ -730,7 +759,7 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_GRANITE_SWITCH) {
         return false; // FIXME adapter fixture
     }
-    if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
+    if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_GEMMA_EMBEDDING2 || arch == LLM_ARCH_T5ENCODER) {
         return false; // FIXME Embedding (?) models produce inconsistent results.
     }
     if (arch == LLM_ARCH_RWKV6 || arch == LLM_ARCH_RWKV6QWEN2 || arch == LLM_ARCH_RWKV7 || arch == LLM_ARCH_ARWKV7) {
@@ -743,7 +772,7 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_PLM) {
         return false; // TODO tensor shapes
     }
-    if (arch == LLM_ARCH_CLEF) {
+    if (arch == LLM_ARCH_CLEF || arch == LLM_ARCH_VLLM_DECISION2) {
         return false; // TODO decision head tensors
     }
     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
@@ -844,9 +873,16 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         std::vector<ggml_backend_dev_t> devs;
         std::string                     label;
         llama_split_mode                split_mode;
+        bool                            host_experts; // keep the experts in host memory, see host_experts_test
+        size_t                          moe_cache_size;
 
-        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode)
-            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode) {}
+        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode, bool host_experts = false, size_t moe_cache_size = 0)
+            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode), host_experts(host_experts), moe_cache_size(moe_cache_size) {}
+    };
+
+    const llama_model_tensor_buft_override host_experts_overrides[] = {
+        { LLM_FFN_EXPS_REGEX, ggml_backend_cpu_buffer_type() },
+        { nullptr, nullptr },
     };
 
     std::vector<device_config> dev_configs;
@@ -872,6 +908,27 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
         if (target_backend == nullptr) {
             dev_configs.emplace_back(devices_meta, "Meta", LLAMA_SPLIT_MODE_TENSOR);
+        }
+
+        // the ops that use the experts are offloaded to the first device and the scheduler copies the used experts
+        if (!devices_meta.empty()) {
+            dev_configs.emplace_back(devices_meta, "Host experts", LLAMA_SPLIT_MODE_LAYER, true);
+            max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+        }
+
+        // the ops that use the host experts run on a GPU and read the experts from a cache
+        // the cache has only a few slots (4 for 288 KiB experts), so the experts are evicted and uploaded again
+        if (!devices_meta.empty()) {
+            const enum ggml_backend_dev_type type = ggml_backend_dev_type(devices_meta[0]);
+            if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                // each GPU caches the layers assigned to it
+                if (devices_meta.size() > 1) {
+                    dev_configs.emplace_back(devices_meta, "MoE cache, layer split", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024);
+                    max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                }
+            }
         }
     }
 
@@ -928,6 +985,11 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_cpu;
             std::vector<float> logits_cpu;
             for (device_config & dc : dev_configs) {
+                if (dc.host_experts && (!moe || !host_experts_test(arch))) {
+                    continue;
+                }
+                const llama_model_tensor_buft_override * overrides = dc.host_experts ? host_experts_overrides : nullptr;
+
                 // print test config first; should anything fail during model loading or inference, at least we know which test case caused it
                 LOG(template_row_cfg.c_str(), llm_arch_name(arch), dc.label.c_str(), config_name.c_str());
                 fflush(stdout);
@@ -950,7 +1012,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode);
+                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
@@ -1016,7 +1078,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         ms.save(file);
                         rewind(file);
 
-                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode);
+                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                         const std::vector<float> logits_roundtrip = get_logits(
                             model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
                         status_roundtrip = "\033[1;32mOK\033[0m";
@@ -1061,6 +1123,7 @@ int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
     common_init();
+    llama_backend_init();
 
     std::random_device rd;
 
@@ -1158,7 +1221,7 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: stdev must be > 0\n", __func__);
         return 1;
     }
-    if (g_n_expert_used > g_n_expert) {
+    if (g_n_expert_used > (g_n_expert ? g_n_expert : 2)) {
         LOG_ERR("%s: --n-expert-used must not exceed --n-expert\n", __func__);
         return 1;
     }
