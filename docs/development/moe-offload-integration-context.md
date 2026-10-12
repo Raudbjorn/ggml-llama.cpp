@@ -94,7 +94,7 @@ has a throughput measurement: llvmpipe and OpenVINO CPU run on the host CPU.
 | 1. Simulator | done | `5567504` `simulate.py`: per-(layer, expert) skew, expert count from the header, sessions never interleaved, held-out `static` policy, shared-pool `dynamic` model of `--moe-cache`, costs only with stated assumptions | `test-moe-trace-simulate` | calibrate the cost model on the A770 |
 | 2. Static packs | done, opt-in | `bf671e8`, `43c945a`, `e078fb2` ([guide](../backend/MOE-PACK.md)): per-layer device, `--fit` accounting, eligibility checks (a LoRA on the experts disables the pack), the `build_lora_mm_id` precision path, no source `op_params` flag, exclusive with `--moe-cache`, `llama-bench --moe-pack` | `test-moe-pack` (`010aaf9` fixtures): bit-exact on the CPU, NMSE 3e-8 on Vulkan | SYCL run; A/B against `--moe-cache` at equal VRAM |
 | 3. Packs on OpenVINO | done, opt-in | `a6c59d1` (`-1` in `MUL_MAT_ID`/`ADD_ID`), `a6529c2` and `3a4ebce` (view write-back), `43c945a` (host id maps) | `test-moe-pack`; on OpenVINO `test-backend-ops` `MUL_MAT_ID` 757/757, `ADD_ID` 72/72 | fusion and compile-time cost, GPU device |
-| 4. Decision engine | done | `7957865` [llama-schema-decision](../../tools/schema-decision/README.md): errors as values, overflow-free bounds, joint-text tokenization, hybrid padding bounded by `n_ubatch` | `test-schema-decision-vocab`, `test-schema-decision` (oracle within 4e-8), e2e on three real models | task accuracy and latency on real workloads |
+| 4. Decision engine | done | `7957865` [llama-schema-decision](../../tools/schema-decision/README.md): errors as values, overflow-free bounds, joint-text tokenization, hybrid padding bounded by `n_ubatch` | `test-schema-decision-vocab`, `test-schema-decision` (oracle within 4e-8) on CPU and Vulkan, e2e on three real models | task accuracy and latency on real workloads; OpenVINO cannot run it (multi-sequence batches fail, below) |
 | 4. `/v1/decision` | done, opt-in (`--decision-seqs`) | `81e2bcf`: engine reset before context destruction, cancellation, 400/503/500 mapping; `/v1/systemone` unchanged | `tools/server/tests/unit/test_schema_decision.py` (16 tests, sleep/wake included) | - |
 | 5. CPU tensor parallel | done, experimental | `3277180` `--cpu-tp`, `--cpu-tp-margin` ([guide](../backend/CPU-TP.md)): explicit membership, one split source, sizing over all split files | `test-arg-parser`; perplexity on Vulkan+CPU | SYCL has no `cpy_tensor_async`; latency and capacity on the A770 |
 | 6. Async CPU splits | done, default off | `4e992bd` `--sched-async-cpu` ([section](../backend/MOE-PACK.md#overlapping-the-cold-chain---sched-async-cpu-experimental)): job joined on every return, memory-root dependency checks, MoE cache scope on the worker, status propagation | `test-moe-pack`: logits bitwise equal with and without on CPU, Vulkan, OpenVINO; 8 of 8 pack splits overlapped on Vulkan; abort recovery | speed; SYCL in-order queue with `--moe-cache`; oversubscription with `--cpu-tp` |
@@ -118,8 +118,15 @@ Pre-existing failures seen on this host, unchanged by the branch (checked agains
   `master`).
 - On OpenVINO:
   - the random dense llama fixture fails a shape check (also on `master`);
+  - every batch with more than one sequence fails in shape inference
+    (`llama-batched-bench -npl 2`, also on `master`), so `test-schema-decision`
+    fails there;
+  - `test-recurrent-state-rollback-bailingmoe3` aborts in a Reshape (also on
+    `master`);
   - decoding after an aborted decode fails in ScatterUpdate, with or without the
     CPU worker.
+- With `LLAMA_BUILD_SERVER=OFF` the `llama` app does not link: `app/CMakeLists.txt`,
+  which this branch does not change, always links `llama-server-impl`.
 
 ## Code map
 
