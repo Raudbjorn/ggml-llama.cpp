@@ -932,14 +932,13 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
 
 namespace {
 
-// decimals that print x so that it reads back within 1e-9 relative; -1 if more than 9
+// decimals that print x so that it reads back as the same double; -1 if more than 9. A relative
+// tolerance would let 999999999999999.5 print as 1000000000000000.
 int decimal_places(double x) {
-    if (x == 0.0) {
-        return 0;
-    }
     for (int k = 0; k <= 9; ++k) {
-        const double scale = std::pow(10.0, k);
-        if (std::fabs(std::nearbyint(x * scale) / scale - x) <= 1e-9 * std::fabs(x)) {
+        char buf[64];
+        const int len = std::snprintf(buf, sizeof(buf), "%.*f", k, x);
+        if (len > 0 && len < (int) sizeof(buf) && std::strtod(buf, nullptr) == x) {
             return k;
         }
     }
@@ -1038,12 +1037,13 @@ outcome<field_spec> make_field(const std::string & name, const std::string & typ
             return bad("integer bounds must define 1-" + std::to_string(max_values) + " values");
         }
         const unsigned long long width = (unsigned long long) hi - (unsigned long long) lo;
-        f.type = "integer";
+        f.type        = "integer";
+        f.number_base = (double) lo;
         for (unsigned long long i = 0; i <= width; ++i) {
             const long long v = (long long) ((unsigned long long) lo + i);
             f.values.push_back(common_json(v));
             f.encoded.push_back(std::to_string(v));
-            f.numbers.push_back((double) v);
+            f.numbers.push_back((double) i); // a double holds a 64-bit value only up to 2^53
         }
     } else if (type == "number") {
         const char * step_key = json_schema ? "multipleOf" : "step";
@@ -1092,8 +1092,13 @@ outcome<field_spec> make_field(const std::string & name, const std::string & typ
             if (len <= 0 || len >= (int) sizeof(buf)) {
                 return bad("a grid value does not print in 63 characters");
             }
+            // the bounds print exactly at these decimals, so a grid value on a bound reads back
+            // as that bound
             const double back = std::strtod(buf, nullptr);
-            if (back < lo - 1e-9 * std::max(1.0, std::fabs(lo)) || back > hi + 1e-9 * std::max(1.0, std::fabs(hi))) {
+            if (back < lo || back > hi) {
+                if (json_schema && (i == 0 || i == n)) {
+                    continue; // a multiple just past a bound that is not itself a multiple
+                }
                 return bad(std::string("grid value ") + buf + " falls outside the bounds");
             }
             f.values.push_back(common_json(back));
@@ -1334,7 +1339,7 @@ outcome<common_json> assemble(const compiled_schema & cs, const result & r) {
                         idx = (int) k;
                     }
                 }
-                f["mean"] = mean;
+                f["mean"] = sp.number_base + mean; // a statistic: rounds to a double
             }
             common_json interval = common_json::array();
             interval.push_back(sp.values[quantile(0.1)]);

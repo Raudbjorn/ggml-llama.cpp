@@ -120,6 +120,10 @@ static void test_schema() {
     expect_schema_error("zero step", R"({"x": {"type": "number", "minimum": 0, "maximum": 1, "step": 0, "description": "d"}})", "positive");
     expect_schema_error("too fine step", R"({"x": {"type": "number", "minimum": 0, "maximum": 1e-9, "step": 1e-11, "description": "d"}})", "9 decimals");
     expect_schema_error("huge bound", R"({"x": {"type": "number", "minimum": 0, "maximum": 1e300, "step": 1e299, "description": "d"}})", "1e15");
+    CHECK(join(encoded(R"({"x": {"type": "number", "minimum": 999999999999999.5, "maximum": 999999999999999.5, "step": 1, "description": "d"}})")) ==
+          "999999999999999.5", "decimals kept near 1e15");
+    CHECK(join(encoded(R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 0.30000000001, "maximum": 0.5, "multipleOf": 0.1}}})")) ==
+          "0.4,0.5", "a multiple just below minimum is left out");
     expect_schema_error("no multiple in bounds", R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 0.1, "maximum": 0.15, "multipleOf": 0.2}}})", "multiples");
 
     // enums
@@ -195,6 +199,24 @@ static void test_schema() {
         cs.value.specs[0].aggregate = "mode";
         a = assemble(cs.value, r);
         CHECK(a.ok() && a.value.at("decision").at("x").get<long long>() == 1, "mode keeps the winner");
+    }
+    // 64-bit integers past 2^53 stay distinct: the mean and the median select the middle value
+    for (const char * agg : { "mean", "median" }) {
+        auto cs = compile_text(std::string(R"({"x": {"type": "integer", "minimum": 9007199254740992, "maximum": 9007199254740994, "aggregate": ")") +
+                               agg + R"(", "description": "d"}})");
+        CHECK(cs.ok(), "large integer %s schema: %s", agg, cs.error.c_str());
+        if (!cs.ok()) {
+            continue;
+        }
+        result r;
+        field_result fr;
+        fr.winner = 0;
+        fr.tree   = true;
+        fr.probs  = { 0.0f, 1.0f, 0.0f };
+        r.fields  = { fr };
+        const auto a = assemble(cs.value, r);
+        CHECK(a.ok() && a.value.at("decision").at("x").get<long long>() == 9007199254740993LL, "large integer %s: %s", agg,
+              a.ok() ? a.value.at("decision").dump().c_str() : a.error.c_str());
     }
     if (g_failures == failures_at_start) {
         printf("ok: schema compiler and request parser\n");

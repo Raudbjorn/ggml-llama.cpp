@@ -198,7 +198,8 @@ struct field_spec {
     std::string              description;
     std::string              aggregate; // mode | median | mean (median/mean: numeric fields)
     std::vector<common_json> values;    // typed values; index = candidate index
-    std::vector<double>      numbers;   // numeric fields: the same values as doubles
+    std::vector<double>      numbers;   // numeric fields: value - number_base as doubles
+    double                   number_base = 0; // integer fields: minimum, so 64-bit values stay exact offsets
     std::vector<std::string> encoded;   // JSON text of each value
 };
 
