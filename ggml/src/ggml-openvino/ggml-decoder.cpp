@@ -1348,32 +1348,49 @@ void GgmlOvDecoder::compute_model_inputs() {
 void GgmlOvDecoder::compute_model_outputs() {
     m_model_outputs.clear();
     m_model_output_names.clear();
+    const auto uses_in_graph = [this](const ggml_tensor * t) {
+        int n = 0;
+        for (int i = 0; i < m_cgraph->n_nodes; i++) {
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                n += m_cgraph->nodes[i]->src[j] == t;
+            }
+        }
+        return n;
+    };
+    const auto use_count = [this](const ggml_tensor * t) {
+        return m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, t)];
+    };
     for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
         auto * cur_node = m_cgraph->nodes[node_n];
         // if the node op is NONE means this node is not used at all, we can skip it directly without adding to model outputs.
-        if (cur_node->op == GGML_OP_NONE || cur_node->op == GGML_OP_VIEW || cur_node->op == GGML_OP_RESHAPE) {
+        if (cur_node->op == GGML_OP_NONE) {
+            continue;
+        }
+        if (cur_node->op == GGML_OP_VIEW || cur_node->op == GGML_OP_RESHAPE) {
+            // A scheduler split is a view of the whole graph, so a view consumed by a later split
+            // reads its source's memory: write the source back when it is computed here.
+            ggml_tensor * src = cur_node->view_src;
+            if (src == nullptr || use_count(cur_node) == uses_in_graph(cur_node) || src->op == GGML_OP_NONE ||
+                src->op == GGML_OP_VIEW || src->op == GGML_OP_RESHAPE ||
+                std::find(m_cgraph->nodes, m_cgraph->nodes + m_cgraph->n_nodes, src) == m_cgraph->nodes + m_cgraph->n_nodes) {
+                continue;
+            }
+            std::string src_name = get_tensor_ov_name(m_cgraph, src);
+            m_model_outputs[src_name] = src;
+            m_model_output_names.insert(src_name);
             continue;
         }
         if (::is_inplace_op(cur_node) && ggml_nbytes(cur_node) == 0) {
             continue;
         }
-        auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
+        auto cur_node_use_count = use_count(cur_node);
         if (cur_node_use_count == 0) {
             // The output of in-place ops is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
             if (cur_node != nullptr && ::is_inplace_op(cur_node) && ggml_nbytes(cur_node) > 0) {
                 cur_node = cur_node->view_src;
             }
         } else {
-            int input_use_count = 0;
-            for (int i = 0; i < m_cgraph->n_nodes; i++) {
-                ggml_tensor * node = m_cgraph->nodes[i];
-                for (int j = 0; j < GGML_MAX_SRC; j++) {
-                    if (node->src[j] != NULL && node->src[j] == cur_node) {
-                        input_use_count++;
-                    }
-                }
-            }
-            if (input_use_count == cur_node_use_count) {
+            if (uses_in_graph(cur_node) == cur_node_use_count) {
                 cur_node = nullptr;
             }
         }
