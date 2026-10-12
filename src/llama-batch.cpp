@@ -134,7 +134,11 @@ bool llama_batch_allocr::init(
     }
 
     if (has_state) {
-        state_vec = batch_inp.state;
+        state_vec.resize((size_t) n_tok*n_embd_state);
+        for (int32_t i = 0; i < n_tok; ++i) {
+            const float * src = batch_inp.state.data() + batch_inp.tokens[i].state_off;
+            std::copy(src, src + n_embd_state, state_vec.data() + (size_t) i*n_embd_state);
+        }
     }
 
     //
@@ -1169,11 +1173,12 @@ llama_batch_ext::llama_batch_ext(
         llama_seq_id n_seq_max,
         llama_memory_i * mem,
         llama_token n_vocab,
-        size_t n_pos_per_embd) :
+        size_t n_pos_per_embd,
+        size_t n_embd_state) :
         n_tokens_max(n_tokens_max),
         n_embd_inp(n_embd_inp),
         n_embd_inp_enc(n_embd_inp_enc),
-        n_embd_state(0),
+        n_embd_state(n_embd_state),
         n_seq_max(n_seq_max),
         mem(mem),
         n_vocab(n_vocab),
@@ -1396,6 +1401,17 @@ bool llama_batch_ext_remove_last(llama_batch_ext * batch) {
         }
         if (batch->embd.empty()) {
             batch->n_embd = 0;
+        }
+    }
+    if (t.has_state) {
+        const size_t off = t.state_off;
+        const size_t len = batch->n_embd_state;
+        batch->state.erase(batch->state.begin() + off, batch->state.begin() + off + len);
+        for (size_t i = 0; i + 1 < batch->tokens.size(); ++i) {
+            auto & other = batch->tokens[i];
+            if (other.has_state && other.state_off > off) {
+                other.state_off -= len;
+            }
         }
     }
     batch->tokens.pop_back();

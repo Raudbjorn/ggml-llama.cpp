@@ -8,6 +8,7 @@ import {
 	modelContextLength,
 	splitHiddenQuants
 } from '$lib/components/app/models/ModelsManager/utils';
+import { modelRowActions } from '$lib/components/app/models/ModelsManager/row-actions';
 import { LOCAL_BACKEND_ID } from '$lib/constants';
 import { ModelGroupKind, ServerModelStatus } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models/index.svelte';
@@ -124,6 +125,19 @@ describe('modelsStore.isModelRunning', () => {
 		expect(modelsStore.isModelRunning('org/loading')).toBe(false);
 		expect(modelsStore.isModelRunning('org/failed')).toBe(false);
 		expect(modelsStore.isModelRunning('org/unknown')).toBe(false);
+	});
+});
+
+describe('modelRowActions', () => {
+	it('omits deletion when the server marks a model non-removable', () => {
+		const actions = modelRowActions(
+			{ ...option('org/Qwen3-8B:Q4_K_M'), canRemove: false },
+			false,
+			false,
+			() => {}
+		);
+
+		expect(actions.map((action) => action.label)).not.toContain('Delete from disk');
 	});
 });
 

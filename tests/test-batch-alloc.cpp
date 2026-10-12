@@ -62,9 +62,10 @@ struct batch_builder {
             llama_seq_id n_seq_max = 4,
             uint32_t n_pos_per_embd = 1,
             llama_token n_vocab = 0,
-            uint32_t n_embd_inp_enc = 0)
+            uint32_t n_embd_inp_enc = 0,
+            uint32_t n_embd_state = 0)
         : n_embd(n_embd),
-          b(/*n_tokens_max*/ 64, n_embd, n_embd_inp_enc > 0 ? n_embd_inp_enc : n_embd, n_seq_max, mem, n_vocab, n_pos_per_embd) {}
+          b(/*n_tokens_max*/ 64, n_embd, n_embd_inp_enc > 0 ? n_embd_inp_enc : n_embd, n_seq_max, mem, n_vocab, n_pos_per_embd, n_embd_state) {}
 
     // one embedding row for batch index i, values 100*i + k so ubatch contents can be traced back
     std::vector<float> row(int32_t i, uint32_t width) const {
@@ -1217,6 +1218,31 @@ static void test_remove_last(testing & t) {
         t.assert_true("remove entry 1", llama_batch_ext_remove_last(&bb.b));
         t.assert_equal("one row left", (size_t) 2, bb.b.embd.size());
         t.assert_equal("entry 0 value 0", bb.row(0, 2)[0], bb.b.embd[bb.b.tokens[0].embd_off]);
+    });
+
+    t.test("out_of_order_state", [&](testing & t) {
+        llama_vocab vocab;
+        batch_builder bb(2, nullptr, 4, 1, /*n_vocab*/ 10, 0, /*n_embd_state*/ 2);
+        auto & b = bb.b;
+
+        const int32_t i0 = bb.add_tok(1, 0, 0, false);
+        const int32_t i1 = bb.add_tok(2, 1, 0, true);
+        const auto r0 = bb.row(i0, 2);
+        const auto r1 = bb.row(i1, 2);
+        t.assert_true("set entry 1 first", b.set_token_state(i1, { r1.data(), 1, 2 }));
+        t.assert_true("set entry 0 second", b.set_token_state(i0, { r0.data(), 1, 2 }));
+
+        llama_batch_allocr ba(1);
+        t.assert_true("initialize", ba.init(b, vocab, false));
+        llama_ubatch ub = ba.split_simple(2);
+        t.assert_equal("entry 0 state", r0[0], ub.embd_state[0]);
+        t.assert_equal("entry 1 state", r1[0], ub.embd_state[2]);
+
+        t.assert_true("remove entry 1", llama_batch_ext_remove_last(&b));
+        t.assert_equal("one state row left", (size_t) 2, b.state.size());
+        t.assert_equal("entry 0 state moved to the front", (size_t) 0, b.tokens[0].state_off);
+        t.assert_equal("entry 0 state value 0", r0[0], b.state[b.tokens[0].state_off + 0]);
+        t.assert_equal("entry 0 state value 1", r0[1], b.state[b.tokens[0].state_off + 1]);
     });
 }
 

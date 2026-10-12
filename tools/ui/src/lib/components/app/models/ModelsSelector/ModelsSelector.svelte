@@ -100,6 +100,7 @@
 	let visualOrder = $derived.by(() => {
 		const order: string[] = [];
 
+		for (const item of ms.loadedItems) order.push(item.option.id);
 		for (const item of ms.favoriteItems) order.push(item.option.id);
 		for (const group of ms.groupedFilteredOptions.available) {
 			for (const item of group.items) order.push(item.option.id);

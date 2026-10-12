@@ -44,13 +44,17 @@ export function modelRowActions(
 			label: favorite ? 'Remove from favorites' : 'Add to favorites',
 			onclick: () => modelsStore.toggleFavorite(option.model)
 		},
-		{
-			icon: Trash2,
-			label: 'Delete from disk',
-			onclick: () => onDelete(option),
-			separator: true,
-			variant: 'destructive' as const
-		},
+		...(option.canRemove === false
+			? []
+			: [
+					{
+						icon: Trash2,
+						label: 'Delete from disk',
+						onclick: () => onDelete(option),
+						separator: true,
+						variant: 'destructive' as const
+					}
+				]),
 		{
 			icon: isHidden ? Eye : EyeOff,
 			label: isHidden ? 'Unhide model' : 'Hide model',

@@ -51,7 +51,10 @@ function mergedDraftSidecars(
 	const merged = [...fromListing];
 
 	for (const badge of fromArgs) {
-		if (!merged.some((b) => b.kind === badge.kind && b.repo === badge.repo)) merged.push(badge);
+		if (
+			!merged.some((b) => b.kind === badge.kind && b.quant === badge.quant && b.repo === badge.repo)
+		)
+			merged.push(badge);
 	}
 
 	return merged;
@@ -594,7 +597,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			const kinds = draftSidecarsByRepo.get(repo);
 
 			if (kinds) {
-				if (!kinds.some((b) => b.kind === badge.kind && b.repo === badge.repo)) {
+				if (
+					!kinds.some(
+						(b) => b.kind === badge.kind && b.quant === badge.quant && b.repo === badge.repo
+					)
+				) {
 					kinds.push(badge);
 				}
 			} else {
@@ -619,6 +626,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 					return {
 						aliases: item.aliases ?? [],
+						canRemove: item.can_remove ?? true,
 						capabilities: rawCapabilities.filter((value: unknown): value is string =>
 							Boolean(value)
 						),

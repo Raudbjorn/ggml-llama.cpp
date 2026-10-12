@@ -18,6 +18,8 @@ export interface ModelOption {
 	model: string;
 	description?: string;
 	capabilities: string[];
+	/** Whether the server permits deleting the model from disk. */
+	canRemove?: boolean;
 	/** Context size reported by the provider's model listing, when it reports one. */
 	contextLength?: number;
 	/** Draft sidecars downloaded alongside the model, e.g. `mtp` or `dflash`. */
