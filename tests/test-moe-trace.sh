@@ -134,6 +134,16 @@ fi
 grep -q "no 'ffn_moe_topk-\*' tensors were observed" "$work_dir/dense.log" || fail "dense model: missing diagnostic"
 printf 'ok: dense model rejected\n'
 
+# the header records the context's sizes: -c 0 takes the model's, n_batch and n_ubatch are capped
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 0 -b 4096 -ub 4096 -o "$work_dir/ctx.csv" \
+    > "$work_dir/ctx.log" 2>&1 || fail "trace with -c 0 failed: $(tail -n 2 "$work_dir/ctx.log")"
+sizes=$(sed -n 's/^# n_prompt=[0-9]* n_predict=[0-9]* n_ctx=\([0-9]*\) n_batch=\([0-9]*\) n_ubatch=\([0-9]*\)$/\1 \2 \3/p' \
+    "$work_dir/ctx.csv")
+read -r h_ctx h_batch h_ubatch <<< "$sizes"
+{ [ -n "$h_ctx" ] && [ "$h_ctx" -gt 0 ] && [ "$h_batch" -le "$h_ctx" ] && [ "$h_ubatch" -le "$h_batch" ]; } \
+    || fail "header sizes '$sizes' are not the context's"
+printf 'ok: header records the context sizes (%s)\n' "$sizes"
+
 if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 2 -c 64 \
         -o "$work_dir/no-such-dir/x.csv" > "$work_dir/badpath.log" 2>&1; then
     fail "an unwritable output path must fail"

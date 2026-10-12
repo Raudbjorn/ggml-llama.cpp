@@ -240,7 +240,7 @@ static std::string meta_str(const llama_model * model, const std::string & key) 
     return n < 0 ? std::string() : std::string(buf);
 }
 
-static bool write_header(FILE * out, const llama_model * model, const common_params & params,
+static bool write_header(FILE * out, const llama_model * model, const llama_context * lctx, const common_params & params,
                          uint32_t seed, size_t n_prompt, uint64_t session, const char * kind) {
     char desc[256] = {};
     llama_model_desc(model, desc, sizeof(desc));
@@ -266,8 +266,9 @@ static bool write_header(FILE * out, const llama_model * model, const common_par
     if (!n_used.empty()) {
         failed |= fprintf(out, "# n_expert_used=%s\n", n_used.c_str()) < 0;
     }
-    failed |= fprintf(out, "# n_prompt=%zu n_predict=%d n_ctx=%d n_batch=%d n_ubatch=%d\n",
-                  n_prompt, params.n_predict, params.n_ctx, params.n_batch, params.n_ubatch) < 0;
+    // the context's sizes, not the requested ones: -c 0 takes the model's, and n_batch/n_ubatch are capped
+    failed |= fprintf(out, "# n_prompt=%zu n_predict=%d n_ctx=%u n_batch=%u n_ubatch=%u\n", n_prompt, params.n_predict,
+                      llama_n_ctx(lctx), llama_n_batch(lctx), llama_n_ubatch(lctx)) < 0;
     failed |= fprintf(out, "# sampling seed=%u temp=%.4f top_k=%d top_p=%.4f min_p=%.4f\n",
                   seed, s.temp, s.top_k, s.top_p, s.min_p) < 0;
     failed |= fprintf(out, "pos,layer,ids...\n") < 0;
@@ -466,7 +467,7 @@ static int run_trace(common_params & params, trace_state & ts) {
         LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, params.out_file.c_str(), strerror(errno));
         return 1;
     }
-    if (!write_header(ts.out, model, params, seed, tokens.size(), session, nullptr)) {
+    if (!write_header(ts.out, model, lctx, params, seed, tokens.size(), session, nullptr)) {
         ts.write_failed = true;
     }
     if (params.moe_spec_router_k > 0) {
@@ -477,7 +478,7 @@ static int run_trace(common_params & params, trace_state & ts) {
             return 1;
         }
         const std::string kind = "kind=spec-router k=" + std::to_string(params.moe_spec_router_k);
-        if (!write_header(ts.spec_out, model, params, seed, tokens.size(), session, kind.c_str())) {
+        if (!write_header(ts.spec_out, model, lctx, params, seed, tokens.size(), session, kind.c_str())) {
             ts.write_failed = true;
         }
     }

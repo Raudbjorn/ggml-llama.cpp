@@ -20,7 +20,8 @@ tools/moe-trace/simulate.py eval.csv --profile work.csv --budgets 0.125,0.25
 
 Lines starting with `#` carry provenance: tool version, a per-run `session`
 id, model path/description/size, architecture, `n_layer`, `n_expert`,
-`n_expert_used`, prompt and batch sizes, and the sampling seed and settings.
+`n_expert_used`, prompt length and the context's `n_ctx`, `n_batch` and `n_ubatch`
+(as the context resolved them, not as requested), and the sampling seed and settings.
 Then a header row and one row per (token, layer):
 
 ```
