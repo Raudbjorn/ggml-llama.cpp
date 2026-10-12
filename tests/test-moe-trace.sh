@@ -126,6 +126,40 @@ for arch in qwen3moe qwen35moe; do
     printf 'ok: %s diagnostics (%s spec rows in layer 0)\n' "$arch" "$n_spec0"
 done
 
+# a LoRA adapter on the router wraps its matmul: --hidden-out must stop instead of dropping router_input
+if [ -n "$python_bin" ] && "$python_bin" -c 'import numpy' > /dev/null 2>&1; then
+    "$python_bin" - "$(dirname "$0")/../gguf-py" "$work_dir/qwen3moe-moe.gguf" "$work_dir/router-lora.gguf" <<'PY' \
+        || fail "could not write the router LoRA fixture"
+import sys
+sys.path.insert(0, sys.argv[1])
+import numpy as np
+import gguf
+model = gguf.GGUFReader(sys.argv[2])
+gate = next(t for t in model.tensors if t.name == "blk.0.ffn_gate_inp.weight")
+n_embd, n_expert = int(gate.shape[0]), int(gate.shape[1])
+w = gguf.GGUFWriter(sys.argv[3], "qwen3moe")
+w.add_string("general.type", "adapter")
+w.add_string("adapter.type", "lora")
+w.add_float32("adapter.lora.alpha", 1.0)
+w.add_tensor("blk.0.ffn_gate_inp.weight.lora_a", np.full((2, n_embd), 0.01, dtype=np.float32))
+w.add_tensor("blk.0.ffn_gate_inp.weight.lora_b", np.full((n_expert, 2), 0.01, dtype=np.float32))
+w.write_header_to_file()
+w.write_kv_data_to_file()
+w.write_tensors_to_file()
+w.close()
+PY
+    "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" --lora "$work_dir/router-lora.gguf" -p "hello" -n 2 -c 64 \
+        -o "$work_dir/lora.csv" > "$work_dir/lora.log" 2>&1 || fail "trace with a router LoRA failed: $(tail -n 2 "$work_dir/lora.log")"
+    if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" --lora "$work_dir/router-lora.gguf" -p "hello" -n 2 -c 64 \
+            -o "$work_dir/lora.csv" --hidden-out "$work_dir/lora.hid" > "$work_dir/lora-hid.log" 2>&1; then
+        fail "--hidden-out with a LoRA on the router must fail"
+    fi
+    grep -q "cannot record the router input of layer 0" "$work_dir/lora-hid.log" || fail "router LoRA: missing diagnostic"
+    printf 'ok: --hidden-out with a router LoRA rejected\n'
+else
+    printf 'skip: router LoRA (no numpy)\n'
+fi
+
 # on the CPU: the random dense fixture fails a shape check in OpenVINO (also on master)
 if "$trace_bin" -m "$work_dir/llama-dense.gguf" -p "hello world" -n 2 -c 64 -dev none \
         -o "$work_dir/dense.csv" > "$work_dir/dense.log" 2>&1; then

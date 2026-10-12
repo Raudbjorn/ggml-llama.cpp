@@ -72,6 +72,7 @@ struct trace_state {
     FILE *   hid_out     = nullptr;
     int32_t  hid_n       = 0;
     uint64_t hid_records = 0;
+    int      router_wrapped = -1; // a layer whose router is not a plain matmul (a LoRA adapter wraps it)
 
     std::vector<int32_t> buf;
     std::vector<float>   fbuf;
@@ -183,7 +184,7 @@ static void write_ids(trace_state * ts, const ggml_tensor * t, int layer, FILE *
 
 static void write_hidden(trace_state * ts, const ggml_tensor * t, hidden_tag tag, int layer) {
     if (tag == HID_ROUTER_IN) {
-        t = t->op == GGML_OP_MUL_MAT ? t->src[1] : nullptr; // a LoRA router hides its input
+        t = t->op == GGML_OP_MUL_MAT ? t->src[1] : nullptr; // a wrapped router stops the run (trace_cb)
     }
     if (t == nullptr || t->type != GGML_TYPE_F32 || t->nb[0] != sizeof(float) || t->ne[2] != 1 || t->ne[3] != 1) {
         return;
@@ -214,6 +215,14 @@ static bool trace_cb(struct ggml_tensor * t, bool ask, void * user_data) {
     const bool hidden_now = ts->hid_out && !ts->prefill && ts->decode_step < ts->hid_n;
     const int  layer_hid  = hidden_now ? hidden_tap(t->name, tag) : -1;
     if (ask) {
+        // build_lora_mm() adds an adapter's product to the router matmul. The router input is then
+        // no source of this tensor, and its buffer may be reused by the time the sum is computed, so
+        // the run stops instead of dropping or misreading the record (seen on the prompt already)
+        hidden_tag tag_any = HID_LAYER_OUT;
+        const int  layer_any = ts->hid_out && t->op != GGML_OP_MUL_MAT ? hidden_tap(t->name, tag_any) : -1;
+        if (layer_any >= 0 && tag_any == HID_ROUTER_IN && ts->router_wrapped < 0) {
+            ts->router_wrapped = layer_any;
+        }
         return layer_topk >= 0 || layer_spec >= 0 || layer_hid >= 0;
     }
     if (ts->write_failed) {
@@ -505,7 +514,7 @@ static int run_trace(common_params & params, trace_state & ts) {
     bool decode_ok = true;
 
     ts.prefill = true;
-    for (size_t i = 0; i < tokens.size() && decode_ok && !ts.write_failed; i += n_chunk) {
+    for (size_t i = 0; i < tokens.size() && decode_ok && !ts.write_failed && ts.router_wrapped < 0; i += n_chunk) {
         const int32_t n_eval = (int32_t) std::min<size_t>(tokens.size() - i, n_chunk);
         ts.batch_start = (int64_t) i;
         ts.n_eval      = n_eval;
@@ -524,7 +533,7 @@ static int run_trace(common_params & params, trace_state & ts) {
     ts.prefill = false;
     ts.n_eval  = 1;
     int n_decoded = 0;
-    for (int i = 0; i < params.n_predict && decode_ok && !ts.write_failed; i++) {
+    for (int i = 0; i < params.n_predict && decode_ok && !ts.write_failed && ts.router_wrapped < 0; i++) {
         llama_token tok = common_sampler_sample(smpl.get(), lctx, -1);
         common_sampler_accept(smpl.get(), tok, true);
         if (llama_vocab_is_eog(vocab, tok)) {
@@ -543,6 +552,13 @@ static int run_trace(common_params & params, trace_state & ts) {
     const bool out_ok  = close_file(ts.out);
     const bool spec_ok = close_file(ts.spec_out);
     const bool hid_ok  = close_file(ts.hid_out);
+
+    if (ts.router_wrapped >= 0) {
+        LOG_ERR("%s: --hidden-out cannot record the router input of layer %d: its router is not a plain matmul "
+                "(a LoRA adapter on ffn_gate_inp?); run without the adapter or without --hidden-out\n",
+                __func__, ts.router_wrapped);
+        return 1;
+    }
 
     if (ts.rows_unmapped > 0) {
         LOG_WRN("%s: %" PRIu64 " rows had more tokens than the decode call and were skipped\n", __func__, ts.rows_unmapped);

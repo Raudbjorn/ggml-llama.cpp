@@ -78,6 +78,10 @@ default 64), three float32 vectors per layer and step:
 | 1 | `residual_after_attention` | `ffn_inp-<il>` or `attn_residual-<il>` |
 | 2 | `router_input` | the input of the router matmul `ffn_moe_logits-<il>` |
 
+A LoRA adapter on a router (`ffn_gate_inp`) wraps that matmul, so its input cannot
+be recorded; such a run stops with an error after the prompt instead of writing an
+incomplete file.
+
 The file starts with text lines: `llama-moe-trace hidden v1`, then `key=value`
 lines (session, `byte_order=little`, model path, description and size, arch,
 `n_layer`, `n_embd`, `max_decode` (the requested `--hidden-n`; generation can end
