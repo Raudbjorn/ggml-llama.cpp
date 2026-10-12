@@ -463,6 +463,7 @@ struct server_slot {
     std::string  debug_generated_text;
     llama_tokens generated_tokens;
     size_t n_sent_text = 0; // number of sent text character (i.e. handle partial UTF-8 on streaming)
+    size_t n_sent_tokens = 0;
 
     std::vector<completion_token_output> generated_token_probs;
 
@@ -583,6 +584,7 @@ struct server_slot {
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
+        n_sent_tokens  = 0;
 
         if (can_speculate()) {
             spec_draft.clear();
@@ -802,7 +804,7 @@ struct server_slot {
         }
     }
 
-    size_t find_stopping_strings(const std::string & text, const size_t last_token_size, bool is_full_stop) {
+    size_t find_stopping_strings(const std::string & text, bool is_full_stop) {
         GGML_ASSERT(task);
 
         size_t stop_pos = std::string::npos;
@@ -811,10 +813,8 @@ struct server_slot {
             size_t pos;
 
             if (is_full_stop) {
-                const size_t tmp      = word.size() + last_token_size;
-                const size_t from_pos = text.size() > tmp ? text.size() - tmp : 0;
-
-                pos = text.find(word, from_pos);
+                // UTF-8 repair can expand the unsent suffix beyond the latest token's bytes.
+                pos = text.find(word);
             } else {
                 // otherwise, partial stop
                 pos = string_find_partial_stop(text, word);
@@ -2211,16 +2211,18 @@ private:
     bool process_token(completion_token_output & result, server_slot & slot) {
         // remember which tokens were sampled - used for repetition penalties during sampling
         const std::string token_str = result.text_to_send;
+        const size_t first_unsent = slot.n_sent_text;
         slot.sampled = result.tok;
 
         slot.generated.append(token_str, result.tok);
-        if (slot.task->params.return_tokens) {
+        slot.add_token(result);
+        if (slot.task->params.return_tokens || slot.task->params.stream) {
             slot.generated_tokens.push_back(result.tok);
         }
         slot.has_next_token = true;
 
         // check if there is incomplete UTF-8 character at the end
-        bool incomplete = validate_utf8(slot.generated.text) < slot.generated.text.size();
+        bool incomplete = !repair_generated_utf8(slot.generated, slot.n_sent_text);
 
         // search stop word and delete it
         if (!incomplete) {
@@ -2229,12 +2231,12 @@ private:
             const std::string str_test = slot.generated.text.substr(pos);
             bool send_text = true;
 
-            size_t stop_pos = slot.find_stopping_strings(str_test, token_str.size(), true);
+            size_t stop_pos = slot.find_stopping_strings(str_test, true);
             if (stop_pos != std::string::npos) {
                 slot.generated.truncate(pos + stop_pos);
                 pos = std::min(slot.n_sent_text, slot.generated.text.size());
             } else if (slot.has_next_token && !llama_vocab_is_eog(vocab, result.tok) ) {
-                stop_pos = slot.find_stopping_strings(str_test, token_str.size(), false);
+                stop_pos = slot.find_stopping_strings(str_test, false);
                 send_text = stop_pos == std::string::npos;
             }
 
@@ -2242,15 +2244,10 @@ private:
             if (send_text) {
                 // no send the stop word in the response
                 result.text_to_send = slot.generated.text.substr(pos, std::string::npos);
-                slot.n_sent_text += result.text_to_send.size();
+                slot.n_sent_text = pos + result.text_to_send.size();
                 // add the token to slot queue and cache
             } else {
                 result.text_to_send = "";
-            }
-
-            slot.add_token(result);
-            if (slot.task->params.stream) {
-                send_partial_response(slot, result, false);
             }
         }
 
@@ -2330,6 +2327,29 @@ private:
             slot.has_next_token = false;
 
             SLT_DBG(slot, "%s", "stopped by EOS\n");
+        }
+
+        if (slot.n_sent_text > slot.generated.size()) {
+            // Indentation can remove text already selected for this chunk, or even an earlier chunk.
+            result.text_to_send = slot.generated.text.substr(std::min(first_unsent, slot.generated.size()));
+            slot.n_sent_text = slot.generated.size();
+        }
+
+        if (!slot.has_next_token && (incomplete || slot.n_sent_text < slot.generated.size())) {
+            repair_generated_utf8(slot.generated, slot.n_sent_text, true);
+            const size_t pos = std::min(slot.n_sent_text, slot.generated.size());
+            const size_t stop_pos = slot.find_stopping_strings(slot.generated.text.substr(pos), true);
+            if (stop_pos != std::string::npos) {
+                slot.generated.truncate(pos + stop_pos);
+            }
+            result.text_to_send = slot.generated.text.substr(pos);
+            slot.n_sent_text = slot.generated.size();
+        }
+
+        if (!incomplete || !slot.has_next_token) {
+            if (slot.task->params.stream) {
+                send_partial_response(slot, result, false);
+            }
         }
 
         SLT_DBG(slot, "n_gen = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());
@@ -2434,9 +2454,13 @@ private:
         }
         if (is_begin) {
             res->is_begin = true;
-        } else {
+        } else if (!is_progress) {
             res->content = slot.generated.substr(slot.n_sent_text - tkn.text_to_send.size(), tkn.text_to_send.size());
-            res->tokens.assign(1, tkn.tok);
+            res->tokens.assign(slot.generated_tokens.begin() + slot.n_sent_tokens, slot.generated_tokens.end());
+            if (slot.task->params.sampling.n_probs > 0) {
+                res->probs_output.assign(slot.generated_token_probs.begin() + slot.n_sent_tokens, slot.generated_token_probs.end());
+            }
+            slot.n_sent_tokens = slot.generated_tokens.size();
         }
 
         res->n_decoded             = slot.stats.n_gen;
@@ -2448,11 +2472,6 @@ private:
         res->res_type          = slot.task->params.res_type;
         res->oaicompat_model   = slot.task->params.oaicompat_model;
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
-
-        // populate res.probs_output
-        if (slot.task->params.sampling.n_probs > 0) {
-            res->prob_output = tkn; // copy the token probs
-        }
 
         // populate timings if this is final response or timings_per_token is enabled
         if (slot.stop != STOP_TYPE_NONE || slot.task->params.timings_per_token) {

@@ -16,9 +16,20 @@ struct ggml_tallocr {
     void * base;
     size_t alignment;
     size_t offset;
+    size_t limit; // exclusive end of a bounded range
+    bool bounded;
 };
 
 GGML_API struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer);
+// Place tensors in a borrowed range; align its start upward and count padding against size.
+// The buffer and its tensor metadata must remain alive while allocated tensors are in use.
+// Return false for invalid, empty, or non-addressable ranges; leave *talloc unchanged.
+// The caller prevents overlap with live allocations and retains the parent's buffer usage and reset scope.
+GGML_API bool ggml_tallocr_new_range(
+    struct ggml_tallocr * talloc, ggml_backend_buffer_t buffer, size_t offset, size_t size);
+
+// Bounded allocators return GGML_STATUS_ALLOC_FAILED on capacity failure without changing tensor or cursor.
+// Legacy allocators abort on capacity failure. Backend initialization errors retain their existing semantics.
 GGML_API enum ggml_status    ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor);
 
 // Graph allocator
@@ -72,6 +83,16 @@ GGML_API bool ggml_gallocr_reserve_n(
 GGML_API bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph * graph);
 
 GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id);
+
+// Galloc retains the buffer until it is freed.
+// Set the range after size measurement and before reserve.
+// Stateful buffers require a complete, independently resettable view.
+GGML_API bool ggml_gallocr_set_buffer_range(
+    ggml_gallocr_t galloc, int buffer_id, ggml_backend_buffer_t buffer, size_t offset, size_t size);
+
+// Reset and release an attached external range, then invalidate cached tensor placements.
+// The caller must ensure that no tensors or backend work still use the range.
+GGML_API bool ggml_gallocr_clear_buffer_range(ggml_gallocr_t galloc, int buffer_id);
 
 // Utils
 // Create a buffer and allocate all the tensors in a ggml_context

@@ -351,6 +351,10 @@ static ggml_sycl_device_info ggml_sycl_init() {
             if (r == ZE_RESULT_SUCCESS) {
                 info.devices[gpu_index].l0_device_type_valid = true;
                 info.devices[gpu_index].l0_discrete_gpu = !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+                // Integrated Level Zero drivers do not reliably support repeated VMM pool teardown and reuse.
+                if (!info.devices[gpu_index].l0_discrete_gpu) {
+                    info.devices[gpu_index].vmm = false;
+                }
             }
         }
 #endif
@@ -817,9 +821,11 @@ struct ggml_backend_sycl_buffer_context {
     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
     host_staging staging;
     bool is_usm_system;
+    bool owns_data;
 
-    ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream, bool is_usm_system) :
-        device(device), dev_ptr(dev_ptr), stream(stream), is_usm_system(is_usm_system) {
+    ggml_backend_sycl_buffer_context(
+            int device, void * dev_ptr, queue_ptr stream, bool is_usm_system, bool owns_data = true) :
+        device(device), dev_ptr(dev_ptr), stream(stream), is_usm_system(is_usm_system), owns_data(owns_data) {
             check_allow_gpu_index(device);
             name = (GGML_SYCL_NAME + std::to_string(device));
             opt_feature = ggml_sycl_info().devices[device].opt_feature;
@@ -841,7 +847,7 @@ struct ggml_backend_sycl_buffer_context {
 
     ~ggml_backend_sycl_buffer_context() {
         drop_host_staging();
-        if (dev_ptr != nullptr) {
+        if (owns_data && dev_ptr != nullptr) {
             ggml_sycl_set_device(device);
             if (is_usm_system)
                 free_aligned_mem_host(dev_ptr);
@@ -888,6 +894,17 @@ catch (sycl::exception const &exc) {
 static void * ggml_backend_sycl_buffer_get_base(ggml_backend_buffer_t buffer) {
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
     return ctx->dev_ptr;
+}
+
+// Create a SYCL view with independent tensor metadata over parent-owned USM.
+static ggml_backend_buffer_t ggml_backend_sycl_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    auto * parent = (ggml_backend_sycl_buffer_context *) buffer->context;
+    auto * context = new ggml_backend_sycl_buffer_context(
+        parent->device, (char *) parent->dev_ptr + offset, parent->stream, parent->is_usm_system, false);
+    ggml_backend_buffer_t view = ggml_backend_buffer_init(buffer->buft, buffer->iface, context, size);
+    view->view_buffer = ggml_backend_sycl_buffer_view;
+    return view;
 }
 
 static enum ggml_status
@@ -1306,7 +1323,9 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
         }
     }
     ggml_backend_sycl_buffer_context * ctx = new  ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, buft_ctx->stream, use_usm_system);
-    return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface, ctx, size);
+    ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface, ctx, size);
+    buffer->view_buffer = ggml_backend_sycl_buffer_view;
+    return buffer;
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -2157,6 +2176,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
                 m.map_ptr, m.phys.size(), ctx)));
         }
+        mappings.clear();
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::free_virtual_mem(
             pool_addr, SYCL_POOL_VMM_MAX_SIZE, ctx)));
     }

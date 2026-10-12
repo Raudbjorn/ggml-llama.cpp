@@ -5,6 +5,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "chat.h"
+#include "unicode.h"
 #include "base64.hpp"
 
 #include "server-common.h"
@@ -944,6 +945,52 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
     }
 
     return prompt_tokens;
+}
+
+static bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final, llama_tokens * tokens) {
+    auto replace = [&](size_t pos, size_t count) {
+        text.replace(pos, count, "\xEF\xBF\xBD");
+        if (tokens) {
+            // Keep the first token marker and shift the untouched suffix with its text.
+            tokens->erase(tokens->begin() + pos + 1, tokens->begin() + pos + count);
+            tokens->insert(tokens->begin() + pos + 1, 2, LLAMA_TOKEN_NULL);
+        }
+    };
+    size_t pos = std::min(first_unsent, text.size());
+    while (pos < text.size()) {
+        const auto parsed = common_parse_utf8_codepoint(text, pos);
+        // The shared parser checks byte structure, but permits non-scalar and overlong encodings.
+        const uint32_t min_codepoint[] = { 0, 0, 0x80, 0x800, 0x10000 };
+        if (parsed.status == utf8_parse_result::SUCCESS &&
+                parsed.codepoint >= min_codepoint[parsed.bytes_consumed] &&
+                parsed.codepoint <= 0x10ffff && !(parsed.codepoint >= 0xd800 && parsed.codepoint <= 0xdfff)) {
+            pos += parsed.bytes_consumed;
+            continue;
+        }
+        if (parsed.status == utf8_parse_result::INCOMPLETE) {
+            if (!final) return false;
+            replace(pos, text.size() - pos);
+            return true;
+        }
+
+        const size_t expected = common_utf8_sequence_length(static_cast<unsigned char>(text[pos]));
+        size_t end = pos + 1;
+        while (end < text.size() && end - pos < expected && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) {
+            ++end;
+        }
+        replace(pos, end - pos);
+        pos += 3;
+    }
+    return true;
+}
+
+bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) {
+    return repair_generated_utf8(text, first_unsent, final, nullptr);
+}
+
+bool repair_generated_utf8(common_chat_input & input, size_t first_unsent, bool final) {
+    GGML_ASSERT(input.tokens.size() == input.text.size());
+    return repair_generated_utf8(input.text, first_unsent, final, &input.tokens);
 }
 
 size_t validate_utf8(const std::string& text) {

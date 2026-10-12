@@ -55,7 +55,16 @@ extern "C" {
     };
 
     GGML_API const char *                   ggml_backend_buffer_name          (ggml_backend_buffer_t buffer);
+    // Keep a buffer alive until a matching call to ggml_backend_buffer_free.
+    GGML_API ggml_backend_buffer_t           ggml_backend_buffer_retain        (ggml_backend_buffer_t buffer);
+    // Release a retained reference and destroy the buffer after the last release.
     GGML_API void                           ggml_backend_buffer_free          (ggml_backend_buffer_t buffer);
+    // Create an independently classified buffer over a retained range of parent storage.
+    GGML_API ggml_backend_buffer_t           ggml_backend_buffer_view          (ggml_backend_buffer_t buffer, size_t offset, size_t size);
+    // Return whether this buffer can create bounded child views.
+    GGML_API bool                            ggml_backend_buffer_supports_views(ggml_backend_buffer_t buffer);
+    // Return true when the buffer retains parent storage.
+    GGML_API bool                            ggml_backend_buffer_is_view       (ggml_backend_buffer_t buffer);
     GGML_API void *                         ggml_backend_buffer_get_base      (ggml_backend_buffer_t buffer);
     GGML_API size_t                         ggml_backend_buffer_get_size      (ggml_backend_buffer_t buffer);
     GGML_API enum ggml_status               ggml_backend_buffer_init_tensor   (ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
@@ -360,6 +369,15 @@ extern "C" {
 
     GGML_API ggml_backend_buffer_type_t ggml_backend_sched_get_buffer_type(ggml_backend_sched_t sched, ggml_backend_t backend);
     GGML_API size_t                     ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend);
+
+    // The scheduler retains the buffer until it is freed.
+    // Set the range after size measurement and before reserve.
+    GGML_API bool ggml_backend_sched_set_buffer_range(
+        ggml_backend_sched_t sched, ggml_backend_t backend, ggml_backend_buffer_t buffer, size_t offset, size_t size);
+
+    // Synchronize and release an attached external range; existing tensor addresses become invalid.
+    GGML_API bool ggml_backend_sched_clear_buffer_range(
+        ggml_backend_sched_t sched, ggml_backend_t backend);
 
     GGML_API void                 ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend);
     GGML_API ggml_backend_t       ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node);

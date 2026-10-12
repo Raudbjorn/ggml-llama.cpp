@@ -284,6 +284,10 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
+// Repair unsent bytes; return false while a trailing UTF-8 sequence needs more input.
+bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final = false);
+bool repair_generated_utf8(common_chat_input & input, size_t first_unsent, bool final = false);
+
 // load a media file from an URL (http, file, data) or from raw base64 data
 void handle_media(
         std::vector<raw_buffer> & out_files,

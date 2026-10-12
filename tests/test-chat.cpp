@@ -8,6 +8,8 @@
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
 #include "../tools/server/server-chat.h"
+#include "../tools/server/server-common.h"
+#include "../tools/server/server-task.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
@@ -7992,6 +7994,98 @@ static void test_reasoning_effort_caps() {
     assert_supports_effort("models/templates/Qwen-Qwen3-0.6B.jinja", false);
 }
 
+static void test_generated_utf8_repair() {
+    std::string split = "one \xE2\x81";
+    GGML_ASSERT(!repair_generated_utf8(split, 4));
+    GGML_ASSERT(split == "one \xE2\x81");
+    split += "\x84";
+    GGML_ASSERT(repair_generated_utf8(split, 4));
+    GGML_ASSERT(split == "one \xE2\x81\x84");
+
+    std::string malformed = "one \xE2\x81" "\n<think>";
+    GGML_ASSERT(repair_generated_utf8(malformed, 4));
+    GGML_ASSERT(malformed == "one \xEF\xBF\xBD" "\n<think>");
+    GGML_ASSERT(validate_utf8(malformed) == malformed.size());
+
+    std::string orphan = "x\x80" "y";
+    GGML_ASSERT(repair_generated_utf8(orphan, 0));
+    GGML_ASSERT(orphan == "x\xEF\xBF\xBD" "y");
+
+    std::string terminal = "x\xE2\x81";
+    GGML_ASSERT(repair_generated_utf8(terminal, 0, true));
+    GGML_ASSERT(terminal == "x\xEF\xBF\xBD");
+    for (const auto & invalid : { "\xC0\xAF", "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xF8" }) {
+        std::string text = invalid;
+        GGML_ASSERT(repair_generated_utf8(text, 0, true));
+        GGML_ASSERT(text == "\xEF\xBF\xBD");
+    }
+
+    std::string sent = "\x80sent";
+    const std::string prefix = sent;
+    sent += "\x80";
+    GGML_ASSERT(repair_generated_utf8(sent, prefix.size()));
+    GGML_ASSERT(sent == prefix + "\xEF\xBF\xBD");
+    GGML_ASSERT(repair_generated_utf8(sent, sent.size() + 1));
+    std::string empty;
+    GGML_ASSERT(repair_generated_utf8(empty, 0));
+
+    common_chat_input mapped;
+    mapped.append("sent", 1);
+    mapped.append("\x80", 2);
+    mapped.append("<tag>", 3);
+    GGML_ASSERT(repair_generated_utf8(mapped, 4));
+    GGML_ASSERT(mapped.text == "sent\xEF\xBF\xBD<tag>");
+    GGML_ASSERT(mapped.tokens.size() == mapped.size());
+    GGML_ASSERT(mapped.tokens[4] == 2 && mapped.tokens[7] == 3);
+    GGML_ASSERT(mapped.substr(7).text == "<tag>" && mapped.substr(7).tokens[0] == 3);
+
+    common_chat_input contracted;
+    contracted.append("\xF4\x90", 4);
+    contracted.append("\x80\x80", 5);
+    contracted.append("tail", 6);
+    GGML_ASSERT(repair_generated_utf8(contracted, 0));
+    GGML_ASSERT(contracted.text == "\xEF\xBF\xBDtail");
+    GGML_ASSERT(contracted.tokens.size() == contracted.size() && contracted.tokens[3] == 6);
+
+    common_chat_input held;
+    held.append("\xE2\x81", 7);
+    GGML_ASSERT(!repair_generated_utf8(held, 0));
+    GGML_ASSERT(repair_generated_utf8(held, 0, true));
+    GGML_ASSERT(held.text == "\xEF\xBF\xBD" && held.tokens.size() == 3 && held.tokens[0] == 7);
+
+    common_chat_input stop;
+    stop.append("STO", 8);
+    stop.append("P\x80", 9);
+    GGML_ASSERT(repair_generated_utf8(stop, 0));
+    GGML_ASSERT(stop.text == "STOP\xEF\xBF\xBD");
+    GGML_ASSERT(stop.text.find("STOP") == 0);
+}
+
+static void test_streamed_token_probabilities() {
+    server_task_result_cmpl_partial chunk {};
+    chunk.n_decoded = 2;
+    chunk.tokens = { 11, 12 };
+    chunk.content = common_chat_input("\xE2\x81\x84");
+    chunk.probs_output = {
+        { 11, 0.75f, "\xE2\x81", {{ 11, "\xE2\x81", 0.75f }} },
+        { 12, 0.5f, "\x84", {{ 12, "\x84", 0.5f }} },
+    };
+    common_chat_msg_diff diff;
+    diff.content_delta = chunk.content.text;
+    chunk.oaicompat_msg_diffs = { diff };
+    const auto native = chunk.to_json_non_oaicompat();
+    const auto completion = chunk.to_json_oaicompat();
+    const auto chat = chunk.to_json_oaicompat_chat();
+    for (const auto & probs : { native.at("completion_probabilities"),
+            completion.at("choices").at(0).at("logprobs").at("content"),
+            chat.at(0).at("choices").at(0).at("logprobs").at("content") }) {
+        GGML_ASSERT(probs.size() == chunk.tokens.size());
+        GGML_ASSERT(probs.at(0).at("id") == 11 && probs.at(1).at("id") == 12);
+        GGML_ASSERT(probs.at(0).at("bytes") == json::array({0xe2, 0x81}));
+        GGML_ASSERT(probs.at(1).at("bytes") == json::array({0x84}));
+    }
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -8077,6 +8171,12 @@ int main(int argc, char ** argv) {
     // Check for --template and --detailed flags
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
+        if (arg == "--utf8-repair-only") {
+            test_generated_utf8_repair();
+            test_streamed_token_probabilities();
+            std::cout << "[chat] UTF-8 repair tests passed!" << '\n';
+            return 0;
+        }
         if (arg == "--template" && i + 1 < argc) {
             g_template_filter = argv[++i];
             // Only run PEG parser tests with the filter
@@ -8142,6 +8242,8 @@ int main(int argc, char ** argv) {
     } else
 #endif
     {
+        test_generated_utf8_repair();
+        test_streamed_token_probabilities();
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
         test_msg_token_delimiters_split();

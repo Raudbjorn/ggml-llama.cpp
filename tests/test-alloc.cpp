@@ -1,10 +1,13 @@
 #include "ggml-alloc.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "ggml-cpp.h"
+#include "ggml-cpu.h"
 #include "../ggml/src/ggml-impl.h"
 #include "ggml.h"
 
 #include <algorithm>
+#include <cstring>
+#include <exception>
 #include <memory>
 #include <vector>
 
@@ -16,6 +19,7 @@ uint8_t * const alloc_base = (uint8_t *) 16;
 struct dummy_backend_context {
     size_t max_buffer_size = 64;
     size_t alignment       = 8;
+    size_t reset_count     = 0;
 
     ggml_backend_buffer_i              buffer_interface;
     ggml_backend_device                device;
@@ -34,6 +38,14 @@ struct dummy_backend_context {
     }
 };
 
+struct dummy_backend_view_context {
+    dummy_backend_context * backend;
+    void * base;
+};
+
+static ggml_backend_buffer_t dummy_backend_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size);
+
 // ggml_backend_buffer_type interface
 
 static const char * dummy_backend_buffer_type_get_name(ggml_backend_buffer_type_t /*buft*/) {
@@ -44,6 +56,7 @@ static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend
     dummy_backend_context * ctx    = (dummy_backend_context *) buft->context;
     ggml_backend_buffer_t & buffer = ctx->buffers.emplace_back();
     buffer                         = ggml_backend_buffer_init(buft, ctx->buffer_interface, ctx, size);
+    buffer->view_buffer            = dummy_backend_buffer_view;
     return buffer;
 }
 
@@ -132,6 +145,40 @@ static const char * dummy_backend_get_name(ggml_backend_t /*backend*/) {
     return "dummy_backend";
 }
 
+// Count reset calls so tests can detect changes to the parent buffer's metadata.
+static void dummy_backend_buffer_reset(ggml_backend_buffer_t buffer) {
+    dummy_backend_context * ctx = (dummy_backend_context *) buffer->context;
+    ctx->reset_count++;
+}
+
+static void dummy_backend_view_free(ggml_backend_buffer_t buffer) {
+    delete (dummy_backend_view_context *) buffer->context;
+}
+
+static void * dummy_backend_view_get_base(ggml_backend_buffer_t buffer) {
+    return ((dummy_backend_view_context *) buffer->context)->base;
+}
+
+static void dummy_backend_view_reset(ggml_backend_buffer_t buffer) {
+    ((dummy_backend_view_context *) buffer->context)->backend->reset_count++;
+}
+
+static ggml_backend_buffer_t dummy_backend_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    auto * context = new dummy_backend_view_context {
+        (dummy_backend_context *) buffer->buft->context,
+        (uint8_t *) ggml_backend_buffer_get_base(buffer) + offset,
+    };
+    ggml_backend_buffer_i iface = buffer->iface;
+    iface.free_buffer = dummy_backend_view_free;
+    iface.get_base = dummy_backend_view_get_base;
+    iface.reset = buffer->iface.reset ? dummy_backend_view_reset : nullptr;
+
+    ggml_backend_buffer_t view = ggml_backend_buffer_init(buffer->buft, iface, context, size);
+    view->view_buffer = dummy_backend_buffer_view;
+    return view;
+}
+
 // dummy_backend
 
 struct dummy_backend {
@@ -139,7 +186,8 @@ struct dummy_backend {
     ggml_backend_buffer_type               buffer_type;
 };
 
-static dummy_backend dummy_backend_init(size_t max_buffer_size, size_t alignment = 8) {
+// Create a test buffer type with configurable alignment, chunk size, and optional reset tracking.
+static dummy_backend dummy_backend_init(size_t max_buffer_size, size_t alignment = 8, bool needs_reset = false) {
     dummy_backend b{};
     b.context                  = std::make_unique<dummy_backend_context>();
     b.context->alignment       = alignment;
@@ -152,6 +200,7 @@ static dummy_backend dummy_backend_init(size_t max_buffer_size, size_t alignment
     b.context->buffer_interface.set_tensor    = dummy_backend_buffer_set_tensor;
     b.context->buffer_interface.get_tensor    = dummy_backend_buffer_get_tensor;
     b.context->buffer_interface.clear         = dummy_backend_buffer_clear;
+    b.context->buffer_interface.reset         = needs_reset ? dummy_backend_buffer_reset : nullptr;
 
     b.context->device.context             = b.context.get();
     b.context->device.iface.get_type      = dummy_backend_device_get_type;
@@ -315,6 +364,26 @@ static void check_no_overlap(ggml_cgraph * graph) {
                 GGML_ASSERT(can_reuse_memory(graph, i, t, o));
             }
         }
+    }
+}
+
+// Check that every graph tensor uses the parent buffer and fits in the borrowed range, including padding.
+static void check_graph_in_buffer_range(
+        ggml_cgraph * graph, ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    const uintptr_t begin = (uintptr_t) ggml_backend_buffer_get_base(buffer) + offset;
+    const uintptr_t end   = begin + size;
+
+    auto check = [&](ggml_tensor * tensor) {
+        GGML_ASSERT(tensor->buffer == buffer);
+        GGML_ASSERT((uintptr_t) tensor->data >= begin);
+        GGML_ASSERT((uintptr_t) tensor->data + ggml_backend_buffer_get_alloc_size(buffer, tensor) <= end);
+    };
+
+    for (int i = 0; i < graph->n_leafs; ++i) {
+        check(graph->leafs[i]);
+    }
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        check(graph->nodes[i]);
     }
 }
 
@@ -1099,6 +1168,633 @@ static void test_buft_get_alloc_size_n_does_not_allocate() {
     GGML_ASSERT(x[1]->data == nullptr);
 }
 
+// Verify offset placement, capacity reporting, and parent lifetime after the graph allocator is freed.
+static void test_borrowed_buffer_range() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_ptr workspace(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96));
+    GGML_ASSERT(workspace);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 24, 48));
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+
+    check_all_allocated(graph);
+    check_no_overlap(graph);
+    check_graph_in_buffer_range(graph, workspace.get(), 24, 48);
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == 48);
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+
+    galloc.reset();
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+}
+
+// Verify that insufficient workspace fails without allocating extra buffers or assigning tensor addresses.
+static void test_borrowed_buffer_range_too_small() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_ptr workspace(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 64));
+    GGML_ASSERT(workspace);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 8, 24));
+    GGML_ASSERT(!ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(backend.context->allocated_total() == 64);
+
+    for (int i = 0; i < graph->n_leafs; ++i) {
+        GGML_ASSERT(graph->leafs[i]->data == nullptr);
+    }
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        GGML_ASSERT(graph->nodes[i]->data == nullptr);
+    }
+}
+
+// Verify rejection of mismatched types, invalid ranges, repeated attachment, and stateful-reset buffers.
+static void test_borrowed_buffer_range_validation() {
+    dummy_backend backend       = dummy_backend_init(SIZE_MAX);
+    dummy_backend other_backend = dummy_backend_init(SIZE_MAX);
+    dummy_backend reset_backend = dummy_backend_init(SIZE_MAX, 8, true);
+
+    ggml_backend_buffer_ptr workspace(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96));
+    ggml_backend_buffer_ptr other_workspace(ggml_backend_buft_alloc_buffer(&other_backend.buffer_type, 96));
+    ggml_backend_buffer_ptr reset_workspace(ggml_backend_buft_alloc_buffer(&reset_backend.buffer_type, 96));
+    GGML_ASSERT(workspace && other_workspace && reset_workspace);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, other_workspace.get(), 0, 32));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 1, 32));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 80, 32));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 0, 0));
+    backend.context->alignment = 0;
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 0, 32));
+    GGML_ASSERT(ggml_backend_buffer_view(workspace.get(), 0, 32) == nullptr);
+    backend.context->alignment = 3;
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 0, 32));
+    GGML_ASSERT(ggml_backend_buffer_view(workspace.get(), 0, 32) == nullptr);
+    backend.context->alignment = 8;
+    workspace->iface.get_base = [](ggml_backend_buffer_t) -> void * { return (void *) (UINTPTR_MAX - 7); };
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 0, 16));
+    GGML_ASSERT(ggml_backend_buffer_view(workspace.get(), 0, 16) == nullptr);
+    workspace->iface.get_base = dummy_backend_buffer_get_base;
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 16, 32));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 48, 32));
+
+    ggml_gallocr_ptr reset_galloc(ggml_gallocr_new(&reset_backend.buffer_type));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(reset_galloc.get(), 0, reset_workspace.get(), 0, 32));
+    GGML_ASSERT(reset_backend.context->reset_count == 0);
+}
+
+// Release external ranges, reject owned buffers, and allow later owned allocation.
+static void test_borrowed_buffer_range_detach() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_t workspace = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96);
+    GGML_ASSERT(workspace);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace, 16, 48));
+    ggml_backend_buffer_free(workspace);
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+    GGML_ASSERT(ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == 0);
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+    GGML_ASSERT(!ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    auto * input = make_input_with_size(ctx, 16);
+    auto * output = ggml_scale(ctx, input, 2.0f);
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    const size_t owned_size = ggml_gallocr_get_buffer_size(galloc.get(), 0);
+    GGML_ASSERT(owned_size != 0);
+    GGML_ASSERT(!ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == owned_size);
+}
+
+// Verify gallocr retains caller-supplied storage until its own lifetime ends.
+static void test_borrowed_buffer_range_retains_buffer() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_t workspace = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96);
+    GGML_ASSERT(workspace);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace, 24, 48));
+    ggml_backend_buffer_free(workspace);
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+
+    galloc.reset();
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+}
+
+// Verify gallocr can reset an isolated stateful view without resetting its parent.
+static void test_borrowed_buffer_view_reset() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX, 8, true);
+    ggml_backend_buffer_t parent = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96);
+    ggml_backend_buffer_t view = ggml_backend_buffer_view(parent, 24, 48);
+    GGML_ASSERT(parent && view && ggml_backend_buffer_is_view(view));
+
+    ggml_gallocr_ptr partial(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(partial.get(), 0, view, 8, 32));
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, view, 0, 48));
+    ggml_backend_buffer_free(parent);
+    ggml_backend_buffer_free(view);
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    GGML_ASSERT(backend.context->reset_count == 1);
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    GGML_ASSERT(backend.context->reset_count == 2);
+
+    GGML_ASSERT(ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+    GGML_ASSERT(backend.context->reset_count == 3);
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+
+    galloc.reset();
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+}
+
+// Reset stateful external view metadata when gallocr destruction releases the workspace.
+static void test_borrowed_buffer_view_free_reset() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX, 8, true);
+    ggml_backend_buffer_t parent = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96);
+    ggml_backend_buffer_t view = ggml_backend_buffer_view(parent, 24, 48);
+    GGML_ASSERT(parent && view);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    auto * input = make_input_with_size(ctx, 16);
+    auto * output = ggml_scale(ctx, input, 2.0f);
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, view, 0, 48));
+    ggml_backend_buffer_free(parent);
+    ggml_backend_buffer_free(view);
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    GGML_ASSERT(backend.context->reset_count == 1);
+
+    galloc.reset();
+    GGML_ASSERT(backend.context->reset_count == 2);
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+}
+
+// Verify that aliased allocator slots share one borrowed range and count its capacity only once.
+static void test_borrowed_buffer_range_shared_buffer_type() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_ptr workspace(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96));
+    GGML_ASSERT(workspace);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    int leaf_buffer_ids[2];
+    leaf_buffer_ids[get_leaf_id(graph, "x0")] = 0;
+    leaf_buffer_ids[get_leaf_id(graph, "x1")] = 1;
+    int node_buffer_ids[1];
+    node_buffer_ids[get_node_id(graph, "x2")] = 1;
+
+    ggml_backend_buffer_type_t bufts[2] = { &backend.buffer_type, &backend.buffer_type };
+    ggml_gallocr_ptr galloc(ggml_gallocr_new_n(bufts, 2));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 1, workspace.get(), 16, 48));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace.get(), 16, 48));
+    GGML_ASSERT(ggml_gallocr_reserve_n(galloc.get(), graph, node_buffer_ids, leaf_buffer_ids));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+
+    check_graph_in_buffer_range(graph, workspace.get(), 16, 48);
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == 48);
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 1) == 0);
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+    GGML_ASSERT(ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == 0);
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 1) == 0);
+    GGML_ASSERT(!ggml_gallocr_clear_buffer_range(galloc.get(), 1));
+}
+
+// Verify that attaching a range after measurement replaces cached zero-based tensor placements.
+static void test_borrowed_buffer_range_after_measure() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    size_t required[1];
+    ggml_gallocr_reserve_n_size(galloc.get(), graph, nullptr, nullptr, required);
+    GGML_ASSERT(required[0] > 0);
+
+    const size_t offset = 16;
+    ggml_backend_buffer_ptr workspace(
+        ggml_backend_buft_alloc_buffer(&backend.buffer_type, offset + required[0]));
+    GGML_ASSERT(workspace);
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(
+        galloc.get(), 0, workspace.get(), offset, required[0]));
+
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    check_graph_in_buffer_range(graph, workspace.get(), offset, required[0]);
+    GGML_ASSERT(backend.context->allocated_total() == offset + required[0]);
+}
+
+static const char * requested_backend = nullptr;
+
+// Execute an addition graph in borrowed GPU storage and check the result; skip when no GPU is available.
+static void test_gpu_borrowed_buffer_range() {
+    ggml_backend_load_all();
+    ggml_backend_ptr backend(requested_backend ? ggml_backend_init_by_name(requested_backend, nullptr) :
+        ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
+    GGML_ASSERT(!requested_backend || backend);
+    if (!backend) {
+        return;
+    }
+
+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend.get());
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    const size_t offset = 2*alignment;
+    const size_t size = 8*alignment;
+    ggml_backend_buffer_ptr workspace(ggml_backend_buft_alloc_buffer(buft, offset + size + alignment));
+    GGML_ASSERT(workspace);
+    ggml_backend_buffer_ptr view(ggml_backend_buffer_view(workspace.get(), offset, size));
+    ggml_backend_buffer_t graph_buffer = view ? view.get() : workspace.get();
+    const size_t graph_offset = view ? 0 : offset;
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(buft));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(
+        galloc.get(), 0, graph_buffer, graph_offset, size));
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    check_graph_in_buffer_range(graph, graph_buffer, graph_offset, size);
+
+    const float a[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    const float b[] = { 5.0f, 6.0f, 7.0f, 8.0f };
+    float result[4] = {};
+    ggml_backend_tensor_set(x[0], a, 0, sizeof(a));
+    ggml_backend_tensor_set(x[1], b, 0, sizeof(b));
+    GGML_ASSERT(ggml_backend_graph_compute(backend.get(), graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_synchronize(backend.get());
+    ggml_backend_tensor_get(x[2], result, 0, sizeof(result));
+    for (int i = 0; i < 4; ++i) {
+        GGML_ASSERT(result[i] == a[i] + b[i]);
+    }
+}
+
+// Execute through the CPU scheduler and verify both results and guard bytes outside the borrowed range.
+static void test_scheduler_borrowed_buffer_range() {
+    ggml_backend_ptr backend(ggml_backend_cpu_init());
+    GGML_ASSERT(backend);
+
+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend.get());
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    const size_t offset = 2*alignment;
+    const size_t size = 8*alignment;
+    const size_t buffer_size = offset + size + alignment;
+    ggml_backend_buffer_ptr workspace(ggml_backend_buft_alloc_buffer(buft, buffer_size));
+    GGML_ASSERT(workspace);
+    uint8_t * workspace_data = (uint8_t *) ggml_backend_buffer_get_base(workspace.get());
+    memset(workspace_data, 0xa5, buffer_size);
+
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_buffer_type_t bufts[] = { buft };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+        backends, bufts, 1, GGML_DEFAULT_GRAPH_SIZE, false, true));
+    GGML_ASSERT(sched);
+    GGML_ASSERT(ggml_backend_sched_set_buffer_range(
+        sched.get(), backend.get(), workspace.get(), offset, size));
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    GGML_ASSERT(ggml_backend_sched_reserve(sched.get(), graph));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+    check_graph_in_buffer_range(graph, workspace.get(), offset, size);
+
+    const float a[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    const float b[] = { 5.0f, 6.0f, 7.0f, 8.0f };
+    float result[4] = {};
+    ggml_backend_tensor_set(x[0], a, 0, sizeof(a));
+    ggml_backend_tensor_set(x[1], b, 0, sizeof(b));
+    GGML_ASSERT(ggml_backend_sched_graph_compute(sched.get(), graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_tensor_get(x[2], result, 0, sizeof(result));
+    for (int i = 0; i < 4; ++i) {
+        GGML_ASSERT(result[i] == a[i] + b[i]);
+    }
+
+    for (size_t i = 0; i < offset; ++i) {
+        GGML_ASSERT(workspace_data[i] == 0xa5);
+    }
+    for (size_t i = offset + size; i < buffer_size; ++i) {
+        GGML_ASSERT(workspace_data[i] == 0xa5);
+    }
+
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), backend.get()) == size);
+    GGML_ASSERT(ggml_backend_sched_clear_buffer_range(sched.get(), backend.get()));
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), backend.get()) == 0);
+    GGML_ASSERT(!ggml_backend_sched_clear_buffer_range(sched.get(), backend.get()));
+}
+
+// Check alignment gaps, exact fits, and recovery after a range runs out of space.
+static void test_tallocr_range_capacity() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 128));
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tallocr alloc{};
+    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), 3, 37));
+    GGML_ASSERT(alloc.offset == 8);
+    auto * a = make_input_with_size(ctx, 12);
+    auto * b = make_input_with_size(ctx, 20);
+    auto * c = make_input_with_size(ctx, 16);
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, a) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(a->data == alloc_base + 8);
+    GGML_ASSERT(alloc.offset == 24);
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, b) == GGML_STATUS_ALLOC_FAILED);
+    GGML_ASSERT(alloc.offset == 24);
+    GGML_ASSERT(b->buffer == nullptr && b->data == nullptr);
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, c) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(c->data == alloc_base + 24 && alloc.offset == 40);
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, b) == GGML_STATUS_ALLOC_FAILED);
+    GGML_ASSERT(alloc.offset == 40);
+    GGML_ASSERT(backend.context->allocated_total() == 128);
+}
+
+// Check that invalid constructor arguments preserve an existing allocator.
+static void test_tallocr_range_validation() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 64));
+    ggml_tallocr alloc = ggml_tallocr_new(buffer.get());
+    const auto original = alloc;
+    for (const auto & range : std::vector<std::pair<size_t, size_t>>{
+            {0, 0}, {65, 1}, {64, 1}, {60, 8}, {SIZE_MAX, 1}, {8, SIZE_MAX}, {1, 1}}) {
+        GGML_ASSERT(!ggml_tallocr_new_range(&alloc, buffer.get(), range.first, range.second));
+        GGML_ASSERT(alloc.buffer == original.buffer && alloc.base == original.base);
+        GGML_ASSERT(alloc.offset == original.offset && alloc.alignment == original.alignment);
+        GGML_ASSERT(alloc.limit == original.limit && alloc.bounded == original.bounded);
+    }
+    GGML_ASSERT(!ggml_tallocr_new_range(nullptr, buffer.get(), 0, 8));
+    GGML_ASSERT(!ggml_tallocr_new_range(&alloc, nullptr, 0, 8));
+    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), 56, 8));
+    ggml_backend_buffer_ptr empty(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 0));
+    GGML_ASSERT(!ggml_tallocr_new_range(&alloc, empty.get(), 0, 8));
+    backend.context->alignment = 3;
+    GGML_ASSERT(!ggml_tallocr_new_range(&alloc, buffer.get(), 0, 8));
+    backend.context->alignment = 0;
+    GGML_ASSERT(!ggml_tallocr_new_range(&alloc, buffer.get(), 0, 8));
+    backend.context->alignment = 8;
+
+    buffer->iface.get_base = [](ggml_backend_buffer_t) -> void * { return (void *) (UINTPTR_MAX - 7); };
+    GGML_ASSERT(!ggml_tallocr_new_range(&alloc, buffer.get(), 8, 8));
+    GGML_ASSERT(!ggml_tallocr_new_range(&alloc, buffer.get(), 0, 16));
+    buffer->iface.get_base = dummy_backend_buffer_get_base;
+    GGML_ASSERT(alloc.offset == 56 && alloc.limit == 64);
+}
+
+// Simulate a backend that needs eight bytes of padding after every tensor.
+static size_t padded_tensor_alloc_size(ggml_backend_buffer_type_t, const ggml_tensor * tensor) {
+    return ggml_nbytes(tensor) + 8;
+}
+
+// Ensure backend padding is included in the range limit.
+static void test_tallocr_range_padding() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    backend.buffer_type.iface.get_alloc_size = padded_tensor_alloc_size;
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 128));
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tallocr alloc{};
+    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), 16, 40));
+    auto * a = make_input_with_size(ctx, 16);
+    auto * b = make_input_with_size(ctx, 16);
+    auto * c = make_input_with_size(ctx, 8);
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, a) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(alloc.offset == 40);
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, b) == GGML_STATUS_ALLOC_FAILED);
+    GGML_ASSERT(alloc.offset == 40 && b->data == nullptr);
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, c) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(alloc.offset == 56);
+}
+
+// Supply a huge allocation requirement to exercise padding overflow handling.
+static size_t oversized_tensor_alloc_size(ggml_backend_buffer_type_t, const ggml_tensor *) {
+    return SIZE_MAX;
+}
+
+// Reject an overflowing allocation size before changing the tensor or cursor.
+static void test_tallocr_range_overflow() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    backend.buffer_type.iface.get_alloc_size = oversized_tensor_alloc_size;
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 128));
+    auto [ctx, graph, ctx_ptr] = make_context();
+    auto * tensor = make_input_with_size(ctx, 16);
+    ggml_tallocr alloc{};
+    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), 16, 64));
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, tensor) == GGML_STATUS_ALLOC_FAILED);
+    GGML_ASSERT(alloc.offset == 16 && tensor->buffer == nullptr && tensor->data == nullptr);
+}
+
+// Sweep range boundaries against an independent alignment and capacity calculation.
+static void test_tallocr_range_boundaries() {
+    for (size_t alignment : {size_t(1), size_t(4), size_t(8), size_t(16), size_t(64)}) {
+        dummy_backend backend = dummy_backend_init(SIZE_MAX, alignment);
+        ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 256));
+        for (size_t start = 0; start < 24; ++start) {
+            for (size_t size = 1; size <= 48; ++size) {
+                ggml_tallocr alloc{};
+                size_t cursor = start;
+                while (((uintptr_t) alloc_base + cursor) % alignment != 0) {
+                    ++cursor;
+                }
+                const size_t end = start + size;
+                const bool valid = cursor < end;
+                GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), start, size) == valid);
+                if (!valid) {
+                    continue;
+                }
+                auto [ctx, graph, ctx_ptr] = make_context();
+                for (size_t bytes : {size_t(20), size_t(12), size_t(8), size_t(4)}) {
+                    auto * tensor = make_input_with_size(ctx, bytes);
+                    const size_t padded = ((bytes + alignment - 1) / alignment)*alignment;
+                    const bool fits = padded <= end - cursor;
+                    GGML_ASSERT(ggml_tallocr_alloc(&alloc, tensor) ==
+                        (fits ? GGML_STATUS_SUCCESS : GGML_STATUS_ALLOC_FAILED));
+                    if (fits) {
+                        GGML_ASSERT(tensor->buffer == buffer.get() && tensor->data == alloc_base + cursor);
+                        cursor += padded;
+                    } else {
+                        GGML_ASSERT(tensor->buffer == nullptr && tensor->data == nullptr);
+                    }
+                    GGML_ASSERT(alloc.offset == cursor && alloc.limit == end);
+                }
+            }
+        }
+    }
+}
+
+// Verify that aliases into persistent tensors need no allocation and preserve their parent buffer.
+static void test_tallocr_range_views() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 64));
+    auto [ctx, graph, ctx_ptr] = make_context();
+    auto * source = make_input_with_size(ctx, 16);
+    ggml_tallocr alloc{};
+    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), 16, 16));
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, source) == GGML_STATUS_SUCCESS);
+    auto * view = ggml_view_1d(ctx, source, 2, 4);
+    if (view->buffer == nullptr) {
+        GGML_ASSERT(ggml_backend_view_init(view) == GGML_STATUS_SUCCESS);
+    }
+    GGML_ASSERT(view->buffer == buffer.get() && view->data == alloc_base + 20);
+    GGML_ASSERT(alloc.offset == 32);
+}
+
+// Persistent tensor allocation must not reset stateful backend metadata.
+static void test_tallocr_range_stateful_buffer() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX, 8, true);
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 64));
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tallocr alloc{};
+    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), 8, 32));
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, make_input_with_size(ctx, 16)) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(backend.context->reset_count == 0);
+}
+
+// Keep persistent tensors intact while fresh CPU or GPU graphs reuse another range of the same buffer.
+static void test_tallocr_range_shared_workspace(ggml_backend_t target) {
+    ggml_backend_ptr backend_cpu(ggml_backend_cpu_init());
+    ggml_backend_t backend = target ? target : backend_cpu.get();
+    GGML_ASSERT(backend);
+    auto * buft = ggml_backend_get_default_buffer_type(backend);
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    // Vulkan may align to four bytes; each persistent input still needs 16 bytes.
+    const size_t slot_size = GGML_PAD(4*sizeof(float), alignment);
+    const size_t persistent_offset = slot_size;
+    const size_t workspace_offset = 4*slot_size;
+    const size_t workspace_size = 8*slot_size;
+    const size_t total_size = workspace_offset + workspace_size + slot_size;
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(buft, total_size));
+    GGML_ASSERT(buffer);
+    auto * bytes = static_cast<uint8_t *>(ggml_backend_buffer_get_base(buffer.get()));
+    ggml_backend_buffer_clear(buffer.get(), 0xa5);
+    ggml_backend_buffer_ptr workspace_view(
+        ggml_backend_buffer_view(buffer.get(), workspace_offset, workspace_size));
+    ggml_backend_buffer_t graph_buffer = workspace_view ? workspace_view.get() : buffer.get();
+    const size_t graph_offset = workspace_view ? 0 : workspace_offset;
+    auto [ctx, unused_graph, ctx_ptr] = make_context();
+    auto * raw = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, total_size);
+    GGML_ASSERT(ggml_backend_tensor_alloc(buffer.get(), raw, bytes) == GGML_STATUS_SUCCESS);
+    auto * input = make_input_with_size(ctx, 16);
+    auto * bias = make_input_with_size(ctx, 16);
+    ggml_tallocr alloc{};
+    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), persistent_offset, 2*slot_size));
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, input) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_tallocr_alloc(&alloc, bias) == GGML_STATUS_SUCCESS);
+    const float a[] = {1, 2, 3, 4};
+    const float b[] = {5, 6, 7, 8};
+    ggml_backend_tensor_set(input, a, 0, sizeof(a));
+    ggml_backend_tensor_set(bias, b, 0, sizeof(b));
+    std::vector<uint8_t> snapshot(total_size);
+    ggml_backend_tensor_get(raw, snapshot.data(), 0, total_size);
+    const auto persistent = snapshot;
+    ggml_backend_t backends[] = {backend, backend_cpu.get()};
+    const int n_backends = target ? 2 : 1;
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+        backends, nullptr, n_backends, GGML_DEFAULT_GRAPH_SIZE, false, true));
+    GGML_ASSERT(ggml_backend_sched_set_buffer_range(
+        sched.get(), backend, graph_buffer, graph_offset, workspace_size));
+    for (int step = 1; step <= 12; ++step) {
+        ggml_backend_sched_reset(sched.get());
+        auto [gctx, graph, gctx_ptr] = make_context();
+        auto * sum = ggml_add(gctx, input, bias);
+        auto * output = ggml_scale(gctx, sum, float(step));
+        ggml_set_output(output);
+        ggml_build_forward_expand(graph, output);
+        GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+        GGML_ASSERT(ggml_backend_sched_graph_compute(sched.get(), graph) == GGML_STATUS_SUCCESS);
+        float result[4];
+        ggml_backend_tensor_get(output, result, 0, sizeof(result));
+        for (int i = 0; i < 4; ++i) {
+            GGML_ASSERT(result[i] == (a[i] + b[i])*step);
+        }
+        for (int i = 0; i < graph->n_nodes; ++i) {
+            auto * tensor = graph->nodes[i];
+            const size_t offset = static_cast<uint8_t *>(tensor->data) - bytes;
+            GGML_ASSERT(tensor->buffer == graph_buffer && offset >= workspace_offset);
+            GGML_ASSERT(offset + ggml_nbytes(tensor) <= workspace_offset + workspace_size);
+        }
+        ggml_backend_tensor_get(raw, snapshot.data(), 0, total_size);
+        GGML_ASSERT(memcmp(snapshot.data(), persistent.data(), workspace_offset) == 0);
+        for (size_t i = workspace_offset + workspace_size; i < total_size; ++i) {
+            GGML_ASSERT(snapshot[i] == 0xa5);
+        }
+    }
+    sched.reset();
+    ggml_backend_tensor_get(raw, snapshot.data(), 0, total_size);
+    GGML_ASSERT(memcmp(snapshot.data(), persistent.data(), workspace_offset) == 0);
+    GGML_ASSERT(ggml_backend_buffer_get_usage(buffer.get()) == GGML_BACKEND_BUFFER_USAGE_ANY);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -1106,7 +1802,9 @@ static void run(const char * name, void (*f)()) {
     printf("PASSED\n");
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    GGML_ASSERT(argc <= 2 && "usage: test [backend-name]");
+    requested_backend = argc == 2 ? argv[1] : nullptr;
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
@@ -1139,5 +1837,33 @@ int main() {
     run("test_buft_get_alloc_size_n_custom_override", test_buft_get_alloc_size_n_custom_override);
     run("test_buft_get_alloc_size_n_custom_override_ctx_size", test_buft_get_alloc_size_n_custom_override_ctx_size);
     run("test_buft_get_alloc_size_n_does_not_allocate", test_buft_get_alloc_size_n_does_not_allocate);
+    run("test_borrowed_buffer_range", test_borrowed_buffer_range);
+    run("test_borrowed_buffer_range_too_small", test_borrowed_buffer_range_too_small);
+    run("test_borrowed_buffer_range_validation", test_borrowed_buffer_range_validation);
+    run("test_borrowed_buffer_range_retains_buffer", test_borrowed_buffer_range_retains_buffer);
+    run("test_borrowed_buffer_view_reset", test_borrowed_buffer_view_reset);
+    run("test_borrowed_buffer_view_free_reset", test_borrowed_buffer_view_free_reset);
+    run("test_borrowed_buffer_range_shared_buffer_type", test_borrowed_buffer_range_shared_buffer_type);
+    run("test_borrowed_buffer_range_detach", test_borrowed_buffer_range_detach);
+    run("test_borrowed_buffer_range_after_measure", test_borrowed_buffer_range_after_measure);
+    run("test_gpu_borrowed_buffer_range", test_gpu_borrowed_buffer_range);
+    run("test_scheduler_borrowed_buffer_range", test_scheduler_borrowed_buffer_range);
+    run("test_tallocr_range_capacity", test_tallocr_range_capacity);
+    run("test_tallocr_range_validation", test_tallocr_range_validation);
+    run("test_tallocr_range_padding", test_tallocr_range_padding);
+    run("test_tallocr_range_overflow", test_tallocr_range_overflow);
+    run("test_tallocr_range_boundaries", test_tallocr_range_boundaries);
+    run("test_tallocr_range_views", test_tallocr_range_views);
+    run("test_tallocr_range_stateful_buffer", test_tallocr_range_stateful_buffer);
+    run("test_tallocr_range_shared_workspace_cpu", [] { test_tallocr_range_shared_workspace(nullptr); });
+    ggml_backend_ptr gpu(requested_backend ? ggml_backend_init_by_name(requested_backend, nullptr) :
+        ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
+    GGML_ASSERT(!requested_backend || gpu);
+    if (gpu) {
+        test_tallocr_range_shared_workspace(gpu.get());
+        printf("test_tallocr_range_shared_workspace_gpu PASSED (%s)\n", ggml_backend_name(gpu.get()));
+    } else {
+        printf("test_tallocr_range_shared_workspace_gpu SKIPPED (no GPU)\n");
+    }
     return 0;
 }

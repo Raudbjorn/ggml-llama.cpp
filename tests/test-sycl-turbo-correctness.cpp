@@ -1591,6 +1591,22 @@ int main() {
         printf("\n[8] InnerQ FA - SKIPPED (set LLAMA_TEST_INNERQ=1 to opt in; default OFF per P3.2 section 5 default-state)\n");
     }
 
+    // Recreate pool owners in one process so virtual ranges are released before reuse.
+    printf("\n[9] backend pool teardown and reuse\n");
+    ggml_backend_free(sycl);
+    sycl = nullptr;
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        sycl = ggml_backend_sycl_init(0);
+        if (!sycl) {
+            printf("  [FAIL] pool reuse backend initialization\n");
+            g_failures++;
+            break;
+        }
+        probe_mul_mat(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0 pool reuse", 128, 64);
+        ggml_backend_free(sycl);
+        sycl = nullptr;
+    }
+
     printf("\n== summary: %d GATE-FAIL, %d XPASS (promote to GATE!), %d xfail (expected-broken), %d SKIP ==\n",
            g_failures, g_xpass, g_xfail, g_skips);
 

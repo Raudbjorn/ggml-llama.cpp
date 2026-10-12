@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 3
+    #define GGML_BACKEND_API_VERSION 4
 
     //
     // Backend buffer type
@@ -70,12 +70,17 @@ extern "C" {
         void         (*reset)        (ggml_backend_buffer_t buffer);
     };
 
+    struct ggml_backend_buffer_refcount;
+
     struct ggml_backend_buffer {
         struct ggml_backend_buffer_i  iface;
         ggml_backend_buffer_type_t    buft;
         void * context;
         size_t size;
         enum ggml_backend_buffer_usage usage;
+        struct ggml_backend_buffer_refcount * refcount;
+        ggml_backend_buffer_t (*view_buffer)(ggml_backend_buffer_t buffer, size_t offset, size_t size);
+        ggml_backend_buffer_t parent;
     };
 
     GGML_API ggml_backend_buffer_t ggml_backend_buffer_init(

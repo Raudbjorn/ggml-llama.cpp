@@ -5,6 +5,10 @@ what it measured; a later note or live command output overrides an earlier one. 
 (`.json`, `.jsonl`, `.log`, `.csv`) keep the paths they recorded when they were written, which
 predate this layout.
 
+## Cross-backend integration
+
+- [adaptive-kv-extraction-2026-10-11.md](adaptive-kv-extraction-2026-10-11.md) - buffer ownership/ranges, server UTF-8, VMM, and Meta fixes
+
 ## sycl/ - SYCL backend on the Arc A770
 
 Baselines and A/B runs:

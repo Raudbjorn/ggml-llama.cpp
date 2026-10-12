@@ -93,6 +93,91 @@ def test_completion_stream_vs_non_stream():
     assert content_stream == res_non_stream.body["content"]
 
 
+
+@pytest.mark.parametrize("return_tokens", [False, True])
+@pytest.mark.parametrize("n_probs", [0, 3])
+@pytest.mark.parametrize("spec_type", [None, "ngram-mod"])
+@pytest.mark.parametrize("n_predict,stop,stop_type", [
+    (1, [], "limit"),
+    (12, [], "limit"),
+    (12, ["\U00010348" * 2], "word"),
+    (12, ["\U00010348" * 20], "limit"),
+])
+def test_completion_stream_utf8_tokens(return_tokens, n_probs, spec_type, n_predict, stop, stop_type, record_property):
+    server.n_slots = 1
+    server.spec_type = spec_type
+    server.start()
+    char = "\U00010348"
+    tokenized = server.make_request("POST", "/tokenize", data={"content": char})
+    assert tokenized.status_code == 200
+    assert len(tokenized.body["tokens"]) > 1  # Exercise a character split across generated tokens.
+    request = {
+        "prompt": char * 20,
+        "n_probs": n_probs,
+        "grammar": 'root ::= "' + char + '"+',
+        "ignore_eos": True,
+        "temperature": 0,
+        "n_predict": n_predict,
+        "stop": stop,
+        "cache_prompt": False,
+    }
+    reference = server.make_request("POST", "/completion", data={**request, "return_tokens": True})
+    assert reference.status_code == 200
+    assert reference.body["stop_type"] == stop_type
+    # Repeat on the same slot to catch a token cursor left over from the previous request.
+    for _ in range(2):
+        chunks = list(server.make_stream_request("POST", "/completion", data={
+            **request,
+            "stream": True,
+            "return_tokens": return_tokens,
+            "return_progress": True,
+        }))
+        assert chunks[-1]["stop_type"] == stop_type
+        assert "".join(chunk["content"] for chunk in chunks) == reference.body["content"]
+        tokens = [token for chunk in chunks for token in chunk["tokens"]]
+        assert tokens == reference.body["tokens"]
+        assert len(tokens) == chunks[-1]["timings"]["predicted_n"]
+        for chunk in chunks:
+            if n_probs and not chunk["stop"] and "prompt_progress" not in chunk:
+                probs = chunk["completion_probabilities"]
+                assert [entry["id"] for entry in probs] == chunk["tokens"]
+            if "prompt_progress" in chunk:
+                assert chunk["tokens"] == []
+        if spec_type:
+            accepted = chunks[-1]["timings"].get("draft_n_accepted", 0)
+            record_property("ngram_draft_n_accepted", accepted)
+            print(f"ngram-mod accepted tokens: {accepted}")
+        if n_predict == 1:
+            assert reference.body["content"] == "\ufffd"
+
+
+def test_completion_stream_indent_truncation():
+    server.n_slots = 1
+    server.start()
+    forced = "\n" + "xQ" * 20
+    request = {
+        "prompt": "Continue with a newline.",
+        "grammar": 'root ::= "\\n' + "xQ" * 20 + '"',
+        "temperature": 0,
+        "n_predict": 64,
+        "n_indent": 1,
+        "n_probs": 3,
+        "stream": True,
+        "cache_prompt": False,
+    }
+    for _ in range(2):
+        chunks = list(server.make_stream_request("POST", "/completion", data=request))
+        assert chunks[-1]["stop_type"] == "limit"
+        content = "".join(chunk["content"] for chunk in chunks)
+        # Already streamed text cannot be retracted; the truncated final chunk must add no removed bytes.
+        assert content.startswith("\n") and forced.startswith(content) and len(content) < len(forced)
+        partials = [chunk for chunk in chunks if not chunk["stop"]]
+        assert partials[-1]["content"] == ""
+        assert sum(len(chunk["tokens"]) for chunk in partials) >= 3
+        for chunk in partials:
+            assert [entry["id"] for entry in chunk["completion_probabilities"]] == chunk["tokens"]
+
+
 def test_completion_with_openai_library():
     global server
     server.start()

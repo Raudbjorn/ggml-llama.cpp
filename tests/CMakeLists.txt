@@ -139,6 +139,7 @@ function(llama_build_chat_test)
         llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
         target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
         target_link_libraries(test-chat PRIVATE server-context)
+        llama_test(test-chat NAME test-chat-utf8-repair ARGS --utf8-repair-only)
     endif()
     if (TARGET server-context AND NOT TARGET test-server-component)
         llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-server-component.cpp)
@@ -420,6 +421,7 @@ endif()
 if (NOT LLAMA_USE_SYSTEM_GGML)
     llama_build(test-moe-cache.cpp)
     llama_test(test-moe-cache LABEL "main;backend")
+    llama_test(test-moe-cache NAME test-moe-cache-invalidation ARGS --invalidation-only LABEL "main;backend")
     # The test exits 77 when no supported cache provider is present. ctest only treats that
     # as a skip when SKIP_RETURN_CODE says so; without it, every CPU-only
     # runner records the skip as a failure.
@@ -505,6 +507,8 @@ if (NOT LLAMA_USE_SYSTEM_GGML)
 
     # Needs non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-alloc.cpp LINK ggml)
+    llama_build_and_test(test-backend-buffer.cpp LINK ggml)
+    llama_build_and_test(test-backend-meta.cpp LINK ggml)
 endif()
 
 llama_build(test-export-graph-ops.cpp)
