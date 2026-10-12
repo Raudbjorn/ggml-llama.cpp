@@ -3028,7 +3028,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--spec-router"}, "K",
         "also trace this many experts per layer from the router evaluated on the layer input before attention "
         "(qwen3moe, qwen35moe), written to --spec-out, with the recall of the routed experts in the log; "
-        "1..4096, capped at the layer's expert count (default: 0 = off)",
+        "1..4096 and at most the model's expert count, else the trace fails (default: 0 = off)",
         [](common_params & params, const std::string & value) {
             params.moe_spec_router_k = parse_bounded_int(value, 0, 4096);
         }
