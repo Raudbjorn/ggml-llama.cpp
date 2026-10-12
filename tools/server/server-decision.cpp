@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <regex>
 #include <stdexcept>
@@ -81,6 +82,12 @@ void server_decision_context::init(const llama_model * model) {
         result = parsed;
         return true;
     };
+    const auto parse_score_bias_value = [](const char * value, float & result) {
+        char * end = nullptr;
+        errno = 0;
+        result = std::strtof(value, &end);
+        return end != value && *end == '\0' && errno != ERANGE && std::isfinite(result);
+    };
     for (int32_t i = 0; i < llama_model_meta_count(model); i++) {
         char key[256];
         char val[64];
@@ -97,9 +104,13 @@ void server_decision_context::init(const llama_model * model) {
             !parse_score_bias_index(parts[1], level) || n < 2 || n > 255 || level >= n) {
             throw std::runtime_error(string_format("invalid decision score bias: %s", key));
         }
+        float value = 0.0f;
+        if (!parse_score_bias_value(val, value)) {
+            throw std::runtime_error(string_format("invalid decision score bias: %s = %s", key, val));
+        }
         auto & bias = score_bias[n];
         bias.resize(n, 0.0f);
-        bias[level] = std::strtof(val, nullptr);
+        bias[level] = value;
     }
 
     if (model_type == COMMON_DECISION_TYPE_OPENJEV) {

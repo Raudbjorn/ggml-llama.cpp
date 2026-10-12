@@ -990,7 +990,8 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
             moe_cache_eligible ? moe_cache_requested : "off");
 
     ggml_backend_sched_set_moe_cache(sched.get(), moe_cache_mode, cparams.moe_cache_budget_mib);
-    ggml_backend_sched_set_prefetch_experts_slots(sched.get(), cparams.prefetch_experts_slots);
+    ggml_backend_sched_set_prefetch_experts_slots(
+            sched.get(), cparams.moe_cache_size > 0 ? 0 : cparams.prefetch_experts_slots);
 }
 
 void llama_context::sched_reserve() {
