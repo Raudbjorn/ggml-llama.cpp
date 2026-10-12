@@ -537,6 +537,8 @@ value for_statement::execute_impl(context & ctx) const {
 
     std::vector<value> filtered_items;
     for (size_t i = 0; i < items.size(); ++i) {
+        context loop_scope(scope);
+
         value current = items[i];
 
         std::function<void(context&)> scope_update_fn = [](context &) { /* no-op */};
@@ -582,7 +584,6 @@ value for_statement::execute_impl(context & ctx) const {
         }
 
         if (select_expr && test_expr) {
-            context loop_scope(scope);
             scope_update_fn(loop_scope);
             value test_val = test_expr->execute(loop_scope);
             if (!test_val->as_bool()) {
@@ -887,7 +888,7 @@ value member_expression::execute_impl(context & ctx) const {
         JJ_DEBUG("Accessed property '%s' value, got type: %s", key.c_str(), val->type().c_str());
 
     } else if (is_val<value_array>(object) || is_val<value_string>(object)) {
-        if (is_val<value_int>(property) || is_val<value_bool>(property)) {
+        if (is_val<value_int>(property)) {
             int64_t index = property->as_int();
             JJ_DEBUG("Accessing %s index %d", object->type().c_str(), (int)index);
             if (is_val<value_array>(object)) {
@@ -910,6 +911,8 @@ value member_expression::execute_impl(context & ctx) const {
             JJ_DEBUG("Accessing %s built-in '%s'", is_val<value_array>(object) ? "array" : "string", key.c_str());
             val = try_builtin_func(ctx, key, object, true);
 
+        } else {
+            throw std::runtime_error("Cannot access property with non-string/non-number: got " + property->type());
         }
     } else {
         if (!is_val<value_string>(property)) {
@@ -923,10 +926,10 @@ value member_expression::execute_impl(context & ctx) const {
         value_t::stats_t::mark_used(val);
         value_t::stats_t::mark_used(object);
         value_t::stats_t::mark_used(property);
-        if (is_val<value_object>(object) || is_val<value_string>(property) || is_val<value_float>(property) || is_val<value_array>(property) || is_val<value_none>(property)) {
-            object->stats.ops.insert("object_access");
-        } else if (is_val<value_int>(property) || is_val<value_bool>(property)) {
+        if (is_val<value_int>(property)) {
             object->stats.ops.insert("array_access");
+        } else if (is_val<value_string>(property)) {
+            object->stats.ops.insert("object_access");
         }
     }
 
