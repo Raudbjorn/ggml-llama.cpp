@@ -72,6 +72,7 @@
 #define GGML_INNERQ_H
 
 #include "ggml.h"
+#include "ggml-backend.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -130,7 +131,7 @@ typedef struct {
 // Per the P3.2 policy contract, the ONLY spec for what decide() returns
 // is the off-by-default rule. P3.2.2 implements that. The function is
 // pure (no side effects) so it's safe to call from any context.
-ggml_innerq_policy ggml_innerq_state_decide(const ggml_innerq_state_key * key);
+GGML_API ggml_innerq_policy ggml_innerq_state_decide(const ggml_innerq_state_key * key);
 
 // Per-(head_dim, quant) K^2 scale factor. P3.2.2 returns a constant
 // (no real per-tensor K^2 accumulation). The P3.2.3 implementation
@@ -144,7 +145,7 @@ ggml_innerq_policy ggml_innerq_state_decide(const ggml_innerq_state_key * key);
 // conservative safe default: it does no harm, but it also doesn't
 // correct for K^2 distortion. Real K^2 computation is the device
 // kernel in P3.2.3.
-float ggml_innerq_state_k_squared_scale(const ggml_innerq_state_key * key);
+GGML_API float ggml_innerq_state_k_squared_scale(const ggml_innerq_state_key * key);
 
 // P3.2.3.3: host-side recovery policy.
 //
@@ -160,7 +161,7 @@ float ggml_innerq_state_k_squared_scale(const ggml_innerq_state_key * key);
 //   - Hard failures and exhausted init retries fall back to static turbo
 //     for the current request.
 //   - If has_last_good, hard failures freeze that state for recovered runs.
-ggml_innerq_recovery ggml_innerq_state_recover(
+GGML_API ggml_innerq_recovery ggml_innerq_state_recover(
     const ggml_innerq_state_key * key,
     ggml_innerq_abort reason,
     int retry_count,
@@ -223,14 +224,14 @@ ggml_innerq_recovery ggml_innerq_state_recover(
 //
 // The function is pure: no side effects, no allocation. Safe to call
 // from any context including the harness probe.
-void ggml_innerq_compute_k_squared_profile(
+GGML_API void ggml_innerq_compute_k_squared_profile(
     const float * probe, int n_probe, int head_dim, float * out_scales);
 
 // P3.2.3.2: SYCL device kernel (parallel_for reduction). Same
 // signature as the C reference; the kernel falls back to the C
 // reference if no SYCL device is available. The C reference is
 // the binding correctness oracle.
-void ggml_innerq_compute_k_squared_profile_sycl(
+GGML_BACKEND_API void ggml_innerq_compute_k_squared_profile_sycl(
     const float * probe, int n_probe, int head_dim, float * out_scales);
 
 #ifdef __cplusplus

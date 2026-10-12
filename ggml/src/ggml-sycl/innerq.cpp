@@ -11,9 +11,6 @@
 
 #include <sycl/sycl.hpp>
 
-extern "C" void ggml_innerq_compute_k_squared_profile(
-    const float * probe, int n_probe, int head_dim, float * out_scales);
-
 // P3.2.3.2: SYCL device kernel for K^2 profile computation.
 //
 // Real SYCL parallel_for reduction (replaces the P3.2.3.2a "delegate to

@@ -270,26 +270,21 @@ Platform #0: Intel(R) OpenCL HD Graphics
  `-- Device #0: Intel(R) Iris(R) Xe Graphics [0x9a49]
 ```
 
-2. **Install Intel® oneAPI Toolkit**
+2. **Install Intel oneAPI Toolkit**
 
 SYCL backend depends on:
-  - Intel® oneAPI DPC++/C++ compiler/running-time.
-  - Intel® oneAPI DPC++/C++ library (oneDPL).
-  - Intel® oneAPI Deep Neural Network Library (oneDNN).
-  - Intel® oneAPI Math Kernel Library (oneMKL).
+  - Intel oneAPI DPC++/C++ compiler/running-time.
+  - Intel oneAPI DPC++/C++ library (oneDPL).
+  - Intel oneAPI Deep Neural Network Library (oneDNN).
+  - Intel oneAPI Math Kernel Library (oneMKL).
 
 - **For Intel GPU**
 
-With the 2026.0 release, the Intel® oneAPI Base toolkit and the HPC toolkit are combined into the **Intel® oneAPI Toolkit**, and **oneDNN is removed from the Intel® Deep Learning Essentials** package (oneDNN is distributed separately since then). The **Intel® oneAPI Toolkit** includes oneDNN until 2027.0.
+With the 2026.0 release, the Intel oneAPI Base toolkit and the HPC toolkit are combined into the **Intel oneAPI Toolkit**, and **oneDNN is removed from the Intel Deep Learning Essentials** package (oneDNN is distributed separately since then). The **Intel oneAPI Toolkit** includes oneDNN until 2027.0.
 
-It's recommended to install the **Intel® oneAPI Toolkit**.
+It's recommended to install the **Intel oneAPI Toolkit**.
 
-oneAPI 2026.0 dropped oneDNN from the Deep Learning Essentials package; install the unified
-**Intel® oneAPI Base toolkit** instead if oneDNN support (`GGML_SYCL_ENABLE_DNN`, the oneDNN FA/GEMM
-paths) matters on 2026.0+. Confirmed on this fork: a Deep Learning Essentials-only 2026.0 install
-builds with `GGML_SYCL_DNNL=0` and a "Disabling oneDNN support" CMake warning.
-
-The **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** can be obtained from the official [Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
+The **Intel oneAPI Toolkit** can be obtained from the official [Intel oneAPI Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html) page.
 
 Please follow the instructions for downloading and installing the Toolkit for Linux, and preferably keep the default installation values unchanged, notably the installation path *(`/opt/intel/oneapi` by default)*.
 
@@ -499,19 +494,19 @@ Note, the package includes the SYCL running time and all depended dll files, no 
 
 If you already have a recent version of Microsoft Visual Studio, you can skip this step. Otherwise, please refer to the official download page for [Microsoft Visual Studio](https://visualstudio.microsoft.com/).
 
-2. Install Intel® oneAPI Base toolkit
+2. Install Intel oneAPI Base toolkit
 
 SYCL backend depends on:
-  - Intel® oneAPI DPC++/C++ compiler/running-time.
-  - Intel® oneAPI DPC++/C++ library (oneDPL).
-  - Intel® oneAPI Deep Neural Network Library (oneDNN).
-  - Intel® oneAPI Math Kernel Library (oneMKL).
+  - Intel oneAPI DPC++/C++ compiler/running-time.
+  - Intel oneAPI DPC++/C++ library (oneDPL).
+  - Intel oneAPI Deep Neural Network Library (oneDNN).
+  - Intel oneAPI Math Kernel Library (oneMKL).
 
-All above are included in both **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** packages.
+All above are included in both **Intel oneAPI Base toolkit** and **Intel Deep Learning Essentials** packages.
 
-It's recommended to install **Intel® Deep Learning Essentials** which only provides the necessary libraries with less size.
+It's recommended to install **Intel Deep Learning Essentials** which only provides the necessary libraries with less size.
 
-The **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** can be obtained from the official [Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
+The **Intel oneAPI Base toolkit** and **Intel Deep Learning Essentials** can be obtained from the official [Intel oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
 
 Please follow the instructions for downloading and installing the Toolkit for Windows, and preferably keep the default installation values unchanged, notably the installation path *(`C:\Program Files (x86)\Intel\oneAPI` by default)*.
 
@@ -909,6 +904,7 @@ variant is provided; its correctness and performance remain unmeasured.
 | GGML_SYCL_ENABLE_HOST_PINNED_MEM | 0 or 1 (default) | Enable host pinned memory to speed up copy data from host to device. When disable it, host memory will common malloc() on CPU. Disable it when use `--load-mode mlock`.|
 | GGML_SYCL_NO_PINNED | Unset (default) or set | Any value disables pinned host buffers: the device reports no host buffer type and pinned host allocations return null. |
 | GGML_SYCL_HOST_PINNED_MEM_2G | 0 (default) or 1 | Limit the max memory allocation to be no more than 2GB when enable host pinned memory. USM allocations above 2 GiB take the relaxed/large-allocation path, which serializes H2D copies with compute and prevents copy/compute overlap. It will impact the startup time. Need more test. Depend on `GGML_SYCL_ENABLE_HOST_PINNED_MEM=1`.|
+| GGML_SYCL_UPLOAD_STAGING_SLOTS | 4 (default) or non-negative integer | Number of 8 MiB pinned host slots used to stage tensor uploads (model loading), so the host copy of one slot overlaps the transfer of the previous one. Set to 0 to use the old path: a malloc'd bounce buffer and a blocking copy per tensor. |
 | GGML_SYCL_GET_MEM_API | 0 (default) or 1  | Set to get memory info (free, total) by Level Zero or SYCL API:<br>0 - Level Zero API: support more GPUs, only run on Level Zero running time. When there is an error, fallback to call SYCL API. Depend on GGML_SYCL_SUPPORT_LEVEL_ZERO_API.<br>1 - SYCL API: legacy, support more running time, it can't get the free size of some GPUs (like Arc770). In such case, return the free size as value of total size.<br>Forced to 1 when `GGML_SYCL_USE_LEVEL_ZERO_API=0`.|
 | GGML_SYCL_USE_LEVEL_ZERO_API | 1 (default) or 0 | Use Level Zero API for device memory allocation instead of SYCL. Reduces system RAM usage on Intel dGPUs by avoiding DMA-buf/TTM host memory staging. Requires GGML_SYCL_SUPPORT_LEVEL_ZERO_API=ON at build time. SYCL backend always runs on Level Zero running time even if it's set as OFF (The SYCL api will be usage for memory allocation).|
 | GGML_SYCL_ENABLE_DNN | 0 or 1 (default)| Use oneDNN for the GEMM paths; 0 uses oneMKL. Inert in builds with `GGML_SYCL_DNNL=0`, which always use oneMKL. |
@@ -934,11 +930,14 @@ variant is provided; its correctness and performance remain unmeasured.
 | GGML_SYCL_FFN_FUSION_DEBUG | Unset (default) or set | Log tensor shape and layout details for the first fused FFN launch attempt. |
 | GGML_SYCL_FFN_FUSION_PROFILE | 0 (default) or 1 | Report fused FFN graph eligibility and rejection counters at process exit. |
 | GGML_SYCL_ENABLE_ESIMD | 0 or 1 (default)| Enable ESIMD kernels when available. |
+| GGML_SYCL_XMX_GATHER_TYPES | decimal bitmask, all bits set (default) | Weight formats that may use the XMX dequant-GEMM paths, which dequantize weights straight into the XMX tiles. This speeds up prompt processing of MoE models on GPUs with XMX units (Arc A- and B-series, Arc Pro, Data Center GPU Max), for example pp512 of Qwen3-30B-A3B UD-IQ3_XXS by about 50% on an Arc Pro B60. Bits:<br>* 1: IQ4_NL, 2: IQ3_S, 4: IQ4_XS, 8: IQ3_XXS, 16: IQ2_XXS, 32: IQ2_XS, 64: IQ2_S, 128: IQ1_S, 256: IQ1_M<br>* 512: Q8_0, 1024: Q4_K, 2048: Q5_K, 4096: Q6_K (MoE `MUL_MAT_ID` only)<br>Add values to combine them, for example `3` for IQ4_NL and IQ3_S; `0` disables the paths. A set bit does not force the path: batches of more than 64 tokens per expert or row lengths that are not a multiple of 256 (32 for IQ4_NL and Q8_0) use the library GEMM. |
+| GGML_SYCL_XMX_GATHER_SHAPES | decimal bitmask, 255 (default) | XMX `joint_matrix` combinations the paths of `GGML_SYCL_XMX_GATHER_TYPES` may use; the operand type comes from `GGML_SYCL_DYNAMIC_PRECISION` and the best supported combination is picked automatically (logged as `fg_pick_combo`). Bits:<br>* Xe2, Xe3, Xe-HPC: 1: f16 8x16x16, 2: f16 16x16x16, 4: f16 32x64x16, 8: f16 32x64x32, 32: tf32 8x16x8, 64: bf16 8x16x16<br>* Xe-HPG (Arc A770, ARL-H): 16: f16 8x8x16, 128: bf16 8x8x16<br>Clear a bit to exclude a combination, or set a single bit to force one for testing. |
+| GGML_SYCL_DYNAMIC_PRECISION | `F16` (default with `GGML_SYCL_F16=ON`), `BF16`, `TF32` or `F32` (default otherwise) | Operand type of the XMX dequant-GEMM paths (`GGML_SYCL_XMX_GATHER_TYPES`); accumulation is always f32. `F16` is the fastest, but activations above 65504 overflow. `BF16` keeps the f32 range at a 7-bit mantissa, `TF32` keeps the range and the f16 mantissa but is about 30% slower and needs Xe2, Xe3 or Xe-HPC, and `F32` turns the XMX paths off. Ops that request a higher src1 precision ([TAG_GGML_PREC]) get it regardless of this setting. |
+| GGML_SYCL_DYNAMIC_REQUIRED_PRECISION | `F32` (default), `TF32`, `BF16` or `F16` | Lowest type the XMX paths may use for an op that requests an F32 src1, such as Mistral 4 `ffn_down_exps`. The default runs such ops on the library f32 GEMM; `TF32` or `BF16` trade mantissa for speed while keeping the f32 range. `F16` ignores the request and can overflow; it is meant for testing only. |
+| GGML_SYCL_MMVQ_WIDE | 0 or 1 (default) | Use the wide-load variant of the reordered Q8_0 mat-vec kernel, which reads four contiguous dwords per operand instead of one value at a time. Set to 0 to fall back to the per-value loads. Only affects Q8_0 weights in the reordered layout. |
 | GGML_SYCL_PRIORITIZE_DMMV | 0 (default) or 1 | Prefer the DMMV (dequantize mat-vec) kernels over the reordered MMVQ/ESIMD paths for quantized mat-vec. Also turns off the K-quant reorder for the generic mul_mat path and the reordered same-type Q4_K/Q5_K gate+up+GLU mat-vec fusion. |
 | GGML_SYCL_USE_ASYNC_MEM_OP | 1 (default) or 0 | Use asynchronous USM allocation/free (`ext_oneapi_async_memory_alloc`) for temporary buffers when every device supports it; `GGML_SYCL_ENABLE_GRAPH=1` turns it on regardless. Requires a build with `GGML_SYCL_GRAPH=ON`. |
 | GGML_OP_OFFLOAD_MIN_BATCH | 32 (default) or integer | Minimum batch size at which an op whose weights are in host memory is offloaded to the SYCL device. |
-| GGML_SYCL_MMVQ_WIDE | 0 or 1 (1 default) | Use the wide-load variant of the reordered Q8_0 mat-vec kernel, which reads four contiguous dwords per operand instead of one value at a time. Set to 0 to fall back to the per-value loads. Only affects Q8_0 weights in the reordered layout. |
-| GGML_SYCL_XMX_GATHER_TYPES | decimal bitmask, all bits set (default) | Select which quantized weight formats may take the XMX dequant-GEMM paths, where the weights are dequantized inside the GEMM (gathered straight into the XMX tiles) instead of being written out to f16 and read back. This covers the grouped `MUL_MAT_ID` path used by MoE models, and the plain `MUL_MAT` path when built with `GGML_SYCL_F16=ON` (the plain path sits inside that build's f16 branch). Both compute in f16 on the XMX units regardless of `GGML_SYCL_F16`, so enabling them for `MUL_MAT_ID` trades some precision for speed relative to the per-expert library GEMM they replace. Mainly affects prompt processing; token generation is unaffected. One bit per format, so a format can be enabled or benchmarked on its own:<br>* 1: IQ4_NL<br>* 2: IQ3_S<br>* 4: IQ4_XS<br>* 8: IQ3_XXS<br>* 16: IQ2_XXS<br>* 32: IQ2_XS<br>* 64: IQ2_S<br>* 128: IQ1_S<br>* 256: IQ1_M<br>Set to 0 to disable the paths entirely and fall back to the library GEMM, which is the baseline to compare against. A format is only taken when the shape also fits (the weights must cover whole blocks, and the tile is only used while N is narrow), so setting a bit does not force the path. Formats outside this list are never affected by this variable. No effect when the selected build policy omits these kernels or the device has no matching kernel image, see [XMX gather GEMMs and DG2 AOT builds](#xmx-gather-gemms-and-dg2-aot-builds). |
 | GGML_SCHED_COPY_SYNC | 1 (default) or exactly 0 | Keep synchronous scheduler input copies by default. Set exactly `0` to opt into experimental stream-ordered copies where eligible. Read once per process. See [scheduler input-copy synchronization](#scheduler-input-copy-synchronization) for eligibility, lifetime, diagnostics, and validation limits. |
 | GGML_SYCL_SPARSE_FA | 0 (default) or 1 | Enable Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_DEBUG | 0 (default) or 1 | Enable to debug for Sparse Flash-attention.|

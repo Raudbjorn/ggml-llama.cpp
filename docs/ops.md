@@ -102,7 +102,7 @@ Legend:
 |                            SCALE | ❌ | ✅ | ✅ | ✅ | ✅ |
 |                              SET | ❌ | ✅ | ❌ | 🟡 | ✅ |
 |                         SET_ROWS | ❌ | 🟡 | ❌ | 🟡 | 🟡 |
-|                  SET_ROWS_TQ4_1S | ❌ | ✅ | ❌ | ✅ | ✅ |
+|                  SET_ROWS_TQ4_1S | ❌ | ❌ | ❌ | ✅ | ✅ |
 |                  SET_ROWS_TURBO3 | ❌ | ✅ | ❌ | ✅ | ✅ |
 |                  SET_ROWS_TURBO4 | ❌ | ✅ | ❌ | ✅ | ✅ |
 |                              SGN | ❌ | ✅ | ❌ | ✅ | ✅ |

@@ -156,6 +156,11 @@ std::vector<std::string> server_model_output_modalities(common_decision_type dec
         case COMMON_DECISION_TYPE_NIMBLE:
         case COMMON_DECISION_TYPE_LAYA:
         case COMMON_DECISION_TYPE_CLEF:
+        case COMMON_DECISION_TYPE_PPLX_DECIDER:
+        case COMMON_DECISION_TYPE_VLLM_DECISION2:
+        case COMMON_DECISION_TYPE_VLLM_D3:
+        case COMMON_DECISION_TYPE_LFM2_D1:
+        case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
             return {"decisions"};
         default:
             // fallback when there is no decision type or the metadata is bad
@@ -942,7 +947,15 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
     return prompt_tokens;
 }
 
-bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) {
+static bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final, llama_tokens * tokens) {
+    auto replace = [&](size_t pos, size_t count) {
+        text.replace(pos, count, "\xEF\xBF\xBD");
+        if (tokens) {
+            // Keep the first token marker and shift the untouched suffix with its text.
+            tokens->erase(tokens->begin() + pos + 1, tokens->begin() + pos + count);
+            tokens->insert(tokens->begin() + pos + 1, 2, LLAMA_TOKEN_NULL);
+        }
+    };
     size_t pos = std::min(first_unsent, text.size());
     while (pos < text.size()) {
         const auto parsed = common_parse_utf8_codepoint(text, pos);
@@ -956,7 +969,7 @@ bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) 
         }
         if (parsed.status == utf8_parse_result::INCOMPLETE) {
             if (!final) return false;
-            text.replace(pos, text.size() - pos, "\xEF\xBF\xBD");
+            replace(pos, text.size() - pos);
             return true;
         }
 
@@ -965,10 +978,19 @@ bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) 
         while (end < text.size() && end - pos < expected && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) {
             ++end;
         }
-        text.replace(pos, end - pos, "\xEF\xBF\xBD");
+        replace(pos, end - pos);
         pos += 3;
     }
     return true;
+}
+
+bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final) {
+    return repair_generated_utf8(text, first_unsent, final, nullptr);
+}
+
+bool repair_generated_utf8(common_chat_input & input, size_t first_unsent, bool final) {
+    GGML_ASSERT(input.tokens.size() == input.text.size());
+    return repair_generated_utf8(input.text, first_unsent, final, &input.tokens);
 }
 
 size_t validate_utf8(const std::string& text) {
@@ -1293,9 +1315,11 @@ server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
+    const llama_vocab * vocab,
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    common_chat_session & out_session)
 {
     json llama_params;
 
@@ -1420,7 +1444,6 @@ json oaicompat_chat_params_parse(
         if (body.contains("grammar")) {
             throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
         }
-        llama_params["parse_tool_calls"] = true;
     }
 
     // merge the template args provided from command line with the args provided in the user request
@@ -1454,31 +1477,11 @@ json oaicompat_chat_params_parse(
     inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
+    common_chat_session_params session_params;
+    session_params.echo = json_value(body, "echo", false);
+    out_session = common_chat_session(opt.tmpls.get(), vocab, inputs, session_params);
 
-    llama_params["chat_format"] = static_cast<int>(chat_params.format);
-    llama_params["prompt"]      = chat_params.prompt;
-    if (!chat_params.grammar.empty()) {
-        llama_params["grammar"]      = chat_params.grammar;
-        llama_params["grammar_type"] = std::string("tool_calls");
-    }
-    llama_params["grammar_lazy"] = chat_params.grammar_lazy;
-    auto grammar_triggers        = json::array();
-    for (const auto & trigger : chat_params.grammar_triggers) {
-        server_grammar_trigger ct(trigger);
-        grammar_triggers.push_back(ct.to_json());
-    }
-    llama_params["grammar_triggers"]  = grammar_triggers;
-    llama_params["preserved_tokens"]  = chat_params.preserved_tokens;
-    llama_params["generation_prompt"] = chat_params.generation_prompt;
-    for (const auto & stop : chat_params.additional_stops) {
-        llama_params["stop"].push_back(stop);
-    }
-    if (!chat_params.parser.empty()) {
-        llama_params["chat_parser"] = chat_params.parser;
-    }
-
-    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
+    llama_params["prompt"] = out_session.prompt();
 
     // Reasoning budget: pass parameters through to sampling layer
     {
@@ -1488,10 +1491,10 @@ json oaicompat_chat_params_parse(
             reasoning_budget = opt.reasoning_budget;
         }
 
-        if (!chat_params.thinking_end_tags.empty()) {
+        if (!out_session.thinking_end_tags().empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
-            llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
-            llama_params["reasoning_budget_end_tags"] = chat_params.thinking_end_tags;
+            llama_params["reasoning_budget_start_tag"] = out_session.thinking_start_tag();
+            llama_params["reasoning_budget_end_tags"] = out_session.thinking_end_tags();
             llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
@@ -1516,6 +1519,15 @@ json oaicompat_chat_params_parse(
         if (!llama_params.contains(item.key()) || item.key() == "n_predict") {
             llama_params[item.key()] = item.value();
         }
+    }
+
+    // the session owns these, the server applies them with server_task::apply_chat_session()
+    for (const char * key : { "grammar_lazy", "grammar_triggers", "preserved_tokens" }) {
+        llama_params.erase(key);
+    }
+    if (!out_session.grammar().empty()) {
+        llama_params.erase("grammar");
+        llama_params.erase("json_schema");
     }
 
     return llama_params;

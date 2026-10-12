@@ -118,7 +118,7 @@ agents were spawned; their build/test behavior and sandbox enforcement were not 
 | `model-spec-engineer` | `src/models`, conversion and gguf-py, model loading, speculative decoding, MTP heads, the server's draft and accept loops | A brand-new architecture: the main session runs `skills/add-new-model/SKILL.md`, which is interactive |
 | `server-engineer` | `tools/server` HTTP layer, CORS and MCP proxy policy, `tools/ui` build, server-only flags | Draft and accept loops (model-spec-engineer) |
 | `upstream-porter` | One upstream ggml-org or TheTom PR or commit onto a named branch | Whole-tree syncs (upstream-sync-lead) |
-| `upstream-sync-lead` | Whole-tree syncs per `upstream-merge.md`: inventory, audits, conflict clusters, verification ladder; lib release preparation/audits and API/ABI checks | Hand-resolving markers (merge-conflict-resolver) |
+| `upstream-sync-lead` | Whole-tree syncs via `.claude/skills/llama-fork-sync/SKILL.md`: direct master-into-branch or sanitized upstream merges, owned conflict resolution, preservation audits, verification; lib release preparation and API/ABI checks | Single PR ports (upstream-porter); another worker's assigned conflict files |
 | `merge-conflict-resolver` | Resolving conflict markers in one disjoint file cluster during a merge | Anything else |
 | `a770-benchmarker` | Numbers: throughput, PPL/KLD, capacity, cold JIT; hardening the harnesses | Pass/fail checks (verification-runner) |
 | `verification-runner` | Pass/fail: builds, the CPU-vs-SYCL oracle, `test-backend-ops`, ctest, bisects | Timing (a770-benchmarker) |
@@ -130,6 +130,8 @@ agents were spawned; their build/test behavior and sandbox enforcement were not 
 Routing by invariant, not by path: a change belongs to the agent whose invariant it could break.
 A server flag in `common/arg.cpp` belongs to whoever owns the feature it controls. An engineer
 who measured something writes the facts; `docs-research-writer` places and indexes them.
+
+The `upstream-sync-lead` role and Claude Code `/llama-fork-sync` skill share the same sync procedure. The skill can run in the main session; invoking it does not grant new commit, GPU, or publication permissions. Assign exclusive merge ownership or explicit files before asking the role to resolve conflicts itself; it still cannot spawn agents or publish to GitHub.
 
 ## Precedence
 

@@ -39,7 +39,7 @@ static void require(bool ok, const char * message) {
 // Small canonical files exercise the real GGUF loader, including missing required tensors.
 static void write_fixture(const std::string & path, bool mtp_only, int omit_head = -1, float trunk_scale = 1.0f,
                           bool shared_embd = true, float output_scale = 1.0f, int vocab_size = n_vocab,
-                          const char * omit_tensor = nullptr) {
+                          const char * omit_tensor = nullptr, uint32_t mtp_compress_ratio = 0) {
     gguf_context_ptr meta(gguf_init_empty());
     llama_model_saver ms(LLM_ARCH_QWEN4EXP, meta.get());
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, "qwen4exp");
@@ -67,6 +67,9 @@ static void write_fixture(const std::string & path, bool mtp_only, int omit_head
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, uint32_t(1));
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, uint32_t(64));
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K, uint32_t(128));
+    if (mtp_compress_ratio > 0) {
+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS, std::vector<uint32_t>({0, 0, mtp_compress_ratio}));
+    }
     ms.add_kv(LLM_KV_TOKENIZER_MODEL, "test");
     std::vector<std::string> vocab;
     for (int i = 0; i < vocab_size; ++i) {
@@ -394,6 +397,34 @@ static std::vector<uint8_t> sequence_state(llama_context * ctx, llama_seq_id seq
     return bytes;
 }
 
+static void test_sequence_file(llama_model * model, const std::filesystem::path & dir, bool flash) {
+    auto ctx = make_context(model, flash);
+    const std::vector<llama_token> tokens = {3, 4};
+    decode(ctx.get(), tokens, initial_hidden(2), 0);
+    const std::string path = (dir / "sequence-state.bin").string();
+    const size_t saved = llama_state_seq_save_file(ctx.get(), path.c_str(), 0, tokens.data(), tokens.size());
+    require(saved > 0, "sequence file saves");
+    const auto expected = decode(ctx.get(), {5}, initial_hidden(), 2);
+    llama_memory_clear(llama_get_memory(ctx.get()), true);
+
+    std::vector<llama_token> restored(tokens.size());
+    size_t restored_count = 0;
+    // Direct callers need the count too: a successful load must not depend on a prior probe.
+    require(llama_state_seq_load_file(ctx.get(), path.c_str(), 0, restored.data(), restored.size(), &restored_count) == saved,
+            "sequence file loads directly without probing");
+    require(restored_count == tokens.size() && restored == tokens, "direct restore reports all saved tokens");
+    const auto actual = decode(ctx.get(), {5}, initial_hidden(), 2);
+    require(close(expected.logits, actual.logits) && close(expected.hidden, actual.hidden),
+            "sequence file restores cache values");
+
+    const auto before = sequence_state(ctx.get(), 0);
+    size_t probe_count = 0;
+    require(llama_state_seq_load_file(ctx.get(), path.c_str(), 0, nullptr, 0, &probe_count) > 0 && probe_count == tokens.size(),
+            "sequence file probe reports saved token count");
+    require(sequence_state(ctx.get(), 0) == before, "sequence file probe preserves cache state");
+    fprintf(stderr, "PASS sequence file direct restore and probe flash=%d\n", flash);
+}
+
 static void test_invalid_chain(llama_model * model, bool flash) {
     enum invalid_case { NON_PREFIX_MASK, NO_OUTPUT, OVER_UBATCH, MULTIPLE_SEQUENCES, NO_HIDDEN_STATE, NULL_TOKEN,
                         BACKEND_SAMPLER, EMBEDDINGS };
@@ -663,6 +694,38 @@ static void test_chain_metadata(llama_model * model) {
 }
 
 #include "test-qwen4exp-mtp-driver.h"
+
+static void test_compressed_head(const std::filesystem::path & dir, llama_model * target) {
+    const std::string path = (dir / "compressed-head.gguf").string();
+    write_fixture(path, true, -1, 1.0f, true, 1.0f, n_vocab, nullptr, 2);
+    auto head = load_model(path);
+    require(bool(head), "compressed MTP head loads");
+    // QSA needs indexer state for every draft step; the dense chain cannot stand in for it.
+    require(!llama_model_supports_mtp_chain(head.get()), "compressed head advertises sequential drafting");
+    auto ctx = make_context(head.get(), true);
+    decode(ctx.get(), {3, 4}, initial_hidden(2), 0);
+    const auto before = sequence_state(ctx.get(), 0);
+    const auto hidden = initial_hidden();
+    common_batch batch(ctx.get());
+    const int idx = batch.add(5, 2, 0, true);
+    require(idx >= 0 && batch.set_embd_state(idx, {hidden.data(), 1, n_hidden}), "compressed draft state input");
+    llama_set_mtp_chain(ctx.get(), true);
+    require(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == -1,
+            "compressed direct chain is rejected");
+    llama_set_mtp_chain(ctx.get(), false);
+    require(sequence_state(ctx.get(), 0) == before, "compressed chain rejection preserves cache state");
+    decode(ctx.get(), {5}, hidden, 2);
+
+    driver_graph_observation observed;
+    const auto sequential = driver_drafts(target, head.get(), false, 1, 8, false);
+    const auto fallback = driver_drafts(target, head.get(), true, 1, 8, false, 1, false, &observed);
+    require(sequential == fallback, "compressed chain request falls back to the sequential driver");
+    require(!observed.executions.empty(), "compressed fallback executes the model");
+    for (const auto & execution : observed.executions) {
+        require(execution.output_width == n_vocab, "compressed fallback uses vocabulary logits");
+    }
+    fprintf(stderr, "PASS compressed MTP sequential fallback and chain rejection\n");
+}
 
 static void test_batch_validation(llama_model * head, const std::filesystem::path & dir) {
     auto cp = llama_context_default_params();
@@ -1177,6 +1240,17 @@ int main(int argc, char ** argv) {
         finish();
         return 0;
     }
+    if (argc == 2 && std::string(argv[1]) == "--compressed-head-only") {
+        test_compressed_head(dir, target.get());
+        finish();
+        return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "--state-file-only") {
+        test_sequence_file(head.get(), dir, false);
+        test_sequence_file(head.get(), dir, true);
+        finish();
+        return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--invalid-chain-only") {
         test_invalid_chain(head.get(), true);
         finish();
@@ -1220,6 +1294,7 @@ int main(int argc, char ** argv) {
     }
     test_separate_head_target(output_only, head_path, target.get(), head.get());
     require(llama_model_supports_mtp_chain(head.get()), "Qwen4Exp advertises implemented chain support");
+    test_compressed_head(dir, target.get());
     test_ordinary_context(head.get(), target.get());
     auto head_without_mtp = load_model(head_path, false);
     require(bool(head_without_mtp), "MTP-only file loads with MTP weights disabled");
@@ -1252,6 +1327,7 @@ int main(int argc, char ** argv) {
         require(close(ah.logits, bh.logits) && close(bh.logits, ch.logits), "MTP logits independent of trunk mixer");
         test_invalid_chain(head.get(), flash);
         test_on_device_state(head.get(), flash);
+        test_sequence_file(head.get(), dir, flash);
         test_checkpoint_placement(head.get(), head_host.get(), flash);
         test_masked_catchup(head.get(), flash);
         for (int depth : {1, 3, 4}) {

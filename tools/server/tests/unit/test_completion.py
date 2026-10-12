@@ -95,6 +95,7 @@ def test_completion_stream_vs_non_stream():
 
 
 @pytest.mark.parametrize("return_tokens", [False, True])
+@pytest.mark.parametrize("n_probs", [0, 3])
 @pytest.mark.parametrize("spec_type", [None, "ngram-mod"])
 @pytest.mark.parametrize("n_predict,stop,stop_type", [
     (1, [], "limit"),
@@ -102,7 +103,7 @@ def test_completion_stream_vs_non_stream():
     (12, ["\U00010348" * 2], "word"),
     (12, ["\U00010348" * 20], "limit"),
 ])
-def test_completion_stream_utf8_tokens(return_tokens, spec_type, n_predict, stop, stop_type, record_property):
+def test_completion_stream_utf8_tokens(return_tokens, n_probs, spec_type, n_predict, stop, stop_type, record_property):
     server.n_slots = 1
     server.spec_type = spec_type
     server.start()
@@ -112,6 +113,7 @@ def test_completion_stream_utf8_tokens(return_tokens, spec_type, n_predict, stop
     assert len(tokenized.body["tokens"]) > 1  # Exercise a character split across generated tokens.
     request = {
         "prompt": char * 20,
+        "n_probs": n_probs,
         "grammar": 'root ::= "' + char + '"+',
         "ignore_eos": True,
         "temperature": 0,
@@ -136,6 +138,9 @@ def test_completion_stream_utf8_tokens(return_tokens, spec_type, n_predict, stop
         assert tokens == reference.body["tokens"]
         assert len(tokens) == chunks[-1]["timings"]["predicted_n"]
         for chunk in chunks:
+            if n_probs and not chunk["stop"] and "prompt_progress" not in chunk:
+                probs = chunk["completion_probabilities"]
+                assert [entry["id"] for entry in probs] == chunk["tokens"]
             if "prompt_progress" in chunk:
                 assert chunk["tokens"] == []
         if spec_type:
@@ -144,6 +149,33 @@ def test_completion_stream_utf8_tokens(return_tokens, spec_type, n_predict, stop
             print(f"ngram-mod accepted tokens: {accepted}")
         if n_predict == 1:
             assert reference.body["content"] == "\ufffd"
+
+
+def test_completion_stream_indent_truncation():
+    server.n_slots = 1
+    server.start()
+    forced = "\n" + "xQ" * 20
+    request = {
+        "prompt": "Continue with a newline.",
+        "grammar": 'root ::= "\\n' + "xQ" * 20 + '"',
+        "temperature": 0,
+        "n_predict": 64,
+        "n_indent": 1,
+        "n_probs": 3,
+        "stream": True,
+        "cache_prompt": False,
+    }
+    for _ in range(2):
+        chunks = list(server.make_stream_request("POST", "/completion", data=request))
+        assert chunks[-1]["stop_type"] == "limit"
+        content = "".join(chunk["content"] for chunk in chunks)
+        # Already streamed text cannot be retracted; the truncated final chunk must add no removed bytes.
+        assert content.startswith("\n") and forced.startswith(content) and len(content) < len(forced)
+        partials = [chunk for chunk in chunks if not chunk["stop"]]
+        assert partials[-1]["content"] == ""
+        assert sum(len(chunk["tokens"]) for chunk in partials) >= 3
+        for chunk in partials:
+            assert [entry["id"] for entry in chunk["completion_probabilities"]] == chunk["tokens"]
 
 
 def test_completion_with_openai_library():
@@ -289,6 +321,29 @@ def test_nocache_long_input_prompt():
         "cache_prompt": False,
     })
     assert res.status_code == 400
+
+
+# a request pinned to a busy slot leaves the generation running on it untouched
+def test_pinned_request_on_busy_slot():
+    global server
+    server.n_ctx = 4096
+    server.start()
+    story = "Once upon a time a dragon named Ember guarded a golden key in a deep cave. " * 8
+
+    def run(pin_busy: bool) -> str:
+        server.make_request("POST", "/completion", data={"prompt": story, "id_slot": 0, "n_predict": 4, "temperature": 0.0})
+        res = server.make_stream_request("POST", "/completion", data={
+            "prompt": "To bake bread, mix flour, water and salt, then",
+            "id_slot": 0, "n_predict": 1024, "ignore_eos": True, "temperature": 0.0, "stream": True,
+        })
+        content = next(res)["content"]
+        if pin_busy:
+            server.make_request("POST", "/completion", data={"prompt": story + "The dragon", "id_slot": 0, "n_predict": 4, "temperature": 0.0})
+        return content + "".join(chunk["content"] for chunk in res)
+
+    baseline = run(pin_busy=False)
+    assert run(pin_busy=True) == baseline
+
 
 def test_json_prompt_no_mtmd():
     global server

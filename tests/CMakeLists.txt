@@ -1,7 +1,18 @@
 llama_add_compile_flags()
 
+# Optional args:
+# - LINK: libraries to link against (defaults to llama-common, which also brings llama)
 function(llama_build source)
-    set(TEST_SOURCES ${source} ${ARGN})
+    set(options)
+    set(oneValueArgs)
+    set(multiValueArgs LINK)
+    cmake_parse_arguments(LLAMA_BUILD "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    set(TEST_SOURCES ${source} ${LLAMA_BUILD_UNPARSED_ARGUMENTS})
+
+    if (NOT LLAMA_BUILD_LINK)
+        set(LLAMA_BUILD_LINK llama-common)
+    endif()
 
     if (DEFINED LLAMA_TEST_NAME)
         set(TEST_TARGET ${LLAMA_TEST_NAME})
@@ -10,7 +21,8 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common) # TODO: [TAG_TESTS_LLAMA_LINK]
+    target_compile_features(${TEST_TARGET} PRIVATE cxx_std_17)
+    target_link_libraries(${TEST_TARGET} PRIVATE ${LLAMA_BUILD_LINK})
     if (LLAMA_TESTS_INSTALL)
         install(TARGETS ${TEST_TARGET} RUNTIME)
     endif()
@@ -80,14 +92,19 @@ endfunction()
 # - LABEL: label for the test (defaults to main)
 # - ARGS: arguments to pass to the test executable
 # - WORKING_DIRECTORY
+# - LINK: libraries to link against (defaults to llama-common, which also brings llama)
 function(llama_build_and_test source)
     include(CMakeParseArguments)
     set(options)
     set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
-    set(multiValueArgs ARGS)
+    set(multiValueArgs ARGS LINK)
     cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     set(TEST_SOURCES ${source} ${LLAMA_TEST_UNPARSED_ARGUMENTS})
+
+    if (NOT LLAMA_TEST_LINK)
+        set(LLAMA_TEST_LINK llama-common)
+    endif()
 
     if (NOT DEFINED LLAMA_TEST_LABEL)
         set(LLAMA_TEST_LABEL "main")
@@ -102,10 +119,11 @@ function(llama_build_and_test source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
+    target_compile_features(${TEST_TARGET} PRIVATE cxx_std_17)
     if (LLAMA_TESTS_INSTALL)
         install(TARGETS ${TEST_TARGET} RUNTIME)
     endif()
-    target_link_libraries(${TEST_TARGET} PRIVATE llama-common)
+    target_link_libraries(${TEST_TARGET} PRIVATE ${LLAMA_TEST_LINK})
 
     add_test(
         NAME ${TEST_TARGET}
@@ -123,19 +141,24 @@ function(llama_build_chat_test)
         target_link_libraries(test-chat PRIVATE server-context)
         llama_test(test-chat NAME test-chat-utf8-repair ARGS --utf8-repair-only)
     endif()
+    if (TARGET server-context AND NOT TARGET test-server-component)
+        llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-server-component.cpp)
+        target_include_directories(test-server-component PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
+        target_link_libraries(test-server-component PRIVATE server-context)
+    endif()
 endfunction()
 
 function(llama_build_mtmd_tests)
     if (TARGET mtmd)
         if (NOT TARGET test-mtmd-c-api)
             set(LLAMA_TEST_NAME test-mtmd-c-api)
-            llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-mtmd-c-api.c)
+            llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-mtmd-c-api.c LINK mtmd)
             target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
             unset(LLAMA_TEST_NAME)
         endif()
 
         if (NOT TARGET test-mtmd-impl)
-            llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-mtmd-impl.cpp)
+            llama_build_and_test(${PROJECT_SOURCE_DIR}/tests/test-mtmd-impl.cpp LINK mtmd)
             target_link_libraries(test-mtmd-impl PRIVATE mtmd)
         endif()
     endif()
@@ -187,19 +210,19 @@ target_include_directories(test-upstream-api-shims PRIVATE ${PROJECT_SOURCE_DIR}
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
-    llama_build_and_test(test-unicode.cpp)
-    llama_build_and_test(test-sampling.cpp)
+    llama_build_and_test(test-unicode.cpp LINK llama)
+    llama_build_and_test(test-sampling.cpp LINK llama)
     llama_build_and_test(test-reasoning-budget.cpp)
-    llama_build_and_test(test-grammar-parser.cpp)
+    llama_build_and_test(test-grammar-parser.cpp LINK llama)
     llama_build_and_test(test-grammar-integration.cpp)
-    llama_build_and_test(test-llama-grammar.cpp)
-    llama_build_and_test(test-batch-alloc.cpp)
+    llama_build_and_test(test-llama-grammar.cpp LINK llama)
+    llama_build_and_test(test-batch-alloc.cpp LINK llama)
     llama_build_chat_test()
     llama_build_and_test(test-common-json-const.cpp)
     llama_build_and_test(test-imatrix-loader.cpp)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
-        llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+        llama_build_and_test(test-json-schema-to-grammar.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
         target_include_directories(test-json-schema-to-grammar PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     endif()
 
@@ -207,7 +230,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         llama_build(test-quantize-stats.cpp)
     endif()
 
-    llama_build(test-gbnf-validator.cpp)
+    llama_build(test-gbnf-validator.cpp LINK llama)
 
     # build test-tokenizer-1-bpe target once and add many tests
     llama_build(test-tokenizer-1-bpe.cpp)
@@ -350,7 +373,6 @@ llama_build_and_test(
     peg-parser/test-basic.cpp
     peg-parser/test-gbnf-generation.cpp
     peg-parser/test-json-parser.cpp
-    peg-parser/test-json-serialization.cpp
     peg-parser/test-python-dict-parser.cpp
     peg-parser/test-unicode.cpp
     peg-parser/tests.h
@@ -394,7 +416,7 @@ llama_test(test-spec-adaptive-curve NAME test-spec-adaptive-curve-self-test ARGS
 
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
-  llama_build_and_test(test-opt.cpp)
+  llama_build_and_test(test-opt.cpp LINK ggml)
 endif()
 if (NOT LLAMA_USE_SYSTEM_GGML)
     llama_build(test-moe-cache.cpp)
@@ -408,8 +430,7 @@ endif()
 
 llama_build_and_test(test-moe-cache-fit.cpp)
 
-# TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
-llama_build(test-backend-ops.cpp)
+llama_build(test-backend-ops.cpp LINK ggml)
 
 if (TARGET ggml-cpu AND NOT GGML_BACKEND_DL AND NOT LLAMA_USE_SYSTEM_GGML)
     add_executable(test-sched-stream-ordered test-sched-stream-ordered.cpp)
@@ -424,7 +445,7 @@ if (TARGET ggml-cpu AND NOT GGML_BACKEND_DL AND NOT LLAMA_USE_SYSTEM_GGML)
         PROPERTIES TIMEOUT 30 LABELS "main;backend")
 endif()
 
-llama_build_and_test(test-tiled-mulmat.cpp)
+llama_build_and_test(test-tiled-mulmat.cpp LINK ggml)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
@@ -441,11 +462,11 @@ endif()
 
 if (NOT GGML_BACKEND_DL AND GGML_CPU)
     # these tests use the backends directly and cannot be built with dynamic loading
-    llama_build_and_test(test-barrier.cpp)
-    llama_build_and_test(test-quantize-fns.cpp)
-    llama_build_and_test(test-quantize-perf.cpp)
-    llama_build_and_test(test-rope.cpp)
-    llama_build_and_test(test-col2im-1d.cpp)
+    llama_build_and_test(test-barrier.cpp LINK ggml)
+    llama_build_and_test(test-quantize-fns.cpp LINK ggml)
+    llama_build_and_test(test-quantize-perf.cpp LINK ggml)
+    llama_build_and_test(test-rope.cpp LINK ggml)
+    llama_build_and_test(test-col2im-1d.cpp LINK ggml)
 endif()
 
 # libmtmd
@@ -465,7 +486,7 @@ if (TARGET cpp-httplib)
         llama_test(test-gguf-model-data LABEL "model")
 
         # test-quant-type-selection requires gguf-model-data for remote model metadata
-        llama_build_and_test(test-quant-type-selection.cpp LABEL "model")
+        llama_build_and_test(test-quant-type-selection.cpp LABEL "model" LINK llama)
         target_link_libraries(test-quant-type-selection PRIVATE gguf-model-data)
         target_compile_definitions(test-quant-type-selection PRIVATE
             SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/snapshots")
@@ -482,11 +503,12 @@ llama_build_and_test(test-turbo-quant.c LABEL "turbo")
 
 if (NOT LLAMA_USE_SYSTEM_GGML)
     # Needs non-public ggml-impl.h
-    llama_build_and_test(test-gguf.cpp)
+    llama_build_and_test(test-gguf.cpp LINK ggml)
+
     # Needs non-public ggml{,-backend}-impl.h
-    llama_build_and_test(test-alloc.cpp)
-    llama_build_and_test(test-backend-buffer.cpp)
-    llama_build_and_test(test-backend-meta.cpp)
+    llama_build_and_test(test-alloc.cpp LINK ggml)
+    llama_build_and_test(test-backend-buffer.cpp LINK ggml)
+    llama_build_and_test(test-backend-meta.cpp LINK ggml)
 endif()
 
 llama_build(test-export-graph-ops.cpp)

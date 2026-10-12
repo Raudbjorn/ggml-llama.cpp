@@ -286,6 +286,7 @@ size_t validate_utf8(const std::string& text);
 
 // Repair unsent bytes; return false while a trailing UTF-8 sequence needs more input.
 bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final = false);
+bool repair_generated_utf8(common_chat_input & input, size_t first_unsent, bool final = false);
 
 // load a media file from an URL (http, file, data) or from raw base64 data
 void handle_media(
@@ -358,9 +359,11 @@ json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
+    const llama_vocab * vocab,
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    common_chat_session & out_session);
 
 // used by /embeddings endpoint, content has the same format as a chat message content array
 server_tokens tokenize_oai_content_array(

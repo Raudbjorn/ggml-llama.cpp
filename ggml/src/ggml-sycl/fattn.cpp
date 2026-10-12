@@ -773,9 +773,13 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // sinks/ALiBi/softcap, single-sequence batch. Everything else falls
     // through to XMX/oneDNN/VEC/TILE below. Set GGML_SYCL_ENABLE_MKL_FA=0 to
     // force the fallback path for A/B testing.
+    const bool standard_shape = Q->ne[0] >= 64 && Q->ne[0] <= 512 &&
+        Q->ne[0] % 64 == 0 && Q->ne[0] == V->ne[0];
+    const bool glm_mla_shape = Q->ne[0] == 576 && K->ne[0] == 576 &&
+        V->ne[0] == 512 && gqa_ratio == 20 &&
+        K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16;
     if (g_ggml_sycl_enable_mkl_fa == 1 && mask && !sinks && gqa_ratio >= 2 &&
-        Q->ne[0] >= 64 && Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 &&
-        Q->ne[0] == V->ne[0] &&
+        (standard_shape || glm_mla_shape) &&
         Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
         max_bias == 0.0f && logit_softcap == 0.0f &&
         (Q->ne[3] == K->ne[3] || K->ne[3] == 1)) {
@@ -785,7 +789,9 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         // through to TILE.
         bool kv_strides_ok = true;
         for (const ggml_tensor * t : {K, V}) {
-            if (t->type == GGML_TYPE_F16 && t->nb[1] % (t->ne[0] * 2) != 0) {
+            const bool glm_v_stride = glm_mla_shape && t == V &&
+                V->view_src && V->nb[1] == K->nb[1];
+            if (!glm_v_stride && t->type == GGML_TYPE_F16 && t->nb[1] % (t->ne[0] * 2) != 0) {
                 kv_strides_ok = false;
                 break;
             }

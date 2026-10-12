@@ -2226,7 +2226,7 @@ static void k_tq_prerotate_activation(
     auto sg = item_ct1.get_sub_group();
     const int sg_size = sg.get_local_range()[0];
     const int lane = sg.get_local_linear_id();
-    
+
     const int block_idx = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
     const int offset = block_idx * 32 + lane;
     if (offset >= n_elements) return;
@@ -2315,16 +2315,16 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 
     switch (src0->type) {
         case GGML_TYPE_Q1_0:
-            if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
+            if ((ggml_tensor_extra_gpu*)src0->extra &&
+                ((ggml_tensor_extra_gpu*)src0->extra)->optimized_feature.reorder) {
                 dequantize_mul_mat_vec_q1_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             } else {
                 dequantize_mul_mat_vec_q1_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             }
             break;
         case GGML_TYPE_Q4_0:
-            if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
+            if ((ggml_tensor_extra_gpu*)src0->extra &&
+                ((ggml_tensor_extra_gpu*)src0->extra)->optimized_feature.reorder) {
                 dequantize_mul_mat_vec_q4_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             } else {
                 dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
@@ -2340,8 +2340,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             dequantize_mul_mat_vec_q5_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
         case GGML_TYPE_Q8_0:
-            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if ((ggml_tensor_extra_gpu *) src0->extra &&
+                ((ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder) {
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
                 if (g_ggml_sycl_enable_esimd) {
                     dequantize_mul_mat_vec_q8_0_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
@@ -2355,8 +2355,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             }
             break;
         case GGML_TYPE_Q2_K:
-            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if ((ggml_tensor_extra_gpu *) src0->extra &&
+                ((ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder) {
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
                 if (g_ggml_sycl_enable_esimd) {
                     dequantize_mul_mat_vec_q2_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
@@ -2371,8 +2371,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             }
             break;
         case GGML_TYPE_Q3_K:
-            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if ((ggml_tensor_extra_gpu *) src0->extra &&
+                ((ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder) {
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
                 if (g_ggml_sycl_enable_esimd) {
                     dequantize_mul_mat_vec_q3_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
@@ -2387,8 +2387,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             }
             break;
         case GGML_TYPE_Q4_K:
-            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if ((ggml_tensor_extra_gpu *) src0->extra &&
+                ((ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder) {
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
                 if (g_ggml_sycl_enable_esimd) {
                     dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
@@ -2403,8 +2403,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             }
             break;
         case GGML_TYPE_Q5_K:
-            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if ((ggml_tensor_extra_gpu *) src0->extra &&
+                ((ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder) {
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
                 if (g_ggml_sycl_enable_esimd) {
                     dequantize_mul_mat_vec_q5_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
@@ -2419,8 +2419,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             }
             break;
         case GGML_TYPE_Q6_K:
-            if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if ((ggml_tensor_extra_gpu *) src0->extra &&
+                ((ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder) {
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
                 if (g_ggml_sycl_enable_esimd) {
                     dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
