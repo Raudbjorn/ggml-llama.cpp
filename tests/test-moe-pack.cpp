@@ -396,6 +396,7 @@ int main(int argc, char ** argv) {
     const std::string p_range   = work + "/range.csv";
     const std::string p_prefill = work + "/prefill.csv";
     const std::string p_spec    = work + "/spec.csv";
+    const std::string p_two     = work + "/two-archs.csv";
     std::string all_rows = "pos,layer,ids...\n";
     for (int e = 0; e < 8; e++) {
         all_rows += std::to_string(e) + ",0," + std::to_string(e) + "," + std::to_string((e + 1) % 8) + "\n";
@@ -408,7 +409,9 @@ int main(int argc, char ** argv) {
         write_text(p_arch,    "# arch=llama\n0,0,1,2\n") &&
         write_text(p_range,   hdr + "0,0,3,99\n") &&
         write_text(p_prefill, hdr + "-1,0,1,2\n-2,0,3,4\n") &&
-        write_text(p_spec,    hdr + "# kind=spec-router k=2\n" + rows);
+        write_text(p_spec,    hdr + "# kind=spec-router k=2\n" + rows) &&
+        // a session from another model concatenated before one that matches
+        write_text(p_two,     "# llama-moe-trace v1\n# session=00000000000000ab\n# arch=llama\n0,0,1,2\n" + hdr + rows);
     if (!written) {
         fprintf(stderr, "cannot write profiles under %s\n", work.c_str());
         return 2;
@@ -441,6 +444,7 @@ int main(int argc, char ** argv) {
     expect_disabled("profile without decode rows", base, run_model(f32, p_prefill.c_str(), 2), "has no decode rows");
     expect_disabled("missing profile", base, run_model(f32, (work + "/none.csv").c_str(), 2), "cannot open");
     expect_disabled("spec-router trace as a profile", base, run_model(f32, p_spec.c_str(), 2), "holds no routing");
+    expect_disabled("sessions from two models", base, run_model(f32, p_two.c_str(), 2), "conflicts with 'llama'");
 
     // the memory-fit pass must account for exactly the bytes a real load allocates
     {

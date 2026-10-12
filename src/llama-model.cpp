@@ -2136,7 +2136,14 @@ bool moe_pack_read_profile(const char * path, moe_pack_profile & prof, std::stri
             const std::string key = kv.substr(0, eq);
             const std::string val = kv.substr(eq + 1);
             int64_t v = 0;
+            // concatenated sessions repeat the header: every copy must agree, or routing from
+            // another model would be counted under the last header
             if (key == "arch") {
+                if (!prof.arch.empty() && prof.arch != val) {
+                    err = format("'%s':%lld: arch '%s' conflicts with '%s'", path, (long long) lineno, val.c_str(),
+                                 prof.arch.c_str());
+                    return false;
+                }
                 prof.arch = val;
             } else if (key == "kind") {
                 // llama-moe-trace --spec-out writes predicted ids in the same format
@@ -2147,7 +2154,13 @@ bool moe_pack_read_profile(const char * path, moe_pack_profile & prof, std::stri
                     err = format("'%s':%lld: invalid %s '%s'", path, (long long) lineno, key.c_str(), val.c_str());
                     return false;
                 }
-                (key == "n_layer" ? prof.n_layer : prof.n_expert) = v;
+                int64_t & dst = key == "n_layer" ? prof.n_layer : prof.n_expert;
+                if (dst > 0 && dst != v) {
+                    err = format("'%s':%lld: %s %lld conflicts with %lld", path, (long long) lineno, key.c_str(),
+                                 (long long) v, (long long) dst);
+                    return false;
+                }
+                dst = v;
             }
             continue;
         }
