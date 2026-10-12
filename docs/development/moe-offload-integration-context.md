@@ -92,7 +92,7 @@ has a throughput measurement: llvmpipe and OpenVINO CPU run on the host CPU.
 | --- | --- | --- | --- | --- |
 | 1. Routing trace | done | `63c9853` [llama-moe-trace](../../tools/moe-trace/README.md): eval-callback capture, sampling flags, per-run session and model provenance | `test-moe-trace` | - |
 | 1. Simulator | done | `5567504` `simulate.py`: per-(layer, expert) skew, expert count from the header, sessions never interleaved, held-out `static` policy, shared-pool `dynamic` model of `--moe-cache` (per-plan fill limit and pins, `9303a9a`), costs only with stated assumptions | `test-moe-trace-simulate` | calibrate the cost model on the A770 |
-| 2. Static packs | done, opt-in | `bf671e8`, `43c945a`, `e078fb2` ([guide](../backend/MOE-PACK.md)): per-layer device, `--fit` accounting, eligibility checks (a LoRA on the experts disables the pack), the `build_lora_mm_id` precision path, no source `op_params` flag, exclusive with `--moe-cache`, `llama-bench --moe-pack` | `test-moe-pack` (`010aaf9` fixtures): bit-exact on the CPU, NMSE 3e-8 on Vulkan | SYCL run; A/B against `--moe-cache` at equal VRAM |
+| 2. Static packs | done, opt-in | `bf671e8`, `43c945a`, `e078fb2` ([guide](../backend/MOE-PACK.md)): per-layer device, `--fit` accounting, eligibility checks (a LoRA on the experts disables the pack), the `build_lora_mm_id` precision path, no source `op_params` flag, exclusive with `--moe-cache`, `llama-bench --moe-pack`; since the `master` merge `d7ff063`, no pack for Hadamard-folded experts, and the device cache (`--moe-cache-mib`) skips packed layers | `test-moe-pack` (`010aaf9` fixtures): bit-exact on the CPU, NMSE 3e-8 on Vulkan; a Hadamard fixture, and the cached layer count beside a pack on Vulkan | SYCL run; A/B against `--moe-cache` at equal VRAM |
 | 3. Packs on OpenVINO | done, opt-in | `a6c59d1` (`-1` in `MUL_MAT_ID`/`ADD_ID`), `a6529c2` and `3a4ebce` (view write-back), `43c945a` (host id maps) | `test-moe-pack`; on OpenVINO `test-backend-ops` `MUL_MAT_ID` 757/757, `ADD_ID` 72/72 | fusion and compile-time cost, GPU device |
 | 4. Decision engine | done | `7957865` [llama-schema-decision](../../tools/schema-decision/README.md): errors as values, overflow-free bounds, joint-text tokenization, hybrid padding bounded by `n_ubatch` | `test-schema-decision-vocab`, `test-schema-decision` (oracle within 4e-8) on CPU and Vulkan, e2e on three real models | task accuracy and latency on real workloads; OpenVINO cannot run it (multi-sequence batches fail, below) |
 | 4. `/v1/decision` | done, opt-in (`--decision-seqs`) | `81e2bcf`: engine reset before context destruction, cancellation, 400/503/500 mapping; `/v1/systemone` unchanged | `tools/server/tests/unit/test_schema_decision.py` (19 tests: sleep/wake, embeddings, per-request LoRA, cell reclaim) | - |
@@ -112,10 +112,10 @@ Defects found on the way and fixed in their own commits:
 Pre-existing failures seen on this host, unchanged by the branch (checked against
 `master` where noted):
 
-- `test-grammar-integration` and `test-chat` abort (also on `master`).
+- `test-grammar-integration` aborts and `test-quant-type-selection` fails the
+  Qwen3.6-27B `MXFP4_MOE` snapshot (both also on `master` `ee4b97c`, built and
+  run). `test-chat` aborted before the `master` merge and passes since.
 - `test-tokenizers-ggml-vocabs` reads Git LFS pointer files.
-- `test-quant-type-selection` fails the Qwen3.6-27B `MXFP4_MOE` snapshot (also on
-  `master`).
 - On OpenVINO:
   - the random dense llama fixture fails a shape check (also on `master`);
   - every batch with more than one sequence fails in shape inference
@@ -124,7 +124,9 @@ Pre-existing failures seen on this host, unchanged by the branch (checked agains
   - `test-recurrent-state-rollback-bailingmoe3` aborts in a Reshape (also on
     `master`);
   - decoding after an aborted decode fails in ScatterUpdate, with or without the
-    CPU worker.
+    CPU worker;
+  - `master`'s device MoE cache (`--moe-cache-mib`) fails at compute: OpenVINO
+    rejects its I32 slot map as a weight (seen after the `master` merge).
 - With `LLAMA_BUILD_SERVER=OFF` the `llama` app does not link: `app/CMakeLists.txt`,
   which this branch does not change, always links `llama-server-impl`.
 - `llama-server --embedding --pooling mean` aborts at load with
