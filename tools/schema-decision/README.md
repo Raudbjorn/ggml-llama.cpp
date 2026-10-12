@@ -142,7 +142,9 @@ On those models every group of branches is right-padded to its longest branch an
 padding does not change them.
 
 A request that runs out of KV space, is cancelled, or fails in any other way returns an error and
-leaves none of the engine's sequences behind; the next request rebuilds the cached prefix.
+leaves none of the engine's sequences behind; the next request rebuilds the cached prefix. In
+llama-server the slots and the engine reclaim each other's idle cells: a slot drops the cached
+prefix when no idle slot is left to purge, and a decision purges idle slots before it fails.
 
 ## Validation
 
@@ -159,8 +161,9 @@ leaves none of the engine's sequences behind; the next request rebuilds the cach
 - `tools/server/tests/unit/test_schema_decision.py`: the endpoint on a running server: disabled
   without `--decision-seqs`, cached prefix, batch against single contexts, modes, invalid requests
   (400), a context too long (400), KV exhaustion (503) with the server still answering after it,
-  completions interleaved with decisions giving the same output as alone, and a decision after
-  the server slept and woke.
+  completions interleaved with decisions giving the same output as alone, a decision after
+  the server slept and woke, decisions unchanged by an embedding request and by a completion's
+  `lora` scales, and slots and decisions reclaiming each other's idle cells.
 - `--e2e MODEL...`: a text request through the chat template against the oracle on the joint
   tokenization. The engine is held to the backend's own spread, measured as the same oracle
   decoded in ubatches of 512 and 64 (about 0.03 in probability on the CPU, because the kernels are

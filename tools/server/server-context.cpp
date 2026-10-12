@@ -2065,6 +2065,14 @@ private:
             }
         }
 
+        // the decision engine keeps its static prefix between requests; give the cells back once
+        // no idle slot is left to purge (the next decision re-evaluates the prefix)
+        if (!res && schema_decision_engine && schema_decision_engine->has_cached_prefix()) {
+            SRV_WRN("%s", "purging the cached decision prefix\n");
+            schema_decision_engine->reset();
+            res = true;
+        }
+
         return res;
     }
 
@@ -3352,8 +3360,18 @@ private:
         task.schema_decision->opt.should_abort = [cancel]() {
             return cancel && cancel->load();
         };
-        const auto out = schema_decision::run(*schema_decision_engine, chat_params.tmpls.get(), chat_params.use_jinja,
-                                              *task.schema_decision);
+        // the last slot batch may have left its per-request adapter scales and embedding mode on the
+        // context; embedding mode would make every decision token an output
+        common_set_adapter_lora(ctx_tgt, params_base.lora_adapters);
+        llama_set_embeddings(ctx_tgt, false);
+        auto out = schema_decision::run(*schema_decision_engine, chat_params.tmpls.get(), chat_params.use_jinja,
+                                        *task.schema_decision);
+        // idle slots keep their prompts in the shared cache: take their cells one slot at a time (a
+        // failed run has already dropped the engine's prefix, so this stops once no slot is left)
+        while (!out.ok() && out.code == schema_decision::error_code::no_memory && try_clear_idle_slots()) {
+            out = schema_decision::run(*schema_decision_engine, chat_params.tmpls.get(), chat_params.use_jinja,
+                                       *task.schema_decision);
+        }
         if (!out.ok()) {
             error_type type = ERROR_TYPE_SERVER;
             switch (out.code) {

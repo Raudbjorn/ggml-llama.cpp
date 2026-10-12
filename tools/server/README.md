@@ -1805,6 +1805,10 @@ Enable it with `--decision-seqs N` (N >= 3): it reserves `N` sequences above the
 the instructions and field catalogue, one per context in flight, the rest score values) and turns
 on the unified KV cache. The decision shares that KV cache with the slots: its cached prefix keeps
 its cells between requests, and a request needs room for its contexts and scored rows on top.
+A slot that runs out of cells drops the cached prefix once no idle slot is left to purge; a
+decision that runs out of cells purges idle slots, one at a time, before it returns 503.
+Decisions score with the adapter scales the server started with, whatever `lora` a completion
+asked for.
 `--parallel` plus `--decision-seqs` may not exceed 256.
 
 A request runs on the server's task thread between slot decodes, so a large one delays the slots

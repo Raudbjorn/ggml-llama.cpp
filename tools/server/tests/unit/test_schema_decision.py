@@ -212,3 +212,73 @@ def test_decision_kv_exhaustion():
     # the failed request left nothing behind
     res = decide(CONTEXTS[:1])
     assert res.status_code == 200
+
+
+def test_decision_after_embedding_request():
+    global server
+    server.server_embeddings = True
+    server.pooling = "mean"
+    # mean pooling aborts at load when n_batch is not a multiple of the sequence count
+    # (also without decisions: -np 9 --embedding --pooling mean), so keep 2 + 6 = 8
+    server.decision_seqs = 6
+    server.start()
+    reference = decide(CONTEXTS[:1])
+    assert reference.status_code == 200
+    res = server.make_request("POST", "/v1/embeddings", data={"input": "I was charged twice."})
+    assert res.status_code == 200
+    # the embedding batch leaves embedding mode on the context, which would make every decision
+    # token an output (same values, a full output row per token)
+    after = decide(CONTEXTS[:1])
+    assert after.status_code == 200, after.body
+    a = reference.body["results"][0]["fields"]
+    b = after.body["results"][0]["fields"]
+    for name in a:
+        assert b[name]["value"] == a[name]["value"], name
+        assert abs(b[name]["probability"] - a[name]["probability"]) < 1e-5, name
+
+
+def test_decision_ignores_per_request_lora():
+    global server
+    server = ServerPreset.stories15m_moe()
+    server.lora_files = [download_file("https://huggingface.co/ggml-org/stories15M_MOE/resolve/main/moe_shakespeare15M.gguf")]
+    server.n_ctx = 2048
+    server.n_batch = 256
+    server.decision_seqs = 6
+    server.start()
+    reference = decide(CONTEXTS[:1])
+    assert reference.status_code == 200
+    # a completion with its own adapter scale leaves that scale on the context
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "Look in thy glass", "n_predict": 4, "lora": [{"id": 0, "scale": 0.0}],
+    })
+    assert res.status_code == 200
+    after = decide(CONTEXTS[:1])
+    assert after.status_code == 200, after.body
+    a = reference.body["results"][0]["fields"]
+    b = after.body["results"][0]["fields"]
+    for name in a:
+        assert b[name]["value"] == a[name]["value"], name
+        assert abs(b[name]["probability"] - a[name]["probability"]) < 1e-5, name
+
+
+def test_slot_reclaims_the_cached_decision_prefix():
+    global server
+    server.start()
+    instructions = "Read the request carefully. " * 60
+    prompt = "Once upon a time there was a little girl. " * 70
+    # the second call reports how many cells the cached static prefix holds
+    assert decide(CONTEXTS[:1], instructions=instructions).status_code == 200
+    res = decide(CONTEXTS[:1], instructions=instructions)
+    assert res.status_code == 200, res.body
+    n_prefix = res.body["usage"]["cached_tokens"]
+    n_prompt = len(server.make_request("POST", "/tokenize", data={"content": prompt}).body["tokens"])
+    # the completion does not fit beside the idle prefix in the unified KV cache, nor the next
+    # decision beside the idle slot
+    assert n_prefix + n_prompt + 8 > server.n_ctx
+    assert n_prompt + 8 <= server.n_ctx
+    res = server.make_request("POST", "/completion", data={"prompt": prompt, "n_predict": 8, "temperature": 0.0})
+    assert res.status_code == 200, res.body
+    # the prefix was dropped to make room; the decision takes the idle slot's cells and rebuilds it
+    res = decide(CONTEXTS[:1], instructions=instructions)
+    assert res.status_code == 200, res.body
+    assert res.body["usage"]["cached_tokens"] == 0

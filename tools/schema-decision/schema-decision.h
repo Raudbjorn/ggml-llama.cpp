@@ -156,6 +156,9 @@ class engine {
     // forget the cached prefix and clear every sequence the engine owns
     void reset();
 
+    // true while the static prefix of the last call holds cells in the context
+    bool has_cached_prefix() const { return !cached.empty(); }
+
   private:
     engine(llama_context * ctx, llama_seq_id seq_base, int n_seqs);
 

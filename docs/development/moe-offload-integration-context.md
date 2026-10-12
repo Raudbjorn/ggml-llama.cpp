@@ -95,7 +95,7 @@ has a throughput measurement: llvmpipe and OpenVINO CPU run on the host CPU.
 | 2. Static packs | done, opt-in | `bf671e8`, `43c945a`, `e078fb2` ([guide](../backend/MOE-PACK.md)): per-layer device, `--fit` accounting, eligibility checks (a LoRA on the experts disables the pack), the `build_lora_mm_id` precision path, no source `op_params` flag, exclusive with `--moe-cache`, `llama-bench --moe-pack` | `test-moe-pack` (`010aaf9` fixtures): bit-exact on the CPU, NMSE 3e-8 on Vulkan | SYCL run; A/B against `--moe-cache` at equal VRAM |
 | 3. Packs on OpenVINO | done, opt-in | `a6c59d1` (`-1` in `MUL_MAT_ID`/`ADD_ID`), `a6529c2` and `3a4ebce` (view write-back), `43c945a` (host id maps) | `test-moe-pack`; on OpenVINO `test-backend-ops` `MUL_MAT_ID` 757/757, `ADD_ID` 72/72 | fusion and compile-time cost, GPU device |
 | 4. Decision engine | done | `7957865` [llama-schema-decision](../../tools/schema-decision/README.md): errors as values, overflow-free bounds, joint-text tokenization, hybrid padding bounded by `n_ubatch` | `test-schema-decision-vocab`, `test-schema-decision` (oracle within 4e-8) on CPU and Vulkan, e2e on three real models | task accuracy and latency on real workloads; OpenVINO cannot run it (multi-sequence batches fail, below) |
-| 4. `/v1/decision` | done, opt-in (`--decision-seqs`) | `81e2bcf`: engine reset before context destruction, cancellation, 400/503/500 mapping; `/v1/systemone` unchanged | `tools/server/tests/unit/test_schema_decision.py` (16 tests, sleep/wake included) | - |
+| 4. `/v1/decision` | done, opt-in (`--decision-seqs`) | `81e2bcf`: engine reset before context destruction, cancellation, 400/503/500 mapping; `/v1/systemone` unchanged | `tools/server/tests/unit/test_schema_decision.py` (19 tests: sleep/wake, embeddings, per-request LoRA, cell reclaim) | - |
 | 5. CPU tensor parallel | done, experimental | `3277180` `--cpu-tp`, `--cpu-tp-margin` ([guide](../backend/CPU-TP.md)): explicit membership, one split source, sizing over all split files | `test-arg-parser`; perplexity on Vulkan+CPU | SYCL has no `cpy_tensor_async`; latency and capacity on the A770 |
 | 6. Async CPU splits | done, default off | `4e992bd` `--sched-async-cpu` ([section](../backend/MOE-PACK.md#overlapping-the-cold-chain---sched-async-cpu-experimental)): job joined on every return, memory-root dependency checks, serial with a MoE cache session, status propagation | `test-moe-pack`: logits bitwise equal with and without on CPU, Vulkan, OpenVINO; 8 splits launched beside the CPU split on Vulkan (4 steps x 2 packed layers); abort recovery; `test-moe-cache`: no split on the worker with a cache session | speed; oversubscription with `--cpu-tp` |
 | 6. Expert prediction | diagnostics only | `3872d7e` `llama-moe-trace --spec-router`, `--hidden-out` (versioned header, bounded) | `test-moe-trace` with a host recomputation oracle on CPU, Vulkan, OpenVINO | recall on real models; lead time |
@@ -127,6 +127,10 @@ Pre-existing failures seen on this host, unchanged by the branch (checked agains
     CPU worker.
 - With `LLAMA_BUILD_SERVER=OFF` the `llama` app does not link: `app/CMakeLists.txt`,
   which this branch does not change, always links `llama-server-impl`.
+- `llama-server --embedding --pooling mean` aborts at load with
+  `GGML_ASSERT(ggml_can_mul_mat(a, b))` when the sequence count does not divide the
+  batch size (`-np 9 -c 2048 -b 256` on stories260K, also on `master`); with
+  `--decision-seqs` the count is `-np` plus the decision sequences.
 
 ## Code map
 
