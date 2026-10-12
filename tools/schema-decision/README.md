@@ -148,7 +148,9 @@ sequence, and a recurrent or hybrid model (Qwen3.5, Nemotron-H) one recurrent st
 Recurrent layers take a ubatch only when every sequence in it holds the same number of tokens.
 On those models every group of branches is right-padded to its longest branch and bounded by
 `n_ubatch`, so a group is one ubatch. The logits are read at each branch's last real token, so the
-padding does not change them.
+padding does not change them. `scored_rows` counts the padded rows, since they are decoded; the
+limit of 65,536 rows per context counts the rows before padding. Groups are taken longest first,
+so one scoring round adds at most (free sequences - 1) x (longest - shortest branch) rows.
 
 A request that runs out of KV space, is cancelled, or fails in any other way returns an error and
 leaves none of the engine's sequences behind; the next request rebuilds the cached prefix. In

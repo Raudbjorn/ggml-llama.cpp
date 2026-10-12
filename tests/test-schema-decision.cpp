@@ -715,15 +715,23 @@ static void test_model(const std::string & path) {
         const batch_result greedy = e.decide_plan(plan, opt, err);
         CHECK(!err && greedy.rounds > 1, "%s: greedy needs several rounds (%d): %s", name.c_str(), greedy.rounds, err.message.c_str());
         compare_with_oracle("greedy", o, plan, greedy, opt, tol);
-        // usage counts every replay of the suffix and the chosen tokens
+        // usage counts every replay of the suffix and the chosen tokens; on a padded model also the
+        // rows that pad a branch to its group's longest, so more than the branches hold
+        size_t unpadded = 0, reported = 0;
         for (size_t i = 0; i < greedy.items.size(); ++i) {
             size_t want = 0;
             for (size_t f = 0; f < greedy.items[i].fields.size(); ++f) {
                 want += greedy_rows_to(plan.tails[plan.tail_of[i]][f], greedy.items[i].fields[f].winner);
             }
-            CHECK((size_t) greedy.items[i].rows == want, "%s: greedy context %zu reports %d rows, decoded %zu", name.c_str(), i,
-                  greedy.items[i].rows, want);
+            CHECK(padded ? (size_t) greedy.items[i].rows >= want : (size_t) greedy.items[i].rows == want,
+                  "%s: greedy context %zu reports %d rows, its branches hold %zu", name.c_str(), i, greedy.items[i].rows, want);
+            unpadded += want;
+            reported += (size_t) greedy.items[i].rows;
         }
+        CHECK(reported == (size_t) greedy.rows, "%s: context rows sum to %zu, the request reports %d", name.c_str(), reported,
+              greedy.rows);
+        CHECK(!padded || reported > unpadded, "%s: padded greedy branches report %zu rows, no more than their %zu tokens",
+              name.c_str(), reported, unpadded);
 
         opt.mode     = score_mode::automatic;
         opt.tree_max = 4; // fields 0-2 and 4 tree, field 3 greedy

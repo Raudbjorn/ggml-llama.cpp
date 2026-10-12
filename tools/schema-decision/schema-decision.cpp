@@ -559,10 +559,14 @@ failure engine::prepare_prefix(const tokens_t & shared, const options & opt, boo
 // passes. There each group is right-padded to its longest branch (longest first, so padding stays
 // small) and bounded by n_ubatch, so that it is one ubatch. Every layer is causal, so the logits
 // read at a branch's last real token do not see the padding, and the padded cells are removed
-// with the branch.
+// with the branch. rows[b] is the token rows decoded for branch b, its padding included. Groups
+// are taken longest first, so the padding of one call is at most
+// (n_free - 1) x (longest - shortest branch): a group's spread ends where the next group's begins.
 failure engine::score_branches(const std::vector<branch> & branches, llama_seq_id first, int n_free,
-                                   const options & opt, std::vector<std::vector<float>> & scores, int & n_decodes) {
+                                   const options & opt, std::vector<std::vector<float>> & scores,
+                                   std::vector<size_t> & rows_of, int & n_decodes) {
     scores.assign(branches.size(), {});
+    rows_of.assign(branches.size(), 0);
     if (n_free < 1) {
         return fail_with(error_code::internal, "no free sequence for the decision branches");
     }
@@ -606,6 +610,7 @@ failure engine::score_branches(const std::vector<branch> & branches, llama_seq_i
             llama_memory_seq_rm(mem, seq, -1, -1);
             llama_memory_seq_cp(mem, br.trunk, seq, -1, -1);
             const int n = pad_branches ? width : (int) br.toks.size();
+            rows_of[order[k]] = (size_t) n;
             for (int i = 0; i < n; ++i) {
                 const bool last = i + 1 == (int) br.toks.size();
                 if (last) {
@@ -839,7 +844,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
             for (size_t i = 0; i < n_group; ++i) {
                 state.push_back(tail_fields[plan.tail_of[g0 + i]]);
             }
-            std::vector<size_t> scored(n_group, 0); // token rows submitted per context
+            std::vector<size_t> scored(n_group, 0); // token rows decoded per context, padding included
             bool first = true;
             while (true) {
                 std::vector<branch> todo;
@@ -854,7 +859,6 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                                 for (size_t n = 0; n < fd.node_prefix.size(); ++n) {
                                     tokens_t ids = fd.suffix;
                                     ids.insert(ids.end(), fd.node_prefix[n].begin(), fd.node_prefix[n].end());
-                                    scored[i] += ids.size();
                                     todo.push_back({ trunk, pos0, ids, fd.node_options[n] });
                                     owner.push_back({ i, f });
                                 }
@@ -864,7 +868,6 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                             if (!opts.empty()) {
                                 tokens_t ids = fd.suffix;
                                 ids.insert(ids.end(), fd.chosen.begin(), fd.chosen.end());
-                                scored[i] += ids.size();
                                 todo.push_back({ trunk, pos0, ids, opts });
                                 owner.push_back({ i, f });
                             }
@@ -875,9 +878,14 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                     break;
                 }
                 std::vector<std::vector<float>> scores;
-                err = score_branches(todo, seq_pool + (llama_seq_id) n_group, n_pool - (int) n_group, opt, scores, out.decodes);
+                std::vector<size_t>             rows;
+                err = score_branches(todo, seq_pool + (llama_seq_id) n_group, n_pool - (int) n_group, opt, scores, rows,
+                                     out.decodes);
                 if (err) {
                     return fail(err);
+                }
+                for (size_t row = 0; row < owner.size(); ++row) {
+                    scored[owner[row].first] += rows[row];
                 }
                 out.rounds += 1;
                 std::vector<std::vector<std::vector<std::vector<float>>>> tree_scores(n_group);

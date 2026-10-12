@@ -43,7 +43,7 @@ constexpr size_t max_instructions_bytes = 65536;
 constexpr size_t max_context_bytes      = 1 << 20; // one context
 constexpr size_t max_request_bytes      = 16 << 20; // all contexts together
 constexpr size_t max_path_tokens        = 64;      // one value with its terminator
-constexpr size_t max_rows_per_context   = 65536;   // scored token rows of one context
+constexpr size_t max_rows_per_context   = 65536;   // token rows of one context, before recurrent padding
 constexpr int    max_tree_max           = 255;
 
 // what an error is about; llama-server maps it to an HTTP status
@@ -188,7 +188,8 @@ class engine {
     failure     decode_parts(const std::vector<prompt_part> & parts, const options & opt, int & n_decodes);
     failure     prepare_prefix(const tokens_t & shared, const options & opt, bool & hit, int & n_decodes);
     failure     score_branches(const std::vector<branch> & branches, llama_seq_id first, int n_free,
-                               const options & opt, std::vector<std::vector<float>> & scores, int & n_decodes);
+                               const options & opt, std::vector<std::vector<float>> & scores, std::vector<size_t> & rows,
+                               int & n_decodes);
     void        clear_pool();
 };
 
