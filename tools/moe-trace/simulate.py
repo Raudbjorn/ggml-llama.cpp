@@ -442,7 +442,8 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     with_cost = args.slab_mb is not None
-    reads_per_step = sum(len(steps[0]) for steps in decode.values() if steps)
+    # routed expert reads per decode step, from the rows themselves: a layer may route on fewer steps
+    reads_per_step = sum(len(ids) for step in events for _, ids in step) / len(events)
 
     hdr = f"{'budget':>7} {'slots':>5} | {'policy':>14} {'hit':>7} {'ins/tok':>8}"
     if with_cost:

@@ -199,6 +199,17 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("assumed cost model", out)
 
+    def test_cost_reads_follow_the_routed_rows(self) -> None:
+        # layer 1 routes only at pos 0: 6 expert reads over 2 decode steps is 3 per step, not
+        # one row of each layer (4). One slot per layer misses every read under lru.
+        uneven = write(self.tmp.name, "u.csv", HEADER.format(sid="u") + "0,0,0,1\n1,0,2,3\n0,1,0,1\n")
+        code, out, err = run([uneven, "--budgets", "0.25", "--slab-mb", "1000", "--ram-gbs", "1", "--link-gbs", "1"])
+        self.assertEqual(code, 0, err)
+        lru = next(line for line in out.splitlines() if "| " in line and line.split("|")[1].split()[0] == "lru")
+        cols = lru.split("|")[1].split()
+        self.assertEqual(cols[1], "0.0%")
+        self.assertEqual(cols[3], "3000.00")
+
     def test_invalid_arguments(self) -> None:
         for argv in (["--budgets", "0"], ["--budgets", "1.5"], ["--budgets", "x"], ["--reelect", "0"], ["--hot-uses", "-1"],
                      ["--inserts-per-plan", "0"], ["--inserts-per-plan", "1025"]):
