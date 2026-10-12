@@ -132,6 +132,12 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
             (current.prefill if pos < 0 else current.decode)[layer].append((pos, ids))
     if not sessions:
         return None, "no trace rows found"
+    if n_layer is not None:
+        # a row past the declared layers would add a layer, and dynamic pool units, to the replay
+        for s in sessions:
+            for layer in sorted(set(s.prefill) | set(s.decode)):
+                if layer >= n_layer:
+                    return None, f"session {s.sid}: layer {layer} is outside n_layer {n_layer}"
     for s in sessions:
         for rows in s.prefill.values():
             rows.sort(key=lambda r: -r[0])  # pos = -(p + 1): prompt order

@@ -291,6 +291,19 @@ class CliTests(unittest.TestCase):
         code, _, err = run([a, model("d", "qwen3moe", 2), "--profile", a, "--budgets", "0.5"])
         self.assertEqual(code, 0, err)
 
+    def test_layers_past_n_layer_are_rejected(self) -> None:
+        # a row of layer 2 in a 2-layer trace would add a layer, and pool units, to the replay
+        head = HEADER.format(sid="n").replace("# n_expert", "# n_layer=2\n# n_expert", 1)
+        bad = write(self.tmp.name, "n.csv", head + "0,0,0,1\n0,2,0,1\n")
+        good = write(self.tmp.name, "g.csv", head + "0,0,0,1\n0,1,0,1\n")
+        for argv in ([bad], [good, "--profile", bad]):
+            with self.subTest(argv=argv):
+                code, _, err = run(argv)
+                self.assertEqual(code, 2)
+                self.assertIn("layer 2", err)
+        code, _, err = run([good, "--budgets", "0.5"])
+        self.assertEqual(code, 0, err)
+
     def test_prefill_only_trace_is_rejected(self) -> None:
         pre = write(self.tmp.name, "pre.csv", HEADER.format(sid="c") + "-1,0,0,1\n")
         code, _, err = run([pre])
