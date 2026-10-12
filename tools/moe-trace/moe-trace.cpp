@@ -309,6 +309,27 @@ static bool same_file(const std::string & a, const std::string & b) {
     return ec ? a == b : ca == cb;
 }
 
+// the files the trace reads: every model shard (mapped while the trace runs) and the prompt file
+static std::vector<std::string> trace_inputs(const llama_model * model, const common_params & params) {
+    std::vector<std::string> inputs = { params.model.path };
+    const std::string count = meta_str(model, "split.count");
+    const int n_split = count.empty() ? 0 : atoi(count.c_str());
+    // the loader derives the other shard names the same way from the first shard
+    std::vector<char> prefix(params.model.path.size() + 1, 0);
+    if (n_split > 1 && llama_split_prefix(prefix.data(), prefix.size(), params.model.path.c_str(), 0, n_split) > 0) {
+        std::vector<char> path(params.model.path.size() + 32, 0);
+        for (int i = 1; i < n_split; i++) {
+            if (llama_split_path(path.data(), path.size(), prefix.data(), i, n_split) > 0) {
+                inputs.emplace_back(path.data());
+            }
+        }
+    }
+    if (!params.prompt_file.empty()) {
+        inputs.push_back(params.prompt_file);
+    }
+    return inputs;
+}
+
 static uint64_t new_session_id() {
     std::random_device rd;
     const uint64_t t = (uint64_t) std::chrono::system_clock::now().time_since_epoch().count();
@@ -387,11 +408,13 @@ static int run_trace(common_params & params, trace_state & ts) {
         LOG_ERR("%s: -o, --spec-out and --hidden-out must name different files\n", __func__);
         return 1;
     }
-    // opening an output truncates it: none may be the model file, which is mapped and read
-    if (same_file(params.out_file, params.model.path) || (spec_on && same_file(params.moe_trace_spec_out, params.model.path)) ||
-        (hid_on && same_file(params.moe_trace_hidden_out, params.model.path))) {
-        LOG_ERR("%s: -o, --spec-out and --hidden-out must not name the model file '%s'\n", __func__, params.model.path.c_str());
-        return 1;
+    // opening an output truncates it: none may be an input, least of all a mapped model shard
+    for (const std::string & in : trace_inputs(model, params)) {
+        if (same_file(params.out_file, in) || (spec_on && same_file(params.moe_trace_spec_out, in)) ||
+            (hid_on && same_file(params.moe_trace_hidden_out, in))) {
+            LOG_ERR("%s: -o, --spec-out and --hidden-out must not name the input file '%s'\n", __func__, in.c_str());
+            return 1;
+        }
     }
 
     if (params.moe_spec_router_k > 0) {

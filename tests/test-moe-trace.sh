@@ -169,9 +169,35 @@ for opt in "-o" "--spec-out"; do
             --spec-out "$work_dir/v-spec.csv" "$opt" "$work_dir/victim.gguf" > "$work_dir/victim.log" 2>&1; then
         fail "$opt naming the model must be rejected"
     fi
-    grep -q "must not name the model file" "$work_dir/victim.log" || fail "$opt naming the model: missing diagnostic"
+    grep -q "must not name the input file" "$work_dir/victim.log" || fail "$opt naming the model: missing diagnostic"
     [ "$(wc -c < "$work_dir/victim.gguf")" = "$victim_size" ] || fail "$opt naming the model truncated it"
 done
+# nor any other input: the prompt file, or a later shard of a split model
+printf 'hello\n' > "$work_dir/prompt.txt"
+if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -f "$work_dir/prompt.txt" -n 1 -c 64 \
+        -o "$work_dir/prompt.txt" > "$work_dir/pf.log" 2>&1; then
+    fail "-o naming the prompt file must be rejected"
+fi
+grep -q "must not name the input file" "$work_dir/pf.log" || fail "-o naming the prompt file: missing diagnostic"
+[ "$(cat "$work_dir/prompt.txt")" = "hello" ] || fail "-o naming the prompt file truncated it"
+split_bin="$(dirname "$trace_bin")/llama-gguf-split"
+if [ -x "$split_bin" ]; then
+    "$split_bin" --split --split-max-tensors 8 "$work_dir/qwen3moe-moe.gguf" "$work_dir/shard" \
+        > "$work_dir/split.log" 2>&1 || fail "llama-gguf-split failed: $(tail -n 2 "$work_dir/split.log")"
+    first=$(find "$work_dir" -name 'shard-*-of-*.gguf' | sort | head -n 1)
+    last=$(find "$work_dir" -name 'shard-*-of-*.gguf' | sort | tail -n 1)
+    [ "$first" != "$last" ] || fail "the fixture split into a single shard"
+    "$trace_bin" -m "$first" -p "hello" -n 1 -c 64 -o "$work_dir/shard.csv" > "$work_dir/shard-ok.log" 2>&1 \
+        || fail "trace of the split model failed: $(tail -n 2 "$work_dir/shard-ok.log")"
+    last_size=$(wc -c < "$last")
+    if "$trace_bin" -m "$first" -p "hello" -n 1 -c 64 -o "$last" > "$work_dir/shard.log" 2>&1; then
+        fail "-o naming a later model shard must be rejected"
+    fi
+    grep -q "must not name the input file" "$work_dir/shard.log" || fail "-o naming a shard: missing diagnostic"
+    [ "$(wc -c < "$last")" = "$last_size" ] || fail "-o naming a shard truncated it"
+else
+    printf 'skip: shard aliasing (no %s)\n' "$split_bin"
+fi
 printf 'ok: colliding output paths rejected\n'
 
 if "$trace_bin" -m "$work_dir/llama-moe.gguf" -p "hello world" -n 2 -c 64 -o "$work_dir/lm.csv" \
