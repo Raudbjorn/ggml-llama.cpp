@@ -233,6 +233,21 @@ class CliTests(unittest.TestCase):
         code, _, _ = run([bare, "--n-expert", "4"])
         self.assertEqual(code, 0)
 
+    def test_traces_of_different_models_are_rejected(self) -> None:
+        # the same n_expert, but another architecture or layer count: layer ids do not line up
+        def model(sid: str, arch: str, n_layer: int) -> str:
+            head = HEADER.format(sid=sid).replace("# n_expert", f"# arch={arch}\n# n_layer={n_layer}\n# n_expert", 1)
+            return write(self.tmp.name, f"{sid}.csv", head + "0,0,0,1\n1,0,1,2\n")
+        a = model("a", "qwen3moe", 2)
+        for other, what in ((model("b", "qwen35moe", 2), "arch"), (model("c", "qwen3moe", 3), "n_layer")):
+            for argv in ([a, other], [a, "--profile", other]):
+                with self.subTest(argv=argv):
+                    code, _, err = run(argv)
+                    self.assertEqual(code, 2)
+                    self.assertIn(what, err)
+        code, _, err = run([a, model("d", "qwen3moe", 2), "--profile", a, "--budgets", "0.5"])
+        self.assertEqual(code, 0, err)
+
     def test_prefill_only_trace_is_rejected(self) -> None:
         pre = write(self.tmp.name, "pre.csv", HEADER.format(sid="c") + "-1,0,0,1\n")
         code, _, err = run([pre])

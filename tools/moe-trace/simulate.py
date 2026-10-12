@@ -51,6 +51,8 @@ class Trace:
     sessions: list[Session]
     n_expert: int | None
     n_used: int
+    arch: str | None = None
+    n_layer: int | None = None
 
 
 @dataclass
@@ -64,6 +66,8 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
     sessions: list[Session] = []
     n_expert: int | None = None
     n_used = 0
+    arch: str | None = None
+    n_layer: int | None = None
     for path in paths:
         try:
             with open(path, encoding="utf-8") as f:
@@ -92,6 +96,20 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
                     if n <= 0 or (n_expert is not None and n != n_expert):
                         return None, f"{path}:{lineno}: n_expert {n} conflicts with {n_expert}"
                     n_expert = n
+                elif key == "arch":
+                    # traces of different models cannot be combined: their layer ids do not line up
+                    a = value.strip()
+                    if arch is not None and a != arch:
+                        return None, f"{path}:{lineno}: arch {a} conflicts with {arch}"
+                    arch = a
+                elif key == "n_layer":
+                    try:
+                        n = int(value)
+                    except ValueError:
+                        return None, f"{path}:{lineno}: invalid n_layer '{value}'"
+                    if n <= 0 or (n_layer is not None and n != n_layer):
+                        return None, f"{path}:{lineno}: n_layer {n} conflicts with {n_layer}"
+                    n_layer = n
                 continue
             if line.startswith("pos,"):
                 continue
@@ -120,7 +138,7 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
             rows.sort(key=lambda r: -r[0])  # pos = -(p + 1): prompt order
         for rows in s.decode.values():
             rows.sort(key=lambda r: r[0])
-    return Trace(sessions=sessions, n_expert=n_expert, n_used=n_used), None
+    return Trace(sessions=sessions, n_expert=n_expert, n_used=n_used, arch=arch, n_layer=n_layer), None
 
 
 def validate_ids(trace: Trace, n_expert: int) -> str | None:
@@ -397,6 +415,10 @@ def main(argv: list[str] | None = None) -> int:
         if profile.n_expert is not None and profile.n_expert != n_expert:
             print(f"error: profile n_expert {profile.n_expert} differs from {n_expert}", file=sys.stderr)
             return 2
+        for what, ours, theirs in (("arch", trace.arch, profile.arch), ("n_layer", trace.n_layer, profile.n_layer)):
+            if ours is not None and theirs is not None and ours != theirs:
+                print(f"error: profile {what} {theirs} differs from the trace's {ours}", file=sys.stderr)
+                return 2
         err = validate_ids(profile, n_expert)
         if err:
             print(f"error: profile: {err}", file=sys.stderr)

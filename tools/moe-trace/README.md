@@ -133,7 +133,9 @@ model (with the 512 MiB default it binds only above 64 MiB per expert tensor).
 
 Expert counts come from the trace's `# n_expert=` line, or from `--n-expert`
 for a trace without one (a different value is an error), never from the
-largest observed id. Sessions are replayed in file order with cache state
+largest observed id. All traces and the `--profile` traces must agree on
+`# arch=` and `# n_layer=` where they carry them: layer ids of different models
+do not line up. Sessions are replayed in file order with cache state
 carried over; `reelect-K` adds each session's prompt routing to its counts when
 that session starts. The cost columns appear only when `--slab-mb`,
 `--ram-gbs` and `--link-gbs` are all given; they are an assumed model that
