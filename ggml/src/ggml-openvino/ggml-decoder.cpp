@@ -1368,9 +1368,11 @@ void GgmlOvDecoder::compute_model_outputs() {
         }
         if (cur_node->op == GGML_OP_VIEW || cur_node->op == GGML_OP_RESHAPE) {
             // A scheduler split is a view of the whole graph, so a view consumed by a later split
-            // reads its source's memory: write the source back when it is computed here.
+            // reads its source's memory: write the source back when it is computed here. A view
+            // nothing consumes is a graph output (an eval callback reads it), so it is written too.
             ggml_tensor * src = cur_node->view_src;
-            if (src == nullptr || use_count(cur_node) == uses_in_graph(cur_node) || src->op == GGML_OP_NONE ||
+            const int n_use = use_count(cur_node);
+            if (src == nullptr || (n_use > 0 && n_use == uses_in_graph(cur_node)) || src->op == GGML_OP_NONE ||
                 src->op == GGML_OP_VIEW || src->op == GGML_OP_RESHAPE ||
                 std::find(m_cgraph->nodes, m_cgraph->nodes + m_cgraph->n_nodes, src) == m_cgraph->nodes + m_cgraph->n_nodes) {
                 continue;
