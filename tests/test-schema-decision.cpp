@@ -555,6 +555,35 @@ static token_plan random_plan(std::mt19937 & rng, int n_vocab, const std::vector
     return p;
 }
 
+// token rows a greedy walk decodes on its way to value w: the suffix and the chosen tokens at
+// every divergence
+static size_t greedy_rows_to(const field_tokens & ft, int w) {
+    std::vector<size_t> act;
+    for (size_t i = 0; i < ft.paths.size(); ++i) {
+        act.push_back(i);
+    }
+    size_t rows = 0;
+    for (size_t depth = 0; act.size() > 1 && w >= 0 && depth < ft.paths[w].size(); ++depth) {
+        std::vector<llama_token> next;
+        std::vector<size_t>      keep;
+        for (size_t i : act) {
+            if (depth < ft.paths[i].size()) {
+                if (std::find(next.begin(), next.end(), ft.paths[i][depth]) == next.end()) {
+                    next.push_back(ft.paths[i][depth]);
+                }
+                if (ft.paths[i][depth] == ft.paths[w][depth]) {
+                    keep.push_back(i);
+                }
+            }
+        }
+        if (next.size() > 1) {
+            rows += ft.suffix.size() + depth;
+        }
+        act = keep;
+    }
+    return rows;
+}
+
 static bool engine_seqs_empty(llama_context * ctx, llama_seq_id base, int n) {
     for (llama_seq_id s = base; s < base + n; ++s) {
         if (llama_memory_seq_pos_max(llama_get_memory(ctx), s) >= 0) {
@@ -632,6 +661,15 @@ static void test_model(const std::string & path) {
         const batch_result greedy = e.decide_plan(plan, opt, err);
         CHECK(!err && greedy.rounds > 1, "%s: greedy needs several rounds (%d): %s", name.c_str(), greedy.rounds, err.message.c_str());
         compare_with_oracle("greedy", o, plan, greedy, opt, tol);
+        // usage counts every replay of the suffix and the chosen tokens
+        for (size_t i = 0; i < greedy.items.size(); ++i) {
+            size_t want = 0;
+            for (size_t f = 0; f < greedy.items[i].fields.size(); ++f) {
+                want += greedy_rows_to(plan.tails[plan.tail_of[i]][f], greedy.items[i].fields[f].winner);
+            }
+            CHECK((size_t) greedy.items[i].rows == want, "%s: greedy context %zu reports %d rows, decoded %zu", name.c_str(), i,
+                  greedy.items[i].rows, want);
+        }
 
         opt.mode     = score_mode::automatic;
         opt.tree_max = 4; // fields 0-2 and 4 tree, field 3 greedy
@@ -677,6 +715,26 @@ static void test_model(const std::string & path) {
         broken.trunks[1].push_back(n_vocab);
         e.decide_plan(broken, opt, err);
         CHECK(err.code == error_code::invalid_request, "%s: out-of-vocabulary token accepted", name.c_str());
+        // greedy replays the suffix and the chosen tokens at every divergence: 32 fields of a
+        // 63-value comb (c^k z term) score up to 32 * (62 * 3 + 1891) = 66464 rows, over the limit
+        {
+            field_tokens comb;
+            comb.suffix = { 4, 5, 6 };
+            for (int k = 0; k < 63; ++k) {
+                tokens_t path(k, 1);
+                path.push_back(2);
+                path.push_back(3);
+                comb.paths.push_back(path);
+            }
+            broken = plan;
+            broken.tails = { std::vector<field_tokens>(32, comb) };
+            const score_mode mode = opt.mode;
+            opt.mode = score_mode::greedy;
+            e.decide_plan(broken, opt, err);
+            CHECK(err.code == error_code::invalid_request && err.message.find("66464 token rows") != std::string::npos,
+                  "%s: greedy rows over the limit: '%s'", name.c_str(), err.message.c_str());
+            opt.mode = mode;
+        }
         opt.tree_max = 256;
         e.decide_plan(plan, opt, err);
         CHECK(err.code == error_code::invalid_request && err.message.find("tree_max") != std::string::npos,

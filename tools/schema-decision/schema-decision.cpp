@@ -177,6 +177,47 @@ struct decision_field {
         return n;
     }
 
+    // greedy: the most token rows the walk of options() and select() can decode, over every
+    // value it can end on (each divergence replays the suffix and the chosen tokens)
+    size_t greedy_max_rows() const {
+        std::vector<int> all;
+        for (int i = 0; i < (int) paths.size(); ++i) {
+            all.push_back(i);
+        }
+        return greedy_max_rows(std::move(all), 0);
+    }
+
+    size_t greedy_max_rows(std::vector<int> act, size_t depth) const {
+        while (act.size() > 1) {
+            std::vector<std::pair<llama_token, std::vector<int>>> next;
+            for (int i : act) {
+                if (depth >= paths[i].size()) {
+                    continue;
+                }
+                const llama_token t  = paths[i][depth];
+                auto              it = std::find_if(next.begin(), next.end(), [t](const auto & g) { return g.first == t; });
+                if (it == next.end()) {
+                    next.push_back({ t, { i } });
+                } else {
+                    it->second.push_back(i);
+                }
+            }
+            if (next.size() > 1) {
+                size_t worst = 0;
+                for (auto & g : next) {
+                    worst = std::max(worst, greedy_max_rows(std::move(g.second), depth + 1));
+                }
+                return suffix.size() + depth + worst;
+            }
+            if (next.empty()) {
+                break;
+            }
+            act = std::move(next[0].second);
+            ++depth;
+        }
+        return 0;
+    }
+
     // Constrained distribution: log-softmax at each node over its allowed tokens, summed along
     // every candidate path, normalised over candidates. node_scores holds finite logits.
     void finish_tree(const std::vector<std::vector<float>> & node_scores) {
@@ -715,7 +756,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
 
         // per tail: the fields as tries; per context the round-1 branches and rows
         std::vector<std::vector<decision_field>> tail_fields;
-        std::vector<size_t> tail_rows, tail_branches, tail_max_branch;
+        std::vector<size_t> tail_branches, tail_max_branch;
         for (const auto & tf : plan.tails) {
             std::vector<decision_field> fields;
             size_t rows = 0, branches = 0, max_branch = 0;
@@ -724,17 +765,16 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                 field.build_nodes();
                 const size_t n = tf[f].paths.size();
                 field.use_tree = opt.mode == score_mode::tree ? true : opt.mode == score_mode::greedy ? false : n <= (size_t) opt.tree_max;
-                rows      += field.use_tree ? field.tree_rows() : field.suffix.size() + field.max_path();
+                rows      += field.use_tree ? field.tree_rows() : field.greedy_max_rows();
                 branches  += field.use_tree ? field.node_prefix.size() : (n > 1 ? 1 : 0);
                 max_branch = std::max(max_branch, field.suffix.size() + field.max_path());
                 fields.push_back(std::move(field));
             }
             if (rows > max_rows_per_context) {
-                return invalid("the schema scores " + std::to_string(rows) + " token rows per context, more than " +
+                return invalid("the schema scores up to " + std::to_string(rows) + " token rows per context, more than " +
                             std::to_string(max_rows_per_context));
             }
             tail_fields.push_back(std::move(fields));
-            tail_rows.push_back(rows);
             tail_branches.push_back(branches);
             tail_max_branch.push_back(max_branch);
         }
@@ -749,7 +789,6 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                             " positions with its longest branch, the context holds " + std::to_string(n_ctx_seq));
             }
             branches = std::max(branches, tail_branches[t]);
-            out.rows += (int) tail_rows[t];
         }
 
         out.shared_tokens = plan.shared.size();
@@ -791,6 +830,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
             for (size_t i = 0; i < n_group; ++i) {
                 state.push_back(tail_fields[plan.tail_of[g0 + i]]);
             }
+            std::vector<size_t> scored(n_group, 0); // token rows submitted per context
             bool first = true;
             while (true) {
                 std::vector<branch> todo;
@@ -805,6 +845,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                                 for (size_t n = 0; n < fd.node_prefix.size(); ++n) {
                                     tokens_t ids = fd.suffix;
                                     ids.insert(ids.end(), fd.node_prefix[n].begin(), fd.node_prefix[n].end());
+                                    scored[i] += ids.size();
                                     todo.push_back({ trunk, pos0, ids, fd.node_options[n] });
                                     owner.push_back({ i, f });
                                 }
@@ -814,6 +855,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                             if (!opts.empty()) {
                                 tokens_t ids = fd.suffix;
                                 ids.insert(ids.end(), fd.chosen.begin(), fd.chosen.end());
+                                scored[i] += ids.size();
                                 todo.push_back({ trunk, pos0, ids, opts });
                                 owner.push_back({ i, f });
                             }
@@ -863,7 +905,8 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                 llama_memory_seq_rm(mem, seq_pool + (llama_seq_id) i, -1, -1);
                 result & r = out.items[g0 + i];
                 r.context_tokens = plan.trunks[g0 + i].size();
-                r.rows           = (int) tail_rows[plan.tail_of[g0 + i]];
+                r.rows           = (int) scored[i];
+                out.rows        += (int) scored[i];
                 for (auto & fd : state[i]) {
                     if (fd.use_tree && fd.probs.empty()) {
                         fd.finish_tree({});
