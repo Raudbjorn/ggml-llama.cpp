@@ -127,7 +127,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(simulate.sim_static(evaluated, simulate.top_by_freq(evaluated, 2)).hit, 1.0)
 
     def test_lru_evicts_least_recent(self) -> None:
-        res = simulate.sim_lru({0: [[0], [1], [0], [2], [1]]}, 2)
+        res = simulate.sim_lru({0: [[0], [1], [0], [2], [1]]}, 2, n_steps=5)
         # hits: third access of 0 only; 2 evicts 1, so the final 1 misses
         self.assertAlmostEqual(res.hit, 1 / 5)
 
@@ -171,7 +171,7 @@ class PolicyTests(unittest.TestCase):
             trace, err = simulate.parse_traces([write(d, "a.csv", a), write(d, "b.csv", b)])
         self.assertIsNone(err)
         assert trace is not None
-        res = simulate.sim_reelect(trace, slots=1, interval=100)
+        res = simulate.sim_reelect(trace, slots=1, interval=100, n_steps=len(simulate.decode_events(trace)))
         self.assertAlmostEqual(res.hit, 1.0)
         # b's prompt re-elects expert 1: one insertion over 4 decode steps
         self.assertAlmostEqual(res.inserts_per_step, 1 / 4)
@@ -227,6 +227,20 @@ class CliTests(unittest.TestCase):
         cols = lru.split("|")[1].split()
         self.assertEqual(cols[1], "0.0%")
         self.assertEqual(cols[3], "3000.00")
+
+    def test_insert_rates_follow_the_decode_events(self) -> None:
+        # session a routes only layer 0, session b only layer 1: two decode events, one insert
+        # each, so 1.00 per token, although the busiest layer holds one step. reelect inserts
+        # once, when session b's prompt re-elects layer 1: 0.50.
+        a = HEADER.format(sid="a") + "0,0,0\n"
+        b = HEADER.format(sid="b") + "-1,1,2\n0,1,2\n"
+        path = write(self.tmp.name, "ab.csv", a + b)
+        code, out, err = run([path, "--budgets", "0.25"])
+        self.assertEqual(code, 0, err)
+        for policy, want in (("lru", "1.00"), ("lfu-decay", "1.00"), ("dynamic", "1.00"), ("reelect-32", "0.50")):
+            with self.subTest(policy=policy):
+                line = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == policy)
+                self.assertEqual(line.split("|")[1].split()[2], want)
 
     def test_invalid_arguments(self) -> None:
         for argv in (["--budgets", "0"], ["--budgets", "1.5"], ["--budgets", "x"], ["--reelect", "0"], ["--hot-uses", "-1"],

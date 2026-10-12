@@ -195,10 +195,6 @@ def top_by_freq(steps_by_layer: dict[int, list[Step]], slots: int) -> dict[int, 
     return resident
 
 
-def n_decode_steps(decode: dict[int, list[Step]]) -> int:
-    return max((len(s) for s in decode.values()), default=0)
-
-
 def sim_static(decode: dict[int, list[Step]], resident: dict[int, set[int]]) -> Result:
     hits = total = 0
     for layer, steps in decode.items():
@@ -210,7 +206,7 @@ def sim_static(decode: dict[int, list[Step]], resident: dict[int, set[int]]) -> 
     return Result(hits / max(total, 1), 0.0)
 
 
-def sim_lru(decode: dict[int, list[Step]], slots: int) -> Result:
+def sim_lru(decode: dict[int, list[Step]], slots: int, n_steps: int) -> Result:
     hits = total = inserts = 0
     for steps in decode.values():
         cache: OrderedDict[int, None] = OrderedDict()
@@ -225,10 +221,10 @@ def sim_lru(decode: dict[int, list[Step]], slots: int) -> Result:
                     cache.popitem(last=False)
                 cache[e] = None
                 inserts += 1
-    return Result(hits / max(total, 1), inserts / max(n_decode_steps(decode), 1))
+    return Result(hits / max(total, 1), inserts / max(n_steps, 1))
 
 
-def sim_lfu_decay(decode: dict[int, list[Step]], slots: int, alpha: float = 0.95) -> Result:
+def sim_lfu_decay(decode: dict[int, list[Step]], slots: int, n_steps: int, alpha: float = 0.95) -> Result:
     hits = total = inserts = 0
     for steps in decode.values():
         score: dict[int, float] = defaultdict(float)
@@ -250,10 +246,10 @@ def sim_lfu_decay(decode: dict[int, list[Step]], slots: int, alpha: float = 0.95
                         cache.discard(victim)
                         cache.add(e)
                         inserts += 1
-    return Result(hits / max(total, 1), inserts / max(n_decode_steps(decode), 1))
+    return Result(hits / max(total, 1), inserts / max(n_steps, 1))
 
 
-def sim_reelect(trace: Trace, slots: int, interval: int, alpha: float = 0.98) -> Result:
+def sim_reelect(trace: Trace, slots: int, interval: int, n_steps: int, alpha: float = 0.98) -> Result:
     """Per-layer decayed counts re-elected every `interval` decode steps. Sessions run in file
     order: each session's prompt routing joins the counts, and re-elects, when it is reached."""
     hits = total = inserts = 0
@@ -284,7 +280,7 @@ def sim_reelect(trace: Trace, slots: int, interval: int, alpha: float = 0.98) ->
                     inserts += len(new - cache)
                     cache = new
                 step += 1
-    return Result(hits / max(total, 1), inserts / max(n_decode_steps(decode_steps(trace)), 1))
+    return Result(hits / max(total, 1), inserts / max(n_steps, 1))
 
 
 PROVIDER_INSERTS_PER_PLAN = 8  # GGML_CUDA_MOE_CACHE_INSERTS default, ggml-moe-cache-common.h
@@ -437,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     lo, hi = min(trace.widths.values()), max(trace.widths.values())
     active = str(lo) if lo == hi else f"{lo}-{hi}"
     print(f"trace: {len(trace.sessions)} session(s), {len(decode)} MoE layers, {n_expert} experts, "
-          f"{active} active/token, {n_decode_steps(decode)} decode steps")
+          f"{active} active/token, {len(events)} decode steps")
     for line in skew_lines(decode):
         print(line)
     print()
@@ -458,9 +454,10 @@ def main(argv: list[str] | None = None) -> int:
             rows.append(("static", sim_static(decode, top_by_freq(decode_steps(profile), slots))))
         rows.append(("static-oracle", sim_static(decode, top_by_freq(decode, slots))))
         rows.append(("static-prefill", sim_static(decode, top_by_freq(prefill, slots)) if prefill else None))
-        rows.append(("lru", sim_lru(decode, slots)))
-        rows.append(("lfu-decay", sim_lfu_decay(decode, slots)))
-        rows.append((f"reelect-{args.reelect}", sim_reelect(trace, slots, args.reelect)))
+        # rates per decode event: a layer may route on fewer steps than the model decodes
+        rows.append(("lru", sim_lru(decode, slots, len(events))))
+        rows.append(("lfu-decay", sim_lfu_decay(decode, slots, len(events))))
+        rows.append((f"reelect-{args.reelect}", sim_reelect(trace, slots, args.reelect, len(events))))
         rows.append(("dynamic", sim_dynamic(events, slots * len(decode), args.hot_uses, args.inserts_per_plan)))
         for name, res in rows:
             if res is None:
