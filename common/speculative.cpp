@@ -297,8 +297,6 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
         zeros.assign(llama_model_n_embd_inp(llama_get_model(ctx_dft)), 0.0f);
 
-        zeros.assign(llama_model_n_embd_inp(llama_get_model(ctx_dft)), 0.0f);
-
         SPC_TRC("%s", "adding speculative implementation 'draft-simple'\n");
         SPC_TRC("- n_max=%d, n_min=%d, p_min=%f\n", this->params.n_max, this->params.n_min, this->params.p_min);
         SPC_TRC("- gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n",

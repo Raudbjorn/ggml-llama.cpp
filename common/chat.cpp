@@ -1531,7 +1531,8 @@ common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const st
     auto tokens = common_tokenize(vocab, text, false, true);
     for (size_t i = 0; i < tokens.size(); i++) {
         std::string piece = common_token_to_piece(vocab, tokens[i], true);
-        if (i == 0 && std::isspace(piece[0]) && !std::isspace(text[0])) {
+        if (i == 0 && !piece.empty() && !text.empty() &&
+            std::isspace(static_cast<unsigned char>(piece[0])) && !std::isspace(static_cast<unsigned char>(text[0]))) {
             // Some tokenizers will add a space before the first special token, need to exclude
             continue;
         }

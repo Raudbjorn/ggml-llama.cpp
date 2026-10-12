@@ -1744,7 +1744,7 @@ static ggml_cgraph * get_compute_graph(ggml_cgraph * cgraph, ov_runtime_context 
     if (std::none_of(cgraph->nodes, cgraph->nodes + cgraph->n_nodes, is_skipped)) {
         return cgraph;
     }
-    auto & compute = r_ctx.compute_graphs[cgraph];
+    auto & compute = r_ctx.shared_compute_graph;
     compute.nodes.clear();
     std::copy_if(cgraph->nodes, cgraph->nodes + cgraph->n_nodes, std::back_inserter(compute.nodes),
                  [&](const ggml_tensor * node) { return !is_skipped(node); });

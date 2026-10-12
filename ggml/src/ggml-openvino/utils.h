@@ -124,7 +124,7 @@ struct ov_runtime_context {
         ggml_cgraph graph;
         std::vector<ggml_tensor *> nodes;
     };
-    std::unordered_map<const ggml_cgraph *, compute_graph> compute_graphs;
+    compute_graph shared_compute_graph;
 
     ov_runtime_context() : device("CPU"), stateful(false), stateful_kv_size(0) {}
 
