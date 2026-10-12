@@ -825,6 +825,12 @@ static void test_model(const std::string & path) {
                 }
                 const batch_result r = e.value->decide_plan(plan, opt, err);
                 CHECK(!err && r.items.size() == 3, "%s: request after KV exhaustion: %s", name.c_str(), err.message.c_str());
+                // the longest branch decodes 3 suffix tokens and a 2-token prefix (the candidate is
+                // read from the logits, the one-value field scores nothing): 6 + 244 + 5 fits 256
+                std::mt19937 rng4(13);
+                e.value->decide_plan(random_plan(rng4, n_vocab, { 244 }), opt, err);
+                CHECK(!(err.code == error_code::invalid_request && err.message.find("positions") != std::string::npos),
+                      "%s: a context that fits its longest branch was refused: '%s'", name.c_str(), err.message.c_str());
                 std::mt19937 rng3(12);
                 e.value->decide_plan(random_plan(rng3, n_vocab, { 300 }), opt, err);
                 CHECK(err.code == error_code::invalid_request && err.message.find("positions") != std::string::npos,

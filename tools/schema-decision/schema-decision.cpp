@@ -161,10 +161,12 @@ struct decision_field {
         }
     }
 
-    size_t max_path() const {
+    // the longest branch either mode decodes: the suffix and the prefix of the deepest divergence
+    // node (the scored token itself is read from the logits); 0 when nothing is scored
+    size_t max_branch() const {
         size_t n = 0;
-        for (const auto & p : paths) {
-            n = std::max(n, p.size());
+        for (const auto & p : node_prefix) {
+            n = std::max(n, suffix.size() + p.size());
         }
         return n;
     }
@@ -774,7 +776,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                                  (opt.mode == score_mode::automatic && n <= (size_t) opt.tree_max);
                 rows      += field.use_tree ? field.tree_rows() : field.greedy_max_rows();
                 branches  += field.use_tree ? field.node_prefix.size() : (n > 1 ? 1 : 0);
-                max_branch = std::max(max_branch, field.suffix.size() + field.max_path());
+                max_branch = std::max(max_branch, field.max_branch());
                 fields.push_back(std::move(field));
             }
             if (rows > max_rows_per_context) {
