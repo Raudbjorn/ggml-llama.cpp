@@ -2031,9 +2031,12 @@ ggml_tensor * llm_graph_context::build_ffn(
     return cur;
 }
 
-void llm_graph_context::build_moe_spec_router(ggml_tensor * inp, ggml_tensor * norm_w, ggml_tensor * gate_inp, int il) {
+void llm_graph_context::build_moe_spec_router(ggml_tensor * attn_norm, ggml_tensor * inp, ggml_tensor * norm_w, ggml_tensor * gate_inp, int il) {
     if (cparams.moe_spec_router_k == 0 || inp == nullptr || norm_w == nullptr || gate_inp == nullptr) {
         return;
+    }
+    if (attn_norm) {
+        ggml_build_forward_expand(gf, attn_norm);
     }
     // softmax and sigmoid gating select the top k of the logits, so the logits rank the experts
     const int64_t k = std::min<int64_t>(cparams.moe_spec_router_k, gate_inp->ne[1]);

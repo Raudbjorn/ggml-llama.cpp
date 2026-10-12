@@ -46,8 +46,10 @@ token; layer 0 always has every prompt token.
 ## Expert prediction diagnostics (experimental)
 
 Two opt-in outputs for measuring whether expert routing can be predicted early
-enough to prefetch. Neither changes what the model computes: the test checks that
-the routed experts of every row are the same with and without them.
+enough to prefetch. Nothing consumes what they add, but `--spec-router` adds graph
+nodes and both add eval-callback reads, which can change backend fusion or graph
+partitioning and so the last bits of later results. The test checks that the
+routed experts of every row stay the same on the fixtures.
 
 ```bash
 llama-moe-trace -m model.gguf -ngl 99 --n-cpu-moe 99 -f prompt.txt -n 256 --seed 1 -o work.csv \
@@ -60,7 +62,8 @@ attention, through the router's own RMS norm, and traces its top K as
 not a trained predictor. Its lead time is the layer's attention block, because the
 prediction depends only on the layer input. The ids go to `--spec-out` in the trace
 format above, with a `# kind=spec-router k=K` line and the session id of the main
-trace. The log reports the recall: the share of the routed decode experts that were
+trace; `--moe-pack-profile` and `simulate.py` refuse such a file. The log reports
+the recall: the share of the routed decode experts that were
 among the K predicted ones, overall and for the worst and best layer. K is
 1..4096, at most the model's expert count. Supported: qwen3moe and qwen35moe. On
 any other architecture the tool exits with an error.
@@ -76,9 +79,11 @@ default 64), three float32 vectors per layer and step:
 
 The file starts with text lines: `llama-moe-trace hidden v1`, then `key=value`
 lines (session, `byte_order=little`, model path, description and size, arch,
-`n_layer`, `n_embd`, `n_decode`, the tag and record layouts), then `end`. Records
-follow: `pos`, `layer`, `tag`, `n` as int32, then `n` float32 values. The file is at
-most `n_decode x n_layer x 3 x (16 + 4 n_embd)` bytes; the tool logs that bound.
+`n_layer`, `n_embd`, `max_decode` (the requested `--hidden-n`; generation can end
+earlier), the tag and record layouts), then `end`. Records follow: `pos`, `layer`,
+`tag`, `n` as int32, then `n` float32 values. The file is at most
+`max_decode x n_layer x 3 x (16 + 4 n_embd)` bytes; the tool logs that bound. `-o`,
+`--spec-out` and `--hidden-out` must name different files.
 `hidden.py` reads it (stdlib only) and prints the header and record counts.
 
 Validation: `tests/moe_trace_oracle.py` (run by `test-moe-trace` when numpy is

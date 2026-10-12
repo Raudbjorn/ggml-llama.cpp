@@ -1154,8 +1154,10 @@ struct llm_graph_context {
 
     // llama-moe-trace diagnostic (cparams.moe_spec_router_k): the top k of this layer's router on
     // its input before attention, normalized with the router's own RMS norm, named
-    // "ffn_moe_spec_topk-<il>". Nothing consumes it, so the model's output is unchanged.
-    void build_moe_spec_router(ggml_tensor * inp, ggml_tensor * norm_w, ggml_tensor * gate_inp, int il);
+    // "ffn_moe_spec_topk-<il>". Nothing consumes it. Its nodes follow attn_norm (expanded first) so
+    // that a backend fusing the residual add with the next norm still sees them adjacent; extra
+    // nodes can still change other fusions and so the last bits of later results.
+    void build_moe_spec_router(ggml_tensor * attn_norm, ggml_tensor * inp, ggml_tensor * norm_w, ggml_tensor * gate_inp, int il);
 
     // build MoE FFN without bias tensors
     ggml_tensor * build_moe_ffn(

@@ -88,7 +88,7 @@ def main() -> int:
     except (OSError, HiddenFormatError, KeyError, ValueError) as e:
         print(f"error: {args.file}: {e}", file=sys.stderr)
         return 1
-    for key in ("session", "arch", "n_layer", "n_embd", "n_decode", "model"):
+    for key in ("session", "arch", "n_layer", "n_embd", "max_decode", "model"):
         print(f"{key}: {header.get(key, '')}")
     print(f"decode steps: {len(steps)}")
     for tag, name in TAGS.items():

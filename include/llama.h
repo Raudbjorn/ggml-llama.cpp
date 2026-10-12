@@ -447,8 +447,9 @@ extern "C" {
 
         // [EXPERIMENTAL] diagnostic for llama-moe-trace: where the architecture supports it (qwen3moe,
         // qwen35moe), every MoE layer also evaluates its router on the layer input before attention and
-        // exposes the top k ids as "ffn_moe_spec_topk-<il>" to the eval callback. It does not change the
-        // model's output. 0 = off; capped at the layer's expert count.
+        // exposes the top k ids as "ffn_moe_spec_topk-<il>" to the eval callback. Nothing consumes them,
+        // but the extra nodes can change backend fusion and so the last bits of later results.
+        // 0 = off; capped at the layer's expert count.
         int32_t moe_spec_router_k;
 
         // [EXPERIMENTAL]

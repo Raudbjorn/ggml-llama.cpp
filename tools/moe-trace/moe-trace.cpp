@@ -32,8 +32,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <random>
 #include <string>
+#include <system_error>
 #include <vector>
 
 static const char * TOPK_PREFIX = "ffn_moe_topk-";
@@ -286,11 +288,22 @@ static bool write_hidden_header(FILE * out, const llama_model * model, const com
     failed |= fprintf(out, "arch=%s\n", meta_str(model, "general.architecture").c_str()) < 0;
     failed |= fprintf(out, "n_layer=%d\n", llama_model_n_layer(model)) < 0;
     failed |= fprintf(out, "n_embd=%d\n", llama_model_n_embd(model)) < 0;
-    failed |= fprintf(out, "n_decode=%d\n", params.moe_trace_hidden_n) < 0;
+    failed |= fprintf(out, "max_decode=%d\n", params.moe_trace_hidden_n) < 0; // fewer at end of generation
     failed |= fprintf(out, "tags=0:layer_out,1:residual_after_attention,2:router_input\n") < 0;
     failed |= fprintf(out, "record=pos:i32,layer:i32,tag:i32,n:i32,values:f32[n]\n") < 0;
     failed |= fprintf(out, "end\n") < 0;
     return !failed;
+}
+
+// two output paths that name the same file, also through another spelling
+static bool same_file(const std::string & a, const std::string & b) {
+    std::error_code ec;
+    const auto ca = std::filesystem::weakly_canonical(a, ec);
+    if (ec) {
+        return a == b;
+    }
+    const auto cb = std::filesystem::weakly_canonical(b, ec);
+    return ec ? a == b : ca == cb;
 }
 
 static uint64_t new_session_id() {
@@ -362,6 +375,15 @@ static int run_trace(common_params & params, trace_state & ts) {
     }
     const uint32_t seed = llama_sampler_get_seed(common_sampler_get(smpl.get()));
     const uint64_t session = new_session_id();
+
+    const bool spec_on = params.moe_spec_router_k > 0;
+    const bool hid_on  = !params.moe_trace_hidden_out.empty();
+    if ((spec_on && same_file(params.moe_trace_spec_out, params.out_file)) ||
+        (hid_on && same_file(params.moe_trace_hidden_out, params.out_file)) ||
+        (spec_on && hid_on && same_file(params.moe_trace_spec_out, params.moe_trace_hidden_out))) {
+        LOG_ERR("%s: -o, --spec-out and --hidden-out must name different files\n", __func__);
+        return 1;
+    }
 
     if (params.moe_spec_router_k > 0) {
         const std::string arch     = meta_str(model, "general.architecture");

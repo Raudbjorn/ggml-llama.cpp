@@ -149,6 +149,13 @@ for bad in '--spec-router 12abc' '--spec-router -1' '--hidden-n 0'; do
 done
 printf 'ok: malformed diagnostic options rejected\n'
 
+if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/same.csv" \
+        --spec-router 1 --spec-out "$work_dir/./same.csv" > "$work_dir/same.log" 2>&1; then
+    fail "--spec-out naming the -o file must be rejected"
+fi
+grep -q "must name different files" "$work_dir/same.log" || fail "colliding outputs: missing diagnostic"
+printf 'ok: colliding output paths rejected\n'
+
 if "$trace_bin" -m "$work_dir/llama-moe.gguf" -p "hello world" -n 2 -c 64 -o "$work_dir/lm.csv" \
         --spec-router 1 --spec-out "$work_dir/lm-spec.csv" > "$work_dir/lm.log" 2>&1; then
     fail "--spec-router on an architecture without it must fail"

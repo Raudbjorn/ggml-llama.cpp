@@ -81,13 +81,13 @@ llama_model_qwen3moe::graph::graph(const llama_model & model, const llm_graph_pa
         res->t_layer_inp[il] = inpL;
 
         ggml_tensor * inpSA = inpL;
-        build_moe_spec_router(inpL, model.layers[il].ffn_norm, model.layers[il].ffn_gate_inp, il);
 
         // norm
         cur = build_norm(inpL,
                 model.layers[il].attn_norm, NULL,
                 LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
+        build_moe_spec_router(cur, inpL, model.layers[il].ffn_norm, model.layers[il].ffn_gate_inp, il);
 
         // self_attention
         {
