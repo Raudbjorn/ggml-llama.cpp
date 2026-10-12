@@ -121,7 +121,12 @@ n_expert` slots: `static` (top-S from a separate `--profile` trace),
 deployable), `static-prefill`, `lru`, `lfu-decay` and `reelect-K`. The
 `dynamic` policy models the `--moe-cache` provider: one pool of
 `S x n_layers` units shared by all layers, LRU order, and units with more than
-`--hot-uses` uses evicted only when every unit is hot.
+`--hot-uses` uses evicted only when every unit is hot. Like the provider, each
+layer of each step fills at most `--inserts-per-plan` misses (default 8, as
+`GGML_CUDA_MOE_CACHE_INSERTS`) and never evicts a unit it hit or filled; the
+other misses run on the CPU and are not inserted. The provider also caps fills
+at `GGML_CUDA_MOE_CACHE_QUEUE_MB / expert size`, which the simulator does not
+model (with the 512 MiB default it binds only above 64 MiB per expert tensor).
 
 Expert counts come from the trace's `# n_expert=` line, or from `--n-expert`
 for a trace without one (a different value is an error), never from the

@@ -125,6 +125,25 @@ class PolicyTests(unittest.TestCase):
         res = simulate.sim_dynamic([[(0, [0]), (1, [0])]] * 3, units=1, hot_uses=4)
         self.assertEqual(res.hit, 0.0)
 
+    def test_dynamic_fills_at_most_inserts_per_plan(self) -> None:
+        # 16 unseen experts twice in a row: the provider fills 8 per (step, layer) plan,
+        # so the second step hits only the first 8 and fills the other 8
+        steps = [[(0, list(range(16)))]] * 2
+        res = simulate.sim_dynamic(steps, units=32, hot_uses=4, inserts_per_plan=8)
+        self.assertAlmostEqual(res.hit, 8 / 32)
+        self.assertAlmostEqual(res.inserts_per_step, 16 / 2)
+        # the default is the provider's (GGML_CUDA_MOE_CACHE_INSERTS = 8)
+        self.assertAlmostEqual(simulate.sim_dynamic(steps, units=32, hot_uses=4).hit, 8 / 32)
+        res = simulate.sim_dynamic(steps, units=32, hot_uses=4, inserts_per_plan=16)
+        self.assertAlmostEqual(res.hit, 16 / 32)
+
+    def test_dynamic_plan_never_evicts_its_own_units(self) -> None:
+        # one unit: the plan fills expert 0 and pins it, so expert 1 runs on the CPU
+        # and the next step still hits 0
+        res = simulate.sim_dynamic([[(0, [0, 1])], [(0, [0])]], units=1, hot_uses=4)
+        self.assertAlmostEqual(res.hit, 1 / 3)
+        self.assertAlmostEqual(res.inserts_per_step, 1 / 2)
+
     def test_reelect_applies_each_prompt_when_its_session_starts(self) -> None:
         # a: prompt and decode on expert 0; b: a long prompt on expert 1, then expert 1.
         # Seeding with both prompts up front would give a expert 1 and miss its 3 steps.
@@ -181,7 +200,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("assumed cost model", out)
 
     def test_invalid_arguments(self) -> None:
-        for argv in (["--budgets", "0"], ["--budgets", "1.5"], ["--budgets", "x"], ["--reelect", "0"], ["--hot-uses", "-1"]):
+        for argv in (["--budgets", "0"], ["--budgets", "1.5"], ["--budgets", "x"], ["--reelect", "0"], ["--hot-uses", "-1"],
+                     ["--inserts-per-plan", "0"], ["--inserts-per-plan", "1025"]):
             with self.subTest(argv=argv):
                 code, _, _ = run([self.trace, *argv])
                 self.assertEqual(code, 2)

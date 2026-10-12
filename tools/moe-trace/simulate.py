@@ -19,6 +19,8 @@ Per-layer policies use S slots per MoE layer (S = budget x n_expert):
 The dynamic policy models the --moe-cache provider: one pool shared by all
 layers with S x n_layers (layer, expert) units, LRU order, and resident
 experts with more than --hot-uses uses evicted only when every unit is hot.
+Each layer of each step fills at most --inserts-per-plan misses and never
+evicts a unit it hit or filled; its other misses stay on the CPU.
 
 Sessions ('# session=' lines) are replayed in file order and never
 interleaved; cache state carries over between sessions as in a long-running
@@ -268,14 +270,22 @@ def sim_reelect(trace: Trace, slots: int, interval: int, alpha: float = 0.98) ->
     return Result(hits / max(total, 1), inserts / max(n_decode_steps(decode_steps(trace)), 1))
 
 
-def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int) -> Result:
-    """Global LRU pool over (layer, expert) units with the provider's hot rule, replayed
-    in the order of decode_events."""
+PROVIDER_INSERTS_PER_PLAN = 8  # GGML_CUDA_MOE_CACHE_INSERTS default, ggml-moe-cache-common.h
+
+
+def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int,
+                inserts_per_plan: int = PROVIDER_INSERTS_PER_PLAN) -> Result:
+    """Global LRU pool over (layer, expert) units with the provider's rules, replayed in
+    the order of decode_events. Each (step, layer) is one provider plan: it fills at most
+    inserts_per_plan of its misses, and it cannot evict a unit it hit or filled (the
+    provider pins those); its other misses run on the CPU and are not inserted."""
     hits = total = inserts = 0
     uses: OrderedDict[tuple[int, int], int] = OrderedDict()  # LRU order, head = oldest
     n_steps = len(events)
     for step in events:
         for layer, ids in step:
+            pinned: set[tuple[int, int]] = set()
+            fills = 0
             for e in ids:
                 key = (layer, e)
                 total += 1
@@ -283,15 +293,20 @@ def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int)
                     hits += 1
                     uses[key] += 1
                     uses.move_to_end(key)
+                    pinned.add(key)
                     continue
-                if units <= 0:
+                if units <= 0 or fills >= inserts_per_plan:
                     continue
+                fills += 1  # the provider spends the budget before it looks for a victim
                 if len(uses) >= units:
-                    victim = next((k for k, u in uses.items() if u <= hot_uses), None)
+                    victim = next((k for k, u in uses.items() if u <= hot_uses and k not in pinned), None)
                     if victim is None:
-                        victim = next(iter(uses))
+                        victim = next((k for k in uses if k not in pinned), None)
+                    if victim is None:
+                        continue  # every unit is pinned by this plan
                     del uses[victim]
                 uses[key] = 0
+                pinned.add(key)
                 inserts += 1
     return Result(hits / max(total, 1), inserts / max(n_steps, 1))
 
@@ -331,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--budgets", default="0.0625,0.125,0.25,0.5", help="slots per layer as a fraction of n_expert")
     ap.add_argument("--reelect", type=int, default=32, help="re-election interval in decode steps")
     ap.add_argument("--hot-uses", type=int, default=4, help="dynamic policy hot threshold (GGML_CUDA_MOE_CACHE_HOT_USES)")
+    ap.add_argument("--inserts-per-plan", type=int, default=PROVIDER_INSERTS_PER_PLAN,
+                    help="dynamic policy fills per layer per step, 1..1024 (GGML_CUDA_MOE_CACHE_INSERTS)")
     ap.add_argument("--slab-mb", type=float, default=None,
                     help="MiB per (layer, expert) gate+up+down; enables the assumed cost columns")
     ap.add_argument("--ram-gbs", type=float, default=None, help="assumed host read bandwidth, GB/s")
@@ -346,6 +363,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.hot_uses < 0:
         print("error: --hot-uses must be >= 0", file=sys.stderr)
+        return 2
+    if not 1 <= args.inserts_per_plan <= 1024:
+        print("error: --inserts-per-plan must be in 1..1024", file=sys.stderr)
         return 2
     cost_args = (args.slab_mb, args.ram_gbs, args.link_gbs)
     if any(v is not None for v in cost_args) and not all(v is not None and v > 0 for v in cost_args):
@@ -417,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
         rows.append(("lru", sim_lru(decode, slots)))
         rows.append(("lfu-decay", sim_lfu_decay(decode, slots)))
         rows.append((f"reelect-{args.reelect}", sim_reelect(trace, slots, args.reelect)))
-        rows.append(("dynamic", sim_dynamic(events, slots * len(decode), args.hot_uses)))
+        rows.append(("dynamic", sim_dynamic(events, slots * len(decode), args.hot_uses, args.inserts_per_plan)))
         for name, res in rows:
             if res is None:
                 print(f"{frac:>7.4f} {slots:>5} | {name:>14} {'n/a':>7}")
