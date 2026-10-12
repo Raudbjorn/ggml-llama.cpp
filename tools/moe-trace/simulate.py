@@ -17,7 +17,7 @@ Per-layer policies use S slots per MoE layer (S = budget x n_expert):
   reelect-K        per-layer decayed counts, membership re-elected every K steps
 
 The dynamic policy models the --moe-cache provider: one pool shared by all
-layers with S x n_layers (layer, expert) units, LRU order, and resident
+layers with min(S x n_layers, n_expert) (layer, expert) units, LRU order, and resident
 experts with more than --hot-uses uses evicted only when every unit is hot.
 Each layer of each step fills at most --inserts-per-plan misses and never
 evicts a unit it hit or filled; its other misses stay on the CPU.
@@ -476,7 +476,10 @@ def main(argv: list[str] | None = None) -> int:
         rows.append(("lru", sim_lru(decode, slots, len(events))))
         rows.append(("lfu-decay", sim_lfu_decay(decode, slots, len(events))))
         rows.append((f"reelect-{args.reelect}", sim_reelect(trace, slots, args.reelect, len(events))))
-        rows.append(("dynamic", sim_dynamic(events, slots * len(decode), args.hot_uses, args.inserts_per_plan)))
+        # the provider shares one pool per expert shape and weight type across all layers and caps
+        # it at the creating tensor's n_expert slabs (moe-cache.cpp), whatever the budget
+        units = min(slots * len(decode), n_expert)
+        rows.append(("dynamic", sim_dynamic(events, units, args.hot_uses, args.inserts_per_plan)))
         for name, res in rows:
             if res is None:
                 print(f"{frac:>7.4f} {slots:>5} | {name:>14} {'n/a':>7}")

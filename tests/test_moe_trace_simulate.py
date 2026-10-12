@@ -255,6 +255,17 @@ class CliTests(unittest.TestCase):
                 line = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == policy)
                 self.assertEqual(line.split("|")[1].split()[2], want)
 
+    def test_dynamic_pool_holds_at_most_n_expert_units(self) -> None:
+        # 4 layers route experts 0 and 1 on every step: 8 (layer, expert) units. budget 0.5 gives
+        # 2 slots x 4 layers, but the provider caps its shared pool at n_expert = 4 slabs, so
+        # the working set thrashes instead of hitting from step 2 on
+        rows = "".join(f"{s},{layer},0,1\n" for s in range(3) for layer in range(4))
+        path = write(self.tmp.name, "pool.csv", HEADER.format(sid="p") + rows)
+        code, out, err = run([path, "--budgets", "0.5"])
+        self.assertEqual(code, 0, err)
+        line = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == "dynamic")
+        self.assertEqual(line.split("|")[1].split()[1], "0.0%")
+
     def test_invalid_arguments(self) -> None:
         for argv in (["--budgets", "0"], ["--budgets", "1.5"], ["--budgets", "x"], ["--reelect", "0"], ["--hot-uses", "-1"],
                      ["--inserts-per-plan", "0"], ["--inserts-per-plan", "1025"]):

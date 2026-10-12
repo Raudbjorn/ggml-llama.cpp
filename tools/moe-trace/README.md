@@ -128,7 +128,11 @@ n_expert` slots: `static` (top-S from a separate `--profile` trace),
 `static-oracle` (top-S from the scored trace itself; optimistic, not
 deployable), `static-prefill`, `lru`, `lfu-decay` and `reelect-K`. The
 `dynamic` policy models the `--moe-cache` provider: one pool of
-`S x n_layers` units shared by all layers, LRU order, and units with more than
+`min(S x n_layers, n_expert)` units shared by all layers (the provider keeps one
+pool per expert shape and weight type, and caps it at the creating tensor's
+`n_expert` slabs whatever the budget; that is an upper bound, since gate, up and
+down slabs of one weight type have the same size and then share the pool, which
+holds `n_expert / 3` units), LRU order, and units with more than
 `--hot-uses` uses evicted only when every unit is hot. Like the provider, each
 layer of each step fills at most `--inserts-per-plan` misses (default 8, as
 `GGML_CUDA_MOE_CACHE_INSERTS`) and never evicts a unit it hit or filled; the
