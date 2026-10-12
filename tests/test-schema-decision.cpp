@@ -600,12 +600,12 @@ static void test_model(const std::string & path) {
     CHECK(eng.ok(), "%s: %s", name.c_str(), eng.error.c_str());
     if (eng.ok()) {
         engine & e = *eng.value;
-        std::string err;
+        failure err;
         options opt;
 
         opt.mode = score_mode::tree;
         const batch_result tree = e.decide_plan(plan, opt, err);
-        CHECK(err.empty(), "%s: tree: %s", name.c_str(), err.c_str());
+        CHECK(!err, "%s: tree: %s", name.c_str(), err.message.c_str());
         compare_with_oracle("tree", o, plan, tree, opt, tol);
         CHECK(!tree.cache_hit, "first request hit the cache");
 
@@ -614,7 +614,7 @@ static void test_model(const std::string & path) {
               tree.items[0].fields[2].probs[0] == 1.0f && tree.items[0].fields[2].scored_nodes == 0, "one-value field");
 
         const batch_result again = e.decide_plan(plan, opt, err);
-        CHECK(err.empty() && again.cache_hit, "%s: second request must reuse the cached prefix", name.c_str());
+        CHECK(!err && again.cache_hit, "%s: second request must reuse the cached prefix", name.c_str());
         compare_with_oracle("tree, cached prefix", o, plan, again, opt, tol);
 
         opt.allow_cache = false;
@@ -623,7 +623,7 @@ static void test_model(const std::string & path) {
 
         opt.mode = score_mode::greedy;
         const batch_result greedy = e.decide_plan(plan, opt, err);
-        CHECK(err.empty() && greedy.rounds > 1, "%s: greedy needs several rounds (%d): %s", name.c_str(), greedy.rounds, err.c_str());
+        CHECK(!err && greedy.rounds > 1, "%s: greedy needs several rounds (%d): %s", name.c_str(), greedy.rounds, err.message.c_str());
         compare_with_oracle("greedy", o, plan, greedy, opt, tol);
 
         opt.mode     = score_mode::automatic;
@@ -637,7 +637,7 @@ static void test_model(const std::string & path) {
             one.trunks  = { plan.trunks[i] };
             one.tail_of = { 0 };
             const batch_result r = e.decide_plan(one, opt, err);
-            CHECK(err.empty() && r.items.size() == 1, "%s: single context %zu: %s", name.c_str(), i, err.c_str());
+            CHECK(!err && r.items.size() == 1, "%s: single context %zu: %s", name.c_str(), i, err.message.c_str());
             for (size_t f = 0; f < r.items[0].fields.size(); ++f) {
                 const auto & a = r.items[0].fields[f].probs;
                 const auto & b = tree.items[i].fields[f].probs;
@@ -653,7 +653,7 @@ static void test_model(const std::string & path) {
         int polls = 0;
         opt.should_abort = [&]() { return ++polls > 2; };
         e.decide_plan(plan, opt, err);
-        CHECK(err.find("cancelled") != std::string::npos, "%s: cancel: '%s'", name.c_str(), err.c_str());
+        CHECK(err.code == error_code::cancelled, "%s: cancel: '%s'", name.c_str(), err.message.c_str());
         CHECK(engine_seqs_empty(ctx, 0, 16), "%s: sequences left after a cancelled request", name.c_str());
         opt.should_abort = nullptr;
 
@@ -661,14 +661,16 @@ static void test_model(const std::string & path) {
         token_plan broken = plan;
         broken.tails[0][0].paths.push_back({ broken.tails[0][0].paths[0][0] }); // a prefix of another value
         e.decide_plan(broken, opt, err);
-        CHECK(err.find("colliding") != std::string::npos, "%s: prefix collision: '%s'", name.c_str(), err.c_str());
+        CHECK(err.code == error_code::invalid_request && err.message.find("colliding") != std::string::npos,
+              "%s: prefix collision: '%s'", name.c_str(), err.message.c_str());
         broken = plan;
         broken.trunks[1].push_back(n_vocab);
         e.decide_plan(broken, opt, err);
-        CHECK(!err.empty(), "%s: out-of-vocabulary token accepted", name.c_str());
+        CHECK(err.code == error_code::invalid_request, "%s: out-of-vocabulary token accepted", name.c_str());
         opt.tree_max = 256;
         e.decide_plan(plan, opt, err);
-        CHECK(err.find("tree_max") != std::string::npos, "%s: tree_max 256 accepted", name.c_str());
+        CHECK(err.code == error_code::invalid_request && err.message.find("tree_max") != std::string::npos,
+              "%s: tree_max 256 accepted", name.c_str());
         opt.tree_max = 128;
     }
 
@@ -678,10 +680,10 @@ static void test_model(const std::string & path) {
         CHECK(small.ok(), "%s: %s", name.c_str(), small.error.c_str());
         options opt;
         opt.mode = score_mode::tree;
-        std::string err;
+        failure err;
         if (small.ok()) {
             const batch_result r = small.value->decide_plan(plan, opt, err);
-            CHECK(err.empty(), "%s: 3 sequences: %s", name.c_str(), err.c_str());
+            CHECK(!err, "%s: 3 sequences: %s", name.c_str(), err.message.c_str());
             compare_with_oracle("tree, 3 sequences", o, plan, r, opt, tol);
             CHECK(r.decodes > 10, "%s: 3 sequences took only %d decodes", name.c_str(), r.decodes);
         }
@@ -699,18 +701,19 @@ static void test_model(const std::string & path) {
             std::mt19937 rng2(11);
             const token_plan big = random_plan(rng2, n_vocab, { 235, 235 }); // one context per group: 241 cells + 25 branch rows
             options opt;
-            std::string err;
+            failure err;
             e.value->decide_plan(big, opt, err);
-            CHECK(!err.empty(), "%s: KV exhaustion not reported", name.c_str());
+            CHECK(err.code == error_code::no_memory, "%s: KV exhaustion not reported: '%s'", name.c_str(), err.message.c_str());
             CHECK(engine_seqs_empty(tiny, 0, 16), "%s: sequences left after KV exhaustion", name.c_str());
-            if (!err.empty()) {
-                printf("    KV exhaustion: %s\n", err.c_str());
+            if (err) {
+                printf("    KV exhaustion: %s\n", err.message.c_str());
             }
             const batch_result r = e.value->decide_plan(plan, opt, err);
-            CHECK(err.empty() && r.items.size() == 3, "%s: request after KV exhaustion: %s", name.c_str(), err.c_str());
+            CHECK(!err && r.items.size() == 3, "%s: request after KV exhaustion: %s", name.c_str(), err.message.c_str());
             std::mt19937 rng3(12);
             e.value->decide_plan(random_plan(rng3, n_vocab, { 300 }), opt, err);
-            CHECK(err.find("positions") != std::string::npos, "%s: oversized context: '%s'", name.c_str(), err.c_str());
+            CHECK(err.code == error_code::invalid_request && err.message.find("positions") != std::string::npos,
+                  "%s: oversized context: '%s'", name.c_str(), err.message.c_str());
             llama_free(tiny);
         }
     }
@@ -781,16 +784,16 @@ static void test_e2e(const std::string & path) {
         printf("    oracle at ubatch 512 vs 64: max |p - p'| %.2g; tolerance %.2g\n", spread, tol);
         options opt;
         opt.mode = score_mode::tree;
-        std::string err;
+        failure err;
         const batch_result r = eng.value->decide_batch(rp.value.shared, texts, req.value.schema.inputs, opt, err);
-        CHECK(err.empty(), "%s: %s", name.c_str(), err.c_str());
-        if (plan.ok() && err.empty()) {
+        CHECK(!err, "%s: %s", name.c_str(), err.message.c_str());
+        if (plan.ok() && !err) {
             compare_with_oracle("text request, tree", o, plan.value, r, opt, tol);
         }
         opt.mode = score_mode::greedy;
         const batch_result g = eng.value->decide_batch(rp.value.shared, texts, req.value.schema.inputs, opt, err);
-        CHECK(err.empty(), "%s: %s", name.c_str(), err.c_str());
-        if (plan.ok() && err.empty()) {
+        CHECK(!err, "%s: %s", name.c_str(), err.message.c_str());
+        if (plan.ok() && !err) {
             compare_with_oracle("text request, greedy", o, plan.value, g, opt, tol);
         }
 

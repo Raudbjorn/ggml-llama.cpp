@@ -2703,15 +2703,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     }
     add_opt(common_arg(
         {"--decision-seqs"}, "N",
-        string_format("sequences for schema decisions: one caches the instructions, one per context in flight, "
-                      "the rest score values (default: %d, minimum 3, maximum %d)", params.n_seq_decision, COMMON_MAX_SEQ_DECISION),
+        string_format("sequences for schema decisions (llama-server: POST /v1/decision, above the slots, with a unified KV cache): "
+                      "one caches the instructions, one per context in flight, the rest score values "
+                      "(default: %d%s, minimum 3, maximum %d)", params.n_seq_decision,
+                      params.n_seq_decision == 0 ? " = disabled" : "", COMMON_MAX_SEQ_DECISION),
         [](common_params & params, int value) {
             if (value < 3 || value > COMMON_MAX_SEQ_DECISION) {
                 throw std::invalid_argument(string_format("--decision-seqs must be 3-%d", COMMON_MAX_SEQ_DECISION));
             }
             params.n_seq_decision = value;
         }
-    ).set_env("LLAMA_ARG_DECISION_SEQS").set_examples({LLAMA_EXAMPLE_SCHEMA_DECISION}));
+    ).set_env("LLAMA_ARG_DECISION_SEQS").set_examples({LLAMA_EXAMPLE_SCHEMA_DECISION, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--decision-request"}, "FNAME",
         "decision request: a /v1/decision body as JSON, - reads stdin",

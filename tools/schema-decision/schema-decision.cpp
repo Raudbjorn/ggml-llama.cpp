@@ -35,14 +35,22 @@ struct batch_holder {
     batch_holder & operator=(const batch_holder &) = delete;
 };
 
-std::string decode_error(int rc, const char * what) {
+failure fail_with(error_code code, std::string message) {
+    return { code, std::move(message) };
+}
+
+failure decode_error(int rc, const char * what) {
     if (rc == 1) {
-        return std::string("no free KV cache space for the decision ") + what;
+        return fail_with(error_code::no_memory, std::string("no free KV cache space for the decision ") + what);
     }
     if (rc == 2) {
-        return std::string("the decision ") + what + " decode was aborted";
+        return fail_with(error_code::cancelled, std::string("the decision ") + what + " decode was aborted");
     }
-    return std::string("llama_decode failed on the decision ") + what + " (" + std::to_string(rc) + ")";
+    return fail_with(error_code::internal, std::string("llama_decode failed on the decision ") + what + " (" + std::to_string(rc) + ")");
+}
+
+failure cancelled() {
+    return fail_with(error_code::cancelled, "the decision was cancelled");
 }
 
 size_t common_prefix(const tokens_t & a, const tokens_t & b) {
@@ -414,6 +422,7 @@ engine::engine(llama_context * ctx, llama_seq_id seq_base, int n_seqs)
 
 outcome<std::unique_ptr<engine>> engine::create(llama_context * ctx, llama_seq_id seq_base, int n_seqs) {
     outcome<std::unique_ptr<engine>> out;
+    out.code = error_code::internal; // a misconfigured caller, not a request
     if (ctx == nullptr || llama_get_memory(ctx) == nullptr) {
         out.error = "a decision engine needs a context with memory";
         return out;
@@ -445,26 +454,26 @@ void engine::reset() {
 }
 
 // Decode several prompts, each on its own sequence, packed into as few batches as n_batch allows.
-std::string engine::decode_parts(const std::vector<prompt_part> & parts, const options & opt, int & n_decodes) {
+failure engine::decode_parts(const std::vector<prompt_part> & parts, const options & opt, int & n_decodes) {
     const int    n_batch = (int) llama_n_batch(ctx);
     batch_holder b(n_batch);
-    const auto flush = [&]() -> std::string {
+    const auto flush = [&]() -> failure {
         if (b.batch.n_tokens == 0) {
             return {};
         }
         if (aborted(opt)) {
-            return "the decision was cancelled";
+            return cancelled();
         }
         const int rc = llama_decode(ctx, b.batch);
         ++n_decodes;
         common_batch_clear(b.batch);
-        return rc == 0 ? std::string() : decode_error(rc, "prompt");
+        return rc == 0 ? failure{} : decode_error(rc, "prompt");
     };
     for (const auto & p : parts) {
         for (size_t i = 0; i < p.toks->size(); ++i) {
             if (b.batch.n_tokens == n_batch) {
-                std::string err = flush();
-                if (!err.empty()) {
+                failure err = flush();
+                if (err) {
                     return err;
                 }
             }
@@ -476,7 +485,7 @@ std::string engine::decode_parts(const std::vector<prompt_part> & parts, const o
 
 // Restore (or build) the cached static prefix on seq_snap. Only this engine's own sequences are
 // touched, so it can share a context with other users (e.g. server slots).
-std::string engine::prepare_prefix(const tokens_t & shared, const options & opt, bool & hit, int & n_decodes) {
+failure engine::prepare_prefix(const tokens_t & shared, const options & opt, bool & hit, int & n_decodes) {
     // pos_max alone: recurrent memory reports the state's position as pos_min too
     hit = opt.allow_cache && !shared.empty() && shared == cached &&
           llama_memory_seq_pos_max(mem, seq_snap) == (llama_pos) cached.size() - 1;
@@ -487,8 +496,8 @@ std::string engine::prepare_prefix(const tokens_t & shared, const options & opt,
     if (shared.empty()) {
         return {};
     }
-    std::string err = decode_parts({ { &shared, 0, seq_snap } }, opt, n_decodes);
-    if (!err.empty()) {
+    failure err = decode_parts({ { &shared, 0, seq_snap } }, opt, n_decodes);
+    if (err) {
         reset();
         return err;
     }
@@ -505,11 +514,11 @@ std::string engine::prepare_prefix(const tokens_t & shared, const options & opt,
 // small) and bounded by n_ubatch, so that it is one ubatch. Every layer is causal, so the logits
 // read at a branch's last real token do not see the padding, and the padded cells are removed
 // with the branch.
-std::string engine::score_branches(const std::vector<branch> & branches, llama_seq_id first, int n_free,
+failure engine::score_branches(const std::vector<branch> & branches, llama_seq_id first, int n_free,
                                    const options & opt, std::vector<std::vector<float>> & scores, int & n_decodes) {
     scores.assign(branches.size(), {});
     if (n_free < 1) {
-        return "no free sequence for the decision branches";
+        return fail_with(error_code::internal, "no free sequence for the decision branches");
     }
     std::vector<size_t> order(branches.size());
     for (size_t b = 0; b < order.size(); ++b) {
@@ -535,8 +544,8 @@ std::string engine::score_branches(const std::vector<branch> & branches, llama_s
             ++end;
         }
         if (end == start) {
-            return "a decision branch of " + std::to_string(width) + " tokens exceeds the " +
-                   (pad_branches ? "ubatch" : "batch") + " size " + std::to_string(max_rows);
+            return fail_with(error_code::invalid_request, "a decision branch of " + std::to_string(width) + " tokens exceeds the " +
+                             (pad_branches ? "ubatch" : "batch") + " size " + std::to_string(max_rows));
         }
         const auto clear_group = [&]() {
             for (size_t k = start; k < end; ++k) {
@@ -561,7 +570,7 @@ std::string engine::score_branches(const std::vector<branch> & branches, llama_s
         }
         if (aborted(opt)) {
             clear_group();
-            return "the decision was cancelled";
+            return cancelled();
         }
         const int rc = llama_decode(ctx, b.batch);
         ++n_decodes;
@@ -573,13 +582,13 @@ std::string engine::score_branches(const std::vector<branch> & branches, llama_s
             const float * logits = llama_get_logits_ith(ctx, out_idx[k - start]);
             if (logits == nullptr) {
                 clear_group();
-                return "no logits for a decision branch";
+                return fail_with(error_code::internal, "no logits for a decision branch");
             }
             for (llama_token t : branches[order[k]].cands) {
                 if (!std::isfinite(logits[t])) {
                     clear_group();
-                    return "non-finite logit " + std::to_string(logits[t]) + " for token " + std::to_string(t) +
-                           " in a decision branch";
+                    return fail_with(error_code::internal, "non-finite logit " + std::to_string(logits[t]) + " for token " +
+                                     std::to_string(t) + " in a decision branch");
                 }
                 scores[order[k]].push_back(logits[t]);
             }
@@ -591,9 +600,10 @@ std::string engine::score_branches(const std::vector<branch> & branches, llama_s
 }
 
 batch_result engine::decide_batch(const std::string & shared_text, const std::vector<std::string> & contexts,
-                                  const std::vector<field_input> & inputs, const options & opt, std::string & error) {
-    error.clear();
+                                  const std::vector<field_input> & inputs, const options & opt, failure & error) {
+    error = {};
     std::string err;
+    error_code  code = error_code::invalid_request;
     try {
         if (contexts.empty() || contexts.size() > max_contexts) {
             err = "a decision needs 1-" + std::to_string(max_contexts) + " contexts";
@@ -612,20 +622,22 @@ batch_result engine::decide_batch(const std::string & shared_text, const std::ve
             if (planned.ok()) {
                 return decide_plan(planned.value, opt, error);
             }
-            err = planned.error;
+            err  = planned.error;
+            code = planned.code;
         }
     } catch (const std::exception & e) {
-        err = std::string("unexpected error: ") + e.what();
+        err  = std::string("unexpected error: ") + e.what();
+        code = error_code::internal;
     }
-    error = err;
-    LOG_ERR("%s: %s (contexts %zu, fields %zu, shared %zu bytes)\n", __func__, error.c_str(), contexts.size(),
+    error = { code, err };
+    LOG_ERR("%s: %s (contexts %zu, fields %zu, shared %zu bytes)\n", __func__, err.c_str(), contexts.size(),
             inputs.size(), shared_text.size());
     return {};
 }
 
-batch_result engine::decide_plan(const token_plan & plan, const options & opt, std::string & error) {
+batch_result engine::decide_plan(const token_plan & plan, const options & opt, failure & error) {
     batch_result out;
-    error.clear();
+    error = {};
     const auto t_start = std::chrono::steady_clock::now();
 
     // trunks and branches never outlive a call; the cached prefix survives only a success
@@ -642,53 +654,56 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, s
     } guard{ *this };
 
     const size_t n_ctx_items = plan.trunks.size();
-    const auto fail = [&](std::string msg) {
-        error = std::move(msg);
+    const auto fail = [&](failure f) {
+        error = std::move(f);
         LOG_ERR("%s: %s (contexts %zu, tails %zu, mode %s, tree_max %d, cache %d, prefix %zu tokens)\n", __func__,
-                error.c_str(), n_ctx_items, plan.tails.size(), mode_name(opt.mode), opt.tree_max, opt.allow_cache ? 1 : 0,
-                plan.shared.size());
+                error.message.c_str(), n_ctx_items, plan.tails.size(), mode_name(opt.mode), opt.tree_max,
+                opt.allow_cache ? 1 : 0, plan.shared.size());
         return batch_result{};
+    };
+    const auto invalid = [&](std::string msg) {
+        return fail(fail_with(error_code::invalid_request, std::move(msg)));
     };
 
     size_t n_fields = 0;
     try {
         if (n_ctx_items == 0 || n_ctx_items > max_contexts || plan.tail_of.size() != n_ctx_items) {
-            return fail("a decision needs 1-" + std::to_string(max_contexts) + " contexts, each with a tail");
+            return invalid("a decision needs 1-" + std::to_string(max_contexts) + " contexts, each with a tail");
         }
         if (opt.tree_max < 0 || opt.tree_max > max_tree_max) {
-            return fail("tree_max must be 0-" + std::to_string(max_tree_max));
+            return invalid("tree_max must be 0-" + std::to_string(max_tree_max));
         }
         const llama_token n_vocab = llama_vocab_n_tokens(vocab);
         const auto bad_tokens = [&](const tokens_t & toks) {
             return std::any_of(toks.begin(), toks.end(), [&](llama_token t) { return t < 0 || t >= n_vocab; });
         };
         if (bad_tokens(plan.shared)) {
-            return fail("the cached prefix holds a token outside the vocabulary");
+            return invalid("the cached prefix holds a token outside the vocabulary");
         }
         for (size_t i = 0; i < n_ctx_items; ++i) {
             if (plan.tail_of[i] < 0 || (size_t) plan.tail_of[i] >= plan.tails.size() || bad_tokens(plan.trunks[i])) {
-                return fail("context " + std::to_string(i) + " has an invalid tail or token");
+                return invalid("context " + std::to_string(i) + " has an invalid tail or token");
             }
         }
         for (const auto & tf : plan.tails) {
             if (tf.empty() || tf.size() > max_fields || (n_fields != 0 && tf.size() != n_fields)) {
-                return fail("every tail needs the same 1-" + std::to_string(max_fields) + " fields");
+                return invalid("every tail needs the same 1-" + std::to_string(max_fields) + " fields");
             }
             n_fields = tf.size();
             for (size_t f = 0; f < tf.size(); ++f) {
                 const auto & ft = tf[f];
                 if (ft.suffix.empty() || bad_tokens(ft.suffix) || ft.paths.empty() || ft.paths.size() > max_values) {
-                    return fail("field " + std::to_string(f) + " needs a suffix and 1-" + std::to_string(max_values) + " values");
+                    return invalid("field " + std::to_string(f) + " needs a suffix and 1-" + std::to_string(max_values) + " values");
                 }
                 for (size_t a = 0; a < ft.paths.size(); ++a) {
                     if (ft.paths[a].empty() || ft.paths[a].size() > max_path_tokens || bad_tokens(ft.paths[a])) {
-                        return fail("field " + std::to_string(f) + ": value " + std::to_string(a) + " needs 1-" +
+                        return invalid("field " + std::to_string(f) + ": value " + std::to_string(a) + " needs 1-" +
                                     std::to_string(max_path_tokens) + " valid tokens");
                     }
                     for (size_t b = 0; b < a; ++b) {
                         const size_t m = std::min(ft.paths[a].size(), ft.paths[b].size());
                         if (std::equal(ft.paths[a].begin(), ft.paths[a].begin() + m, ft.paths[b].begin())) {
-                            return fail("field " + std::to_string(f) + ": values " + std::to_string(b) + " and " +
+                            return invalid("field " + std::to_string(f) + ": values " + std::to_string(b) + " and " +
                                         std::to_string(a) + " have colliding token paths");
                         }
                     }
@@ -713,7 +728,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, s
                 fields.push_back(std::move(field));
             }
             if (rows > max_rows_per_context) {
-                return fail("the schema scores " + std::to_string(rows) + " token rows per context, more than " +
+                return invalid("the schema scores " + std::to_string(rows) + " token rows per context, more than " +
                             std::to_string(max_rows_per_context));
             }
             tail_fields.push_back(std::move(fields));
@@ -728,7 +743,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, s
             const size_t t    = (size_t) plan.tail_of[i];
             const size_t need = plan.shared.size() + plan.trunks[i].size() + tail_max_branch[t];
             if (need > n_ctx_seq) {
-                return fail("context " + std::to_string(i) + " needs " + std::to_string(need) +
+                return invalid("context " + std::to_string(i) + " needs " + std::to_string(need) +
                             " positions with its longest branch, the context holds " + std::to_string(n_ctx_seq));
             }
             branches = std::max(branches, tail_branches[t]);
@@ -739,9 +754,9 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, s
         out.items.resize(n_ctx_items);
 
         const auto t0 = std::chrono::steady_clock::now();
-        std::string err = prepare_prefix(plan.shared, opt, out.cache_hit, out.decodes);
+        failure err = prepare_prefix(plan.shared, opt, out.cache_hit, out.decodes);
         out.prefill_ms += ms_since(t0);
-        if (!err.empty()) {
+        if (err) {
             return fail(err);
         }
 
@@ -761,7 +776,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, s
                 parts.push_back({ &plan.trunks[g0 + i], (llama_pos) plan.shared.size(), trunk });
             }
             err = decode_parts(parts, opt, out.decodes);
-            if (!err.empty()) {
+            if (err) {
                 return fail(err);
             }
             llama_synchronize(ctx); // llama_decode is asynchronous: bill the prefill to the prefill time
@@ -808,7 +823,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, s
                 }
                 std::vector<std::vector<float>> scores;
                 err = score_branches(todo, seq_pool + (llama_seq_id) n_group, n_pool - (int) n_group, opt, scores, out.decodes);
-                if (!err.empty()) {
+                if (err) {
                     return fail(err);
                 }
                 out.rounds += 1;
@@ -857,7 +872,7 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, s
             out.scoring_ms += ms_since(ts);
         }
     } catch (const std::exception & e) {
-        return fail(std::string("unexpected error: ") + e.what());
+        return fail(fail_with(error_code::internal, std::string("unexpected error: ") + e.what()));
     }
 
     guard.ok = true;
@@ -1220,11 +1235,13 @@ outcome<rendered_prompt> render_prompt(const common_chat_templates * tmpls, bool
         const size_t at = prompt.find(sentinel);
         if (at == std::string::npos || prompt.find(sentinel, at + 1) != std::string::npos) {
             out.error = "the chat template must render the user message exactly once and unchanged";
+            out.code  = error_code::internal;
             return out;
         }
         out.value = { prompt.substr(0, at), prompt.substr(at + sentinel.size()) + "{\n" };
     } catch (const std::exception & e) {
         out.error = std::string("the chat template failed: ") + e.what();
+        out.code  = error_code::internal;
     }
     return out;
 }
@@ -1395,6 +1412,7 @@ outcome<common_json> run(engine & eng, const common_chat_templates * tmpls, bool
         auto rp = render_prompt(tmpls, use_jinja, req.schema.system_text);
         if (!rp.ok()) {
             out.error = rp.error;
+            out.code  = rp.code;
             return out;
         }
         std::vector<std::string> texts;
@@ -1403,10 +1421,11 @@ outcome<common_json> run(engine & eng, const common_chat_templates * tmpls, bool
         }
         const std::string & shared = rp.value.shared;
 
-        std::string err;
+        failure err;
         const batch_result b = eng.decide_batch(shared, texts, req.schema.inputs, req.opt, err);
-        if (!err.empty()) {
-            out.error = err;
+        if (err) {
+            out.error = err.message;
+            out.code  = err.code;
             return out;
         }
 
@@ -1416,6 +1435,7 @@ outcome<common_json> run(engine & eng, const common_chat_templates * tmpls, bool
             auto a = assemble(req.schema, item);
             if (!a.ok()) {
                 out.error = a.error;
+                out.code  = error_code::internal;
                 return out;
             }
             common_json usage = common_json::object();
@@ -1450,6 +1470,7 @@ outcome<common_json> run(engine & eng, const common_chat_templates * tmpls, bool
     } catch (const std::exception & e) {
         out = {};
         out.error = std::string("unexpected error: ") + e.what();
+        out.code  = error_code::internal;
     }
     return out;
 }

@@ -46,10 +46,28 @@ constexpr size_t max_path_tokens        = 64;      // one value with its termina
 constexpr size_t max_rows_per_context   = 65536;   // scored token rows of one context
 constexpr int    max_tree_max           = 255;
 
-// T on success, otherwise error is non-empty and value is default-constructed
+// what an error is about; llama-server maps it to an HTTP status
+enum class error_code {
+    none,
+    invalid_request, // the request cannot be scored as given
+    no_memory,       // the KV cache ran out
+    cancelled,       // options::should_abort returned true
+    internal,        // a decode, chat template or engine failure
+};
+
+struct failure {
+    error_code  code = error_code::none;
+    std::string message;
+
+    explicit operator bool() const { return code != error_code::none; }
+};
+
+// T on success, otherwise error is non-empty and value is default-constructed; code tells what
+// the error is about and is only meaningful with an error
 template <typename T> struct outcome {
     T           value{};
     std::string error;
+    error_code  code = error_code::invalid_request;
 
     bool ok() const { return error.empty(); }
 };
@@ -130,10 +148,10 @@ class engine {
     // shared_text is the static prefix (cached across calls); each context is the per-request
     // text that follows it, up to the point where the first field's suffix begins
     batch_result decide_batch(const std::string & shared_text, const std::vector<std::string> & contexts,
-                              const std::vector<field_input> & fields, const options & opt, std::string & error);
+                              const std::vector<field_input> & fields, const options & opt, failure & error);
 
     // the scoring core of decide_batch, on an already tokenized request
-    batch_result decide_plan(const token_plan & plan, const options & opt, std::string & error);
+    batch_result decide_plan(const token_plan & plan, const options & opt, failure & error);
 
     // forget the cached prefix and clear every sequence the engine owns
     void reset();
@@ -162,9 +180,9 @@ class engine {
     bool                pad_branches; // recurrent/hybrid model: branches in a ubatch need equal lengths
     tokens_t            cached;
 
-    std::string decode_parts(const std::vector<prompt_part> & parts, const options & opt, int & n_decodes);
-    std::string prepare_prefix(const tokens_t & shared, const options & opt, bool & hit, int & n_decodes);
-    std::string score_branches(const std::vector<branch> & branches, llama_seq_id first, int n_free,
+    failure     decode_parts(const std::vector<prompt_part> & parts, const options & opt, int & n_decodes);
+    failure     prepare_prefix(const tokens_t & shared, const options & opt, bool & hit, int & n_decodes);
+    failure     score_branches(const std::vector<branch> & branches, llama_seq_id first, int n_free,
                                const options & opt, std::vector<std::vector<float>> & scores, int & n_decodes);
     void        clear_pool();
 };

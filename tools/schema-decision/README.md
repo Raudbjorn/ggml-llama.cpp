@@ -156,6 +156,11 @@ leaves none of the engine's sequences behind; the next request rebuilds the cach
   sequence. Tree, greedy and auto modes, cached and uncached prefix, a single context against the
   batch, 3 sequences against 16, a one-value field, cancellation, KV exhaustion and invalid plans.
   Results match the oracle within 4e-8.
+- `tools/server/tests/unit/test_schema_decision.py`: the endpoint on a running server: disabled
+  without `--decision-seqs`, cached prefix, batch against single contexts, modes, invalid requests
+  (400), a context too long (400), KV exhaustion (503) with the server still answering after it,
+  completions interleaved with decisions giving the same output as alone, and a decision after
+  the server slept and woke.
 - `--e2e MODEL...`: a text request through the chat template against the oracle on the joint
   tokenization. The engine is held to the backend's own spread, measured as the same oracle
   decoded in ubatches of 512 and 64 (about 0.03 in probability on the CPU, because the kernels are

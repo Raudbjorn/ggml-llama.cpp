@@ -177,6 +177,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spm-infill` | use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: disabled) |
 | `--pooling {none,mean,cls,last,rank}` | pooling type for embeddings, use model default if unspecified<br/>(env: LLAMA_ARG_POOLING) |
 | `-np, --parallel N` | number of server slots (default: -1, -1 = auto)<br/>(env: LLAMA_ARG_N_PARALLEL) |
+| `--decision-seqs N` | sequences for schema decisions (llama-server: POST /v1/decision, above the slots, with a unified KV cache): one caches the instructions, one per context in flight, the rest score values (default: 0 = disabled, minimum 3, maximum 256)<br/>(env: LLAMA_ARG_DECISION_SEQS) |
 | `-cb, --cont-batching, -nocb, --no-cont-batching` | whether to enable continuous batching (a.k.a dynamic batching) (default: enabled)<br/>(env: LLAMA_ARG_CONT_BATCHING) |
 | `-mm, --mmproj FILE` | path to a multimodal projector file. see tools/mtmd/README.md<br/>note: if -hf is used, this argument can be omitted<br/>(env: LLAMA_ARG_MMPROJ) |
 | `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
@@ -1788,6 +1789,48 @@ curl http://localhost:8080/v1/messages/count_tokens \
 ```
 
 ## TypeSafe-compatible API Endpoints
+
+### POST `/v1/decision`: Constrained decisions for a finite JSON schema
+
+Also served as `/decision`. Answers a finite JSON schema (enum strings, booleans, bounded
+integers, numbers on a grid) about 1-256 contexts with any generative model, by scoring each
+field's allowed values on sequences forked from the context instead of generating. The JSON is
+assembled by code, so it always matches the schema, and every field returns a constrained-decoding
+probability. Fields are independent of each other.
+
+Enable it with `--decision-seqs N` (N >= 3): it reserves `N` sequences above the slots (one caches
+the instructions and field catalogue, one per context in flight, the rest score values) and turns
+on the unified KV cache. The decision shares that KV cache with the slots: its cached prefix keeps
+its cells between requests, and a request needs room for its contexts and scored rows on top.
+`--parallel` plus `--decision-seqs` may not exceed 256.
+
+A request runs on the server's task thread between slot decodes, so a large one delays the slots
+for its duration. A client that disconnects stops it at the next decode.
+
+```shell
+curl http://127.0.0.1:8080/v1/decision -H "Content-Type: application/json" -d '{
+  "instructions": "Answer each question about this support request.",
+  "schema": {
+    "category": {"type": "enum", "choices": ["billing", "technical", "other"], "description": "Request type."},
+    "urgent":   {"type": "boolean", "description": "Does it need urgent handling?"}
+  },
+  "contexts": ["I was charged twice and need this fixed today."]
+}'
+```
+
+The request also takes `mode` (`auto`, `tree` or `greedy`), `tree_max` (0-255) and `cache_prompt`.
+The schema may also be a JSON Schema object with `properties`. The response holds one result per
+context, in order, with the `decision` object and per-field `value`, `probability`,
+`scored_nodes` and `tree`, plus `usage` and `timings`. See
+[tools/schema-decision/README.md](../schema-decision/README.md) for the schema keys, what the
+probabilities mean, the limits, and the CLI `llama-schema-decision`, which runs the same engine.
+
+Invalid requests return 400, a server started without `--decision-seqs` returns 501, and a request
+that runs out of KV space returns 503.
+
+`/v1/decision` and [`/v1/systemone`](#post-v1systemone-typesafe-compatible-system-one-api) are
+different APIs: `/v1/systemone` serves native decision-model GGUFs only and returns 501 for
+ordinary LLMs; `/v1/decision` prompts an ordinary LLM with the schema and scores its tokens.
 
 ### POST `/v1/systemone`: TypeSafe-compatible System One API
 

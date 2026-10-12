@@ -66,8 +66,9 @@ static int run_cli(common_params & params) {
         return 1;
     }
 
-    // the engine owns every sequence of the context; branches share the trunk's cells
-    params.n_parallel = params.n_seq_decision;
+    // the engine owns every sequence of the context (n_seq_max = n_parallel + n_seq_decision);
+    // branches share the trunk's cells
+    params.n_parallel = 0;
     params.kv_unified = true;
 
     llama_backend_init();
