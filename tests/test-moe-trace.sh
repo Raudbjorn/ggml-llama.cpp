@@ -161,6 +161,17 @@ if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work
     fail "--spec-out hard-linked to the -o file must be rejected"
 fi
 grep -q "must name different files" "$work_dir/link.log" || fail "hard-linked outputs: missing diagnostic"
+# an output must never be the model: opening it would truncate the mapped GGUF (on a copy)
+cp "$work_dir/qwen3moe-moe.gguf" "$work_dir/victim.gguf"
+victim_size=$(wc -c < "$work_dir/victim.gguf")
+for opt in "-o" "--spec-out"; do
+    if "$trace_bin" -m "$work_dir/victim.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/v.csv" --spec-router 1 \
+            --spec-out "$work_dir/v-spec.csv" "$opt" "$work_dir/victim.gguf" > "$work_dir/victim.log" 2>&1; then
+        fail "$opt naming the model must be rejected"
+    fi
+    grep -q "must not name the model file" "$work_dir/victim.log" || fail "$opt naming the model: missing diagnostic"
+    [ "$(wc -c < "$work_dir/victim.gguf")" = "$victim_size" ] || fail "$opt naming the model truncated it"
+done
 printf 'ok: colliding output paths rejected\n'
 
 if "$trace_bin" -m "$work_dir/llama-moe.gguf" -p "hello world" -n 2 -c 64 -o "$work_dir/lm.csv" \

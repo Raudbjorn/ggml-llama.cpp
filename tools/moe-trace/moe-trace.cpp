@@ -387,6 +387,12 @@ static int run_trace(common_params & params, trace_state & ts) {
         LOG_ERR("%s: -o, --spec-out and --hidden-out must name different files\n", __func__);
         return 1;
     }
+    // opening an output truncates it: none may be the model file, which is mapped and read
+    if (same_file(params.out_file, params.model.path) || (spec_on && same_file(params.moe_trace_spec_out, params.model.path)) ||
+        (hid_on && same_file(params.moe_trace_hidden_out, params.model.path))) {
+        LOG_ERR("%s: -o, --spec-out and --hidden-out must not name the model file '%s'\n", __func__, params.model.path.c_str());
+        return 1;
+    }
 
     if (params.moe_spec_router_k > 0) {
         const std::string arch     = meta_str(model, "general.architecture");
