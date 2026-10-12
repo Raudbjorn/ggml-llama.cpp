@@ -333,8 +333,9 @@ static size_t bitwise_diff(const std::vector<float> & a, const std::vector<float
 }
 
 // the worker must give the synchronous logits bit for bit; need_overlap: a split was
-// launched while a CPU split ran
-static void expect_async_same(const char * name, const run_result & sync, const run_result & async, bool need_overlap) {
+// launched while a CPU split ran; need_split: the graph has a CPU split for the worker
+static void expect_async_same(const char * name, const run_result & sync, const run_result & async, bool need_overlap,
+                              bool need_split = true) {
     const int failures_before = g_failures;
     CHECK(async.ok, "%s: async run failed", name);
     if (!async.ok) {
@@ -342,7 +343,7 @@ static void expect_async_same(const char * name, const run_result & sync, const 
     }
     unsigned long long splits = 0, overlaps = 0;
     CHECK(async_counts(async.log, splits, overlaps), "%s: no async scheduler counters in the log", name);
-    CHECK(splits > 0, "%s: the worker computed no CPU split", name);
+    CHECK(!need_split || splits > 0, "%s: the worker computed no CPU split", name);
     CHECK(!need_overlap || overlaps > 0, "%s: no split was launched beside a CPU split", name);
     const size_t n_diff = bitwise_diff(sync.logits, async.logits);
     CHECK(n_diff == 0, "%s: %zu of %zu logits differ bitwise", name, n_diff, sync.logits.size());
@@ -561,7 +562,9 @@ int main(int argc, char ** argv) {
             const bool dev_map = strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(gpu)), "OPENVINO") != 0;
             expect_async_same("device async CPU splits, f32 mixed hot/cold", dpack,
                     run_model(f32, p_mixed.c_str(), 2, PLACE_DEVICE, true), dev_map);
-            expect_async_same("device async CPU splits, no pack", dbase, run_model(f32, nullptr, 0, PLACE_DEVICE, true), false);
+            // without a pack OpenVINO runs every op, the host experts included, so no CPU split is left
+            expect_async_same("device async CPU splits, no pack", dbase, run_model(f32, nullptr, 0, PLACE_DEVICE, true), false,
+                    dev_map);
             if (dev_map) {
                 expect_abort_recovers("device abort on the CPU worker", dpack, run_model(f32, p_mixed.c_str(), 2, PLACE_DEVICE, true, true));
             } else {
@@ -590,7 +593,9 @@ int main(int argc, char ** argv) {
             CHECK(cache_layers(cpack.log) == n_cached - 1, "the MoE cache serves %d layer(s) beside a pack, %d without",
                     cache_layers(cpack.log), n_cached);
         } else {
-            printf("skip: device pack beside the MoE cache (no MoE cache on %s)\n", ggml_backend_dev_name(gpu));
+            // OpenVINO takes no I32 weight, so the cache's slot map fails there
+            printf("skip: device pack beside the MoE cache (%s on %s)\n",
+                    cbase.ok ? "no MoE cache" : "the MoE cache run fails", ggml_backend_dev_name(gpu));
         }
     } else {
         printf("skip: device cases (no GPU device)\n");
