@@ -166,6 +166,11 @@ leaves none of the engine's sequences behind; the next request rebuilds the cach
   decoded in ubatches of 512 and 64 (about 0.03 in probability on the CPU, because the kernels are
   not batch-invariant). Run on SmolLM2-135M, Qwen3-0.6B and Qwen3.5-0.8B (hybrid).
 
+Backends: the tests pass on the CPU and on Vulkan (llvmpipe). OpenVINO cannot run the engine
+in this tree: every batch with more than one sequence fails in OpenVINO's shape inference
+(`llama-batched-bench -npl 2` fails the same way on `master`), and the engine scores branches as
+separate sequences.
+
 ## Differences from the source
 
 - Errors are returned as values; nothing throws out of the engine, so a bad request cannot take a

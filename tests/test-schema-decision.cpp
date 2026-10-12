@@ -84,6 +84,7 @@ static std::string join(const std::vector<std::string> & v) {
 }
 
 static void test_schema() {
+    const int failures_at_start = g_failures;
     // integer bounds: width checked without overflow, iteration bounded
     CHECK(join(encoded(R"({"n": {"type": "integer", "minimum": 9223372036854775807, "maximum": 9223372036854775807, "description": "d"}})")) ==
           "9223372036854775807", "integer at LLONG_MAX");
@@ -195,7 +196,9 @@ static void test_schema() {
         a = assemble(cs.value, r);
         CHECK(a.ok() && a.value.at("decision").at("x").get<long long>() == 1, "mode keeps the winner");
     }
-    printf("ok: schema compiler and request parser\n");
+    if (g_failures == failures_at_start) {
+        printf("ok: schema compiler and request parser\n");
+    }
 }
 
 // ---------------------------------------------------------------- token plan
@@ -261,6 +264,7 @@ static const char * k_test_schema = R"({
 })";
 
 static void test_vocabs(const std::string & dir) {
+    const int failures_at_start = g_failures;
     const auto files = list_vocabs(dir);
     CHECK(!files.empty(), "no ggml-vocab-*.gguf in %s", dir.c_str());
     const auto cs = compile_text(k_test_schema);
@@ -315,7 +319,9 @@ static void test_vocabs(const std::string & dir) {
         }
         llama_model_free(model);
     }
-    printf("ok: token plan matches the joint tokenization (%d vocabulary layouts)\n", n_tested);
+    if (g_failures == failures_at_start) {
+        printf("ok: token plan matches the joint tokenization (%d vocabulary layouts)\n", n_tested);
+    }
 }
 
 // ---------------------------------------------------------------- oracle
@@ -571,6 +577,7 @@ static llama_context * make_context(llama_model * model, int n_ctx, int n_seq, i
 }
 
 static void test_model(const std::string & path) {
+    const int failures_at_start = g_failures;
     llama_model_params mp = llama_model_default_params();
     llama_model * model = llama_model_load_from_file(path.c_str(), mp);
     CHECK(model != nullptr, "cannot load %s", path.c_str());
@@ -638,7 +645,10 @@ static void test_model(const std::string & path) {
             one.tail_of = { 0 };
             const batch_result r = e.decide_plan(one, opt, err);
             CHECK(!err && r.items.size() == 1, "%s: single context %zu: %s", name.c_str(), i, err.message.c_str());
-            for (size_t f = 0; f < r.items[0].fields.size(); ++f) {
+            if (r.items.size() != 1 || tree.items.size() != plan.trunks.size()) {
+                continue; // reported above; nothing to compare
+            }
+            for (size_t f = 0; f < r.items[0].fields.size() && f < tree.items[i].fields.size(); ++f) {
                 const auto & a = r.items[0].fields[f].probs;
                 const auto & b = tree.items[i].fields[f].probs;
                 double worst = 0;
@@ -698,22 +708,25 @@ static void test_model(const std::string & path) {
         CHECK(tiny != nullptr, "%s: tiny context", name.c_str());
         if (tiny) {
             auto e = engine::create(tiny, 0, 16);
-            std::mt19937 rng2(11);
-            const token_plan big = random_plan(rng2, n_vocab, { 235, 235 }); // one context per group: 241 cells + 25 branch rows
-            options opt;
-            failure err;
-            e.value->decide_plan(big, opt, err);
-            CHECK(err.code == error_code::no_memory, "%s: KV exhaustion not reported: '%s'", name.c_str(), err.message.c_str());
-            CHECK(engine_seqs_empty(tiny, 0, 16), "%s: sequences left after KV exhaustion", name.c_str());
-            if (err) {
-                printf("    KV exhaustion: %s\n", err.message.c_str());
+            CHECK(e.ok(), "%s: tiny engine: %s", name.c_str(), e.error.c_str());
+            if (e.ok()) {
+                std::mt19937 rng2(11);
+                const token_plan big = random_plan(rng2, n_vocab, { 235, 235 }); // one context per group: 241 cells + 25 branch rows
+                options opt;
+                failure err;
+                e.value->decide_plan(big, opt, err);
+                CHECK(err.code == error_code::no_memory, "%s: KV exhaustion not reported: '%s'", name.c_str(), err.message.c_str());
+                CHECK(engine_seqs_empty(tiny, 0, 16), "%s: sequences left after KV exhaustion", name.c_str());
+                if (err) {
+                    printf("    KV exhaustion: %s\n", err.message.c_str());
+                }
+                const batch_result r = e.value->decide_plan(plan, opt, err);
+                CHECK(!err && r.items.size() == 3, "%s: request after KV exhaustion: %s", name.c_str(), err.message.c_str());
+                std::mt19937 rng3(12);
+                e.value->decide_plan(random_plan(rng3, n_vocab, { 300 }), opt, err);
+                CHECK(err.code == error_code::invalid_request && err.message.find("positions") != std::string::npos,
+                      "%s: oversized context: '%s'", name.c_str(), err.message.c_str());
             }
-            const batch_result r = e.value->decide_plan(plan, opt, err);
-            CHECK(!err && r.items.size() == 3, "%s: request after KV exhaustion: %s", name.c_str(), err.message.c_str());
-            std::mt19937 rng3(12);
-            e.value->decide_plan(random_plan(rng3, n_vocab, { 300 }), opt, err);
-            CHECK(err.code == error_code::invalid_request && err.message.find("positions") != std::string::npos,
-                  "%s: oversized context: '%s'", name.c_str(), err.message.c_str());
             llama_free(tiny);
         }
     }
@@ -721,12 +734,15 @@ static void test_model(const std::string & path) {
     llama_free(ctx);
     llama_free(octx);
     llama_model_free(model);
-    printf("ok: %s\n", name.c_str());
+    if (g_failures == failures_at_start) {
+        printf("ok: %s\n", name.c_str());
+    }
 }
 
 // ---------------------------------------------------------------- end to end on a real model
 
 static void test_e2e(const std::string & path) {
+    const int failures_at_start = g_failures;
     llama_model_params mp = llama_model_default_params();
     llama_model * model = llama_model_load_from_file(path.c_str(), mp);
     CHECK(model != nullptr, "cannot load %s", path.c_str());
@@ -809,7 +825,9 @@ static void test_e2e(const std::string & path) {
     llama_free(octx);
     llama_free(ctx);
     llama_model_free(model);
-    printf("ok: %s end to end\n", name.c_str());
+    if (g_failures == failures_at_start) {
+        printf("ok: %s end to end\n", name.c_str());
+    }
 }
 
 int main(int argc, char ** argv) {
