@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <limits>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -177,6 +178,37 @@ static void test(void) {
 
         assert(common_speculative_types_from_gguf(path).empty());
         std::remove(path);
+    }
+
+    {
+        // --cpu-tp-margin sizes the split from the tensor bytes of every shard, named by the first
+        ggml_init_params ip = { 16 * 1024, nullptr, false };
+        ggml_context * tctx = ggml_init(ip);
+        size_t want = 0;
+        for (int i = 0; i < 3; ++i) {
+            ggml_tensor * t = ggml_new_tensor_1d(tctx, GGML_TYPE_F32, 8 << i);
+            ggml_set_name(t, ("t" + std::to_string(i)).c_str());
+            memset(t->data, 0, ggml_nbytes(t));
+            gguf_context * ctx = gguf_init_empty();
+            gguf_set_val_u16(ctx, "split.no", (uint16_t) i);
+            gguf_set_val_u16(ctx, "split.count", 3);
+            gguf_add_tensor(ctx, t);
+            char path[64];
+            llama_split_path(path, sizeof(path), "test-cpu-tp-split", i, 3);
+            assert(gguf_write_to_file(ctx, path, false));
+            gguf_free(ctx);
+            want += ggml_nbytes(t);
+        }
+        ggml_free(tctx);
+        std::string error;
+        assert(common_model_tensor_bytes("test-cpu-tp-split-00001-of-00003.gguf", error) == want && error.empty());
+        // a later shard does not name the split
+        assert(common_model_tensor_bytes("test-cpu-tp-split-00002-of-00003.gguf", error) == 0 && !error.empty());
+        for (int i = 0; i < 3; ++i) {
+            char path[64];
+            llama_split_path(path, sizeof(path), "test-cpu-tp-split", i, 3);
+            std::remove(path);
+        }
     }
 
     {

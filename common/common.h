@@ -1075,6 +1075,9 @@ std::string common_cpu_tp_prepare(common_params & params);
 // of each accelerator; before the model loads. Returns an error, empty on success.
 std::string common_cpu_tp_size_split(common_params & params);
 
+// bytes of tensor data over every file of a (split) GGUF, named by its first file; 0 with an error on failure
+size_t common_model_tensor_bytes(const std::string & path, std::string & error);
+
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);
 

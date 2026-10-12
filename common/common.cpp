@@ -1870,8 +1870,7 @@ std::string common_cpu_tp_prepare(common_params & params) {
     return "";
 }
 
-// bytes of tensor data over every file of a (split) GGUF; 0 with an error on failure
-static size_t common_model_tensor_bytes(const std::string & path, std::string & error) {
+size_t common_model_tensor_bytes(const std::string & path, std::string & error) {
     const auto tensor_bytes = [](gguf_context * ctx) {
         size_t n = 0;
         for (int64_t i = 0; i < gguf_get_n_tensors(ctx); ++i) {
@@ -1895,12 +1894,13 @@ static size_t common_model_tensor_bytes(const std::string & path, std::string & 
     if (n_split <= 1) {
         return total;
     }
+    // split numbers are zero-based here, as in the model loader: shard 0 is "-00001-of-"
     char prefix[4096] = {};
-    if (llama_split_prefix(prefix, sizeof(prefix), path.c_str(), 1, n_split) == 0) {
+    if (llama_split_prefix(prefix, sizeof(prefix), path.c_str(), 0, n_split) == 0) {
         error = path + " is not the first file of its " + std::to_string(n_split) + "-file split";
         return 0;
     }
-    for (int i = 2; i <= n_split; ++i) {
+    for (int i = 1; i < n_split; ++i) {
         char split[4096] = {};
         llama_split_path(split, sizeof(split), prefix, i, n_split);
         gguf_context * ctx = gguf_init_from_file(split, ip);
