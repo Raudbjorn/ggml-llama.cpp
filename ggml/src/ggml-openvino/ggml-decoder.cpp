@@ -2029,6 +2029,15 @@ int32_t * GgmlOvDecoder::get_input_op_params(int node_idx, const std::string & n
     return m_node_info_list[node_idx].node_inputs.at(name)->op_params;
 }
 
+bool GgmlOvDecoder::is_input_sorted_ids(int node_idx, const std::string & name) const {
+    const ggml_tensor * t = m_node_info_list[node_idx].node_inputs.at(name);
+    while (t && (t->op == GGML_OP_VIEW || t->op == GGML_OP_RESHAPE || t->op == GGML_OP_CONT ||
+                 t->op == GGML_OP_PERMUTE || t->op == GGML_OP_TRANSPOSE)) {
+        t = t->src[0];
+    }
+    return t && (t->op == GGML_OP_ARGSORT || t->op == GGML_OP_TOP_K);
+}
+
 int32_t * GgmlOvDecoder::get_output_op_params(int node_idx) const {
     return m_node_info_list[node_idx].node->op_params;
 }

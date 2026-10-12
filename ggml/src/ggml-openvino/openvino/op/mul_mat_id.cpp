@@ -74,7 +74,8 @@ ov::Output<ov::Node> static_shape_dims_or_shapeof(const ov::Output<ov::Node> & i
 ov::Output<ov::Node> translate_mul_mat_id_mxfp4_packed(const NodeContext & context,
                                                        ov::Output<ov::Node> expert_weights,
                                                        ov::Output<ov::Node> activations,
-                                                       ov::Output<ov::Node> ids) {
+                                                       ov::Output<ov::Node> ids,
+                                                       bool may_skip) {
     auto packed_shape = expert_weights.get_partial_shape().to_shape();
     FRONT_END_OP_CONVERSION_CHECK(packed_shape.size() == 5 && packed_shape[4] == 17,
                                   "Expected packed MXFP4 expert weights with shape [1, n_expert, m, k_blocks, 17]");
@@ -97,6 +98,12 @@ ov::Output<ov::Node> translate_mul_mat_id_mxfp4_packed(const NodeContext & conte
     ids = std::make_shared<ov::op::v1::Reshape>(ids, ids_shape_2d, false);
     if (ids.get_element_type() != ov::element::i32 && ids.get_element_type() != ov::element::i64) {
         ids = std::make_shared<ov::op::v0::Convert>(ids, ov::element::i32);
+    }
+    ov::Output<ov::Node> skip;
+    if (may_skip) {
+        auto masked = mask_skip_ids(ids);
+        ids  = masked.ids;
+        skip = masked.skip;
     }
 
     auto gather_axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
@@ -155,6 +162,10 @@ ov::Output<ov::Node> translate_mul_mat_id_mxfp4_packed(const NodeContext & conte
     auto result_target_dims = std::make_shared<ov::op::v0::Concat>(
         ov::OutputVector{batch_dim, get_dimensions(ids_shape, {0, 1}), row_dim}, 0);
     result = std::make_shared<ov::op::v1::Reshape>(result, result_target_dims, false);
+    if (may_skip) {
+        // result is [1, n_tokens, n_used, rows]; skip is [n_tokens, n_used]
+        result = zero_skipped_rows(result, std::make_shared<ov::op::v0::Unsqueeze>(skip, const_i64({0, 3})));
+    }
 
     const auto output_type = context.get_output_type();
     if (result.get_element_type() != output_type) {
@@ -170,12 +181,11 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
 
     auto expert_weights = process_view_input_new(context, 0);
     auto activations = process_view_input_new(context, 1);
-    // NOTE: ggml lets an id of -1 mark a skipped slot (dst row zeroed, see ggml_mul_mat_id in ggml.h).
-    // The Gather / GatherMatmul lowering below reads ids verbatim, and OpenVINO treats a negative
-    // index as counting from the end, so a -1 id would silently select the last expert instead of
-    // producing a zero row. No model in this tree emits -1 ids today; this backend does not
-    // implement the skip semantics (same gap as upstream PR #26631).
+    // ggml lets an id of -1 mark a skipped slot (dst row zeroed, see ggml_mul_mat_id in ggml.h).
+    // Router ids (an ARGSORT/TOP_K view) never hold -1 and keep the graph that the MoE fusion
+    // passes match; any other ids (a static expert pack's remap, a graph input) are masked.
     auto ids = process_view_input_new(context, 2);
+    const bool may_skip = !context.is_input_sorted_ids(2);
 
     if (activations.get_partial_shape().rank() == 3) {
         activations = std::make_shared<ov::op::v0::Unsqueeze>(activations, const_i64({0}));
@@ -186,7 +196,7 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
 
     if (expert_weights.get_element_type() == ov::element::u8 && expert_weights.get_partial_shape().rank().is_static() &&
         expert_weights.get_partial_shape().rank().get_length() == 5) {
-        return rename_outputs_with_suffix({translate_mul_mat_id_mxfp4_packed(context, expert_weights, activations, ids)},
+        return rename_outputs_with_suffix({translate_mul_mat_id_mxfp4_packed(context, expert_weights, activations, ids, may_skip)},
                                           context.get_name());
     }
 
@@ -222,6 +232,12 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
     if (ids.get_element_type() != ov::element::i32 && ids.get_element_type() != ov::element::i64) {
         ids = std::make_shared<ov::op::v0::Convert>(ids, ov::element::i32);
     }
+    ov::Output<ov::Node> skip;
+    if (may_skip) {
+        auto masked = mask_skip_ids(ids);
+        ids  = masked.ids;
+        skip = masked.skip;
+    }
 
     const auto output_type = context.get_output_type();
     const auto activations_type = ggml_openvino_is_gpu() ? ov::element::f16 : ov::element::f32;
@@ -235,12 +251,38 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
     ov::Output<ov::Node> activations_for_gather =
         std::make_shared<ov::op::v1::Transpose>(activations, activations_transpose_order);
 
-    ov::Output<ov::Node> result = std::make_shared<ov::op::internal::GatherMatmul>(activations_for_gather, expert_weights, ids);
+    ov::Output<ov::Node> result;
+    if (may_skip) {
+        // The CPU plugin's GatherMatmul assumes distinct expert ids within a token row, which
+        // router top-k guarantees; repeated ids (e.g. -1 slots replaced by 0) produced wrong rows
+        // and heap corruption. A remapped row cannot always be made distinct (a pack can have
+        // fewer experts than n_used), so every slot gets its own GatherMatmul with one id per row.
+        const auto & ids_ps = ids.get_partial_shape();
+        const auto & act_ps = activations.get_partial_shape();
+        FRONT_END_OP_CONVERSION_CHECK(ids_ps.rank().get_length() == 2 && ids_ps[1].is_static() &&
+                                          act_ps[1].is_static(),
+                                      "MUL_MAT_ID with skippable ids needs a static n_used");
+        const int64_t n_used    = ids_ps[1].get_length();
+        const bool    per_slot_a = act_ps[1].get_length() != 1;
+        ov::OutputVector parts;
+        for (int64_t j = 0; j < n_used; ++j) {
+            auto ids_j = slice_axis(ids, 1, j, j + 1);
+            auto act_j = per_slot_a ? slice_axis(activations_for_gather, 0, j, j + 1) : activations_for_gather;
+            parts.push_back(std::make_shared<ov::op::internal::GatherMatmul>(act_j, expert_weights, ids_j));
+        }
+        result = parts.size() == 1 ? parts[0] : std::make_shared<ov::op::v0::Concat>(parts, 0)->output(0);
+    } else {
+        result = std::make_shared<ov::op::internal::GatherMatmul>(activations_for_gather, expert_weights, ids);
+    }
 
     // result is [n_used, n_tokens, m]; GGML expects [1, n_tokens, n_used, m], except on the
     // stateful path where the leading batch dim is dropped.
     auto result_transpose_order = const_i64({1, 0, 2});
     result = std::make_shared<ov::op::v1::Transpose>(result, result_transpose_order);
+    if (may_skip) {
+        // result is [n_tokens, n_used, m]; skip is [n_tokens, n_used]
+        result = zero_skipped_rows(result, std::make_shared<ov::op::v0::Unsqueeze>(skip, const_i64({2})));
+    }
     if (!context.is_stateful()) {
         auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         result = std::make_shared<ov::op::v0::Unsqueeze>(result, unsqueeze_axes);

@@ -9,10 +9,12 @@
 #include <openvino/op/convert.hpp>
 #include <openvino/op/cos.hpp>
 #include <openvino/op/divide.hpp>
+#include <openvino/op/equal.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/maximum.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/reshape.hpp>
+#include <openvino/op/select.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
 #include <openvino/op/slice.hpp>
@@ -54,6 +56,18 @@ std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::op::v3::Shape
 
 std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::Node> & node, const std::vector<int> & dims) {
     return get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(node), dims);
+}
+
+skip_ids mask_skip_ids(const ov::Output<ov::Node> & ids) {
+    auto minus_one = ov::op::v0::Constant::create(ids.get_element_type(), ov::Shape{}, {-1});
+    auto zero      = ov::op::v0::Constant::create(ids.get_element_type(), ov::Shape{}, {0});
+    auto skip      = std::make_shared<ov::op::v1::Equal>(ids, minus_one);
+    return { std::make_shared<ov::op::v1::Select>(skip, zero, ids), skip };
+}
+
+ov::Output<ov::Node> zero_skipped_rows(const ov::Output<ov::Node> & value, const ov::Output<ov::Node> & skip_rows) {
+    auto zero = ov::op::v0::Constant::create(value.get_element_type(), ov::Shape{}, {0.0f});
+    return std::make_shared<ov::op::v1::Select>(skip_rows, zero, value);
 }
 
 OutputVector rename_outputs_with_suffix(const OutputVector & outputs, const std::string & suffix) {

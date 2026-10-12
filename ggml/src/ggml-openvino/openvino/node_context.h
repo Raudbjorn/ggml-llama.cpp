@@ -53,6 +53,10 @@ public:
 
     PartialShape get_output_shape() const { return m_decoder->get_output_shape(m_node_idx); }
 
+    bool is_input_sorted_ids(size_t index) const {
+        return m_decoder->is_input_sorted_ids(m_node_idx, m_input_names[index]);
+    }
+
     int32_t * get_input_op_params(size_t index) const {
         return m_decoder->get_input_op_params(m_node_idx, m_input_names[index]);
     }
