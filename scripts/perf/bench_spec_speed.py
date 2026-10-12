@@ -15,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import random
+import re
 import signal
 import statistics
 import time
@@ -246,6 +247,9 @@ def capture_maps(proc, expected: list[dict]) -> dict:
     for line in Path(f"/proc/{proc.pid}/maps").read_text().splitlines():
         fields = line.split(maxsplit=5)
         if len(fields) == 6 and fields[5].startswith("/"):
+            if re.fullmatch(r"/(?:memfd:[^/]*|dev/zero|SYSV[0-9a-fA-F]{8}) \(deleted\)", fields[5]):
+                require("x" not in fields[1], f"unqualified executable pseudo-mapping: {fields[5]}")
+                continue
             path = Path(fields[5])
             require(path.exists(), f"mapped file missing or deleted: {path}")
             if path.is_file():

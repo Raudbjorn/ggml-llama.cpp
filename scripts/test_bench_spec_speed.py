@@ -267,6 +267,14 @@ class StochasticTests(unittest.TestCase):
             for bad in (lines[0] + " (deleted)", lines[0].replace(str(files[0].stat().st_ino), "0")):
                 with mock.patch.object(Path, "read_text", return_value=bad), self.assertRaises(ValueError):
                     SPEED.capture_maps(proc, rows)
+            for name in ("/memfd:oneapi buffer (deleted)", "/dev/zero (deleted)", "/SYSV00000000 (deleted)"):
+                pseudo = f"2000-3000 rw-s 00000000 00:01 123 {name}"
+                with self.subTest(name=name):
+                    with mock.patch.object(Path, "read_text", return_value="\n".join([*lines, pseudo])):
+                        self.assertEqual(SPEED.capture_maps(proc, rows), result)
+                    with mock.patch.object(Path, "read_text", return_value="\n".join([*lines, pseudo.replace("rw-s", "r-xs")])):
+                        with self.assertRaisesRegex(ValueError, "unqualified executable pseudo-mapping"):
+                            SPEED.capture_maps(proc, rows)
 
     def test_manifest_requires_matching_qualification_and_complete_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
