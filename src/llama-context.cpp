@@ -1040,7 +1040,7 @@ void llama_context::sched_reserve() {
         if (model.n_moe_pack_layers > 0) {
             const int32_t n_used = get_gf_res_reserve()->n_moe_pack_used;
             if (n_used < model.n_moe_pack_layers) {
-                LLAMA_LOG_WARN("%s: the graph uses %d of %d static expert packs; -lv 4 logs why a layer does not\n",
+                LLAMA_LOG_WARN("%s: the graph uses %d of %d static expert packs; -lv 5 logs why a layer does not\n",
                         __func__, n_used, model.n_moe_pack_layers);
             } else {
                 LLAMA_LOG_INFO("%s: the graph uses all %d static expert packs\n", __func__, n_used);

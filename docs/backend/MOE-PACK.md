@@ -146,7 +146,7 @@ remap stays on the CPU, so nothing overlaps.
 | | |
 | --- | --- |
 | Waits for the CPU split | splits on CPU-device or host-buffer backends, splits sharing its buffer type, and splits that read a tensor root the CPU split writes or write one it uses |
-| Runs without the worker | graphs with an eval callback (`llama-moe-trace`, `LLAMA_ENABLE_INNERQ=1`), splits with a prefetch slot |
+| Runs without the worker | graphs with an eval callback (`llama-moe-trace`, `LLAMA_ENABLE_INNERQ=1`), schedulers with a `--moe-cache` session, splits with a prefetch slot; BLAS splits and the `--cpu-tp` meta device's CPU member stay on the main thread |
 | On return | every graph compute has joined the worker, as without it |
 | Errors | a failed or aborted CPU split is the graph's status; `llama_decode` returns 2 on an abort |
 | Counters | `ggml_backend_sched_free: async CPU splits: N, splits launched beside one: M` at `-lv 5` (completion) or `-v` (bench) |
@@ -157,9 +157,13 @@ Hazards to measure before relying on it on the A770:
 - Thread hand-off costs one condition-variable round trip per CPU split. That is
   about two per offloaded layer per token, and it is paid whether or not anything
   overlaps.
-- SYCL runs an in-order queue. A `--moe-cache` dispatch from a CPU split on the
-  worker is queued behind the main thread's launches, and `--moe-cache` with the
-  worker has not been run.
+- A `--moe-cache` provider submits to the device's own queue from inside the CPU
+  split (Vulkan without the backend's submit lock, SYCL on the backend's in-order
+  stream), so a scheduler with a cache session never uses the worker. Packs turn
+  the cache off, so this costs the pack path nothing.
+- In builds without OpenMP the worker is thread 0 of the CPU threadpool, and the
+  threadpool applies `--prio` and `-C` to the calling thread only when a paused pool
+  resumes, so they may not reach the worker. Performance only.
 - With `--cpu-tp`, the meta device's CPU member runs on the main thread beside
   the worker, so the CPU is oversubscribed. Not tested.
 - Measure decode with and without the worker (`llama-bench -sac 0,1` with the
@@ -168,8 +172,10 @@ Hazards to measure before relying on it on the A770:
 
 Validation: with the worker, `test-moe-pack` gives logits bitwise equal to the
 synchronous run on the CPU, on Vulkan (llvmpipe) with and without a pack, and on
-OpenVINO. On Vulkan all 8 decode-layer pack splits of the test ran beside the
-cold split. An abort raised on the worker returns 2, and the next decode gives
+OpenVINO. On Vulkan the counter reports 8 splits launched beside a running CPU
+split, as many as the test's packed decode layers (4 steps x 2 layers); the test
+asserts only that it is non-zero. With a `--moe-cache` session the worker computes
+no split (`test-moe-cache`, case `cache-hit-async-cpu`). An abort raised on the worker returns 2, and the next decode gives
 the reference logits on the CPU and on Vulkan. On OpenVINO, decoding after an
 abort fails in OpenVINO's ScatterUpdate with or without the worker, so the test
 skips that case there. Qwen3-0.6B Q8_0 on Vulkan with `-ngl 14` gives
@@ -180,17 +186,17 @@ measurement exists: llvmpipe runs on the CPU.
 
 | Log line or symptom | Cause | What to do |
 | --- | --- | --- |
-| `profile '...' selected no layer for a static expert pack` | no profiled layer qualifies | `-lv 4` lists the reason per layer, see [Which layers get a pack](#which-layers-get-a-pack) |
+| `profile '...' selected no layer for a static expert pack` | no profiled layer qualifies | `-lv 4` counts the layers per reason, see [Which layers get a pack](#which-layers-get-a-pack) |
 | `profiled layer(s) without a pack: experts not CPU-resident` | the experts already sit on the GPU | packs only serve offloaded experts: `--n-cpu-moe` or `-ot` |
 | `profiled layer(s) without a pack: the layer does not run on a GPU` | the layer is on the CPU | offload the layer (`-ngl`) |
 | `was traced on arch`, `routes expert`, `routes layer`, `has n_layer=` | the profile belongs to another model | retrace with the deployed model |
 | `has no decode rows (pos >= 0)`, `malformed row` | not a decode trace, or edited by hand | retrace with `-n` > 0 |
 | `allocating ... MiB of expert packs on DEV failed` | not enough device memory | fewer slots (the line prints how many fit) or `--fit on`; SYCL without Level Zero Sysman reports free = total |
-| `the graph uses M of N static expert packs` | the architecture's FFN graph does not qualify (LoRA, other activation) | the pack memory of those layers is wasted; drop them from the profile |
+| `the graph uses M of N static expert packs` | the architecture's FFN graph does not qualify (LoRA, other activation) | `-lv 5` logs the reason per layer; the pack memory of those layers is wasted, drop them from the profile |
 | `--moe-pack-profile and --moe-cache are mutually exclusive` | both were given | choose one |
 | `static expert packs are not supported with split mode tensor` | `-sm tensor` | use layer split |
 | decode not faster | low held-out hit rate, or 2-8 token batches on the blocking sorted SYCL `MUL_MAT_ID` path (two per projection with a pack) | check `simulate.py` on held-out traces; compare `-np 1` decode with and without |
-| `--sched-async-cpu`: `splits launched beside one: 0` | OpenVINO, or batches above 8 tokens | expected: see [Overlapping the cold chain](#overlapping-the-cold-chain---sched-async-cpu-experimental) |
+| `--sched-async-cpu`: `splits launched beside one: 0` | no pack in use, OpenVINO or another device without I32 `GET_ROWS` (no device hot map), batches above 8 tokens, an eval callback, or a `--moe-cache` session | expected: see [Overlapping the cold chain](#overlapping-the-cold-chain---sched-async-cpu-experimental) |
 
 ## Validation status
 
