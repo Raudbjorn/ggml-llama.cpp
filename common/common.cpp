@@ -1292,6 +1292,13 @@ common_decision_type common_get_decision_type(const std::string & fname) {
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    if (params.cpu_tp) {
+        const std::string err = common_cpu_tp_size_split(params);
+        if (!err.empty()) {
+            COM_ERR("--cpu-tp: %s\n", err.c_str());
+            return;
+        }
+    }
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
@@ -1761,6 +1768,198 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
     }
 
     llama_set_adapters_lora(ctx, loras.data(), loras.size(), scales.data());
+}
+
+//
+// --cpu-tp: the CPU as the last member of the tensor-parallel meta device
+//
+
+// the accelerators the tensor split uses: the explicit -dev list, or the devices that llama's
+// default selection for LLAMA_SPLIT_MODE_TENSOR takes (every device without a CPU buffer type)
+static std::vector<ggml_backend_dev_t> common_cpu_tp_accelerators(const common_params & params, bool & explicit_none) {
+    std::vector<ggml_backend_dev_t> devs;
+    explicit_none = !params.devices.empty() && params.devices.front() == nullptr;
+    if (!params.devices.empty()) {
+        for (ggml_backend_dev_t d : params.devices) {
+            if (d != nullptr && ggml_backend_dev_buffer_type(d) != ggml_backend_cpu_buffer_type()) {
+                devs.push_back(d);
+            }
+        }
+        return devs;
+    }
+    ggml_backend_load_all();
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t d = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_buffer_type(d) != ggml_backend_cpu_buffer_type()) {
+            devs.push_back(d);
+        }
+    }
+    return devs;
+}
+
+std::string common_cpu_tp_prepare(common_params & params) {
+    if (!params.cpu_tp) {
+        return params.cpu_tp_margin >= 0 ? "--cpu-tp-margin needs --cpu-tp" : "";
+    }
+    if (params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+        return "--cpu-tp needs --split-mode tensor";
+    }
+    ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu == nullptr) {
+        return "--cpu-tp: no CPU device";
+    }
+    // a second parse of the same params (llama-server reloads) finds the CPU already appended
+    if (params.devices.size() >= 2 && params.devices[params.devices.size() - 2] == cpu) {
+        return "";
+    }
+    bool explicit_none = false;
+    const std::vector<ggml_backend_dev_t> accels = common_cpu_tp_accelerators(params, explicit_none);
+    if (explicit_none) {
+        return "--cpu-tp cannot be combined with -dev none";
+    }
+    if (accels.empty()) {
+        return "--cpu-tp: no accelerator to split with; the CPU alone needs no tensor split";
+    }
+    const size_t n_acc = accels.size();
+    if (n_acc + 1 > llama_max_devices()) {
+        return string_format("--cpu-tp: %zu accelerators and the CPU exceed the %zu devices of a split", n_acc, llama_max_devices());
+    }
+
+    // the split: -ts with one value per accelerator and one for the CPU (last), or sized later
+    // from free memory with --cpu-tp-margin; never both, so neither silently wins
+    bool any = false;
+    for (size_t i = 0; i < llama_max_devices(); ++i) {
+        if (params.tensor_split[i] < 0.0f) {
+            return "--cpu-tp: -ts values must not be negative";
+        }
+        any = any || params.tensor_split[i] > 0.0f;
+    }
+    if (any && params.cpu_tp_margin >= 0) {
+        return "--cpu-tp: give the split either with -ts or with --cpu-tp-margin, not both";
+    }
+    if (!any && params.cpu_tp_margin < 0) {
+        return string_format("--cpu-tp needs a split: -ts with %zu values (one per accelerator, then the CPU), "
+                             "or --cpu-tp-margin MiB to size it from free memory", n_acc + 1);
+    }
+    if (any) {
+        for (size_t i = n_acc + 1; i < llama_max_devices(); ++i) {
+            if (params.tensor_split[i] != 0.0f) {
+                return string_format("--cpu-tp: -ts has more than %zu values (%zu accelerator(s) and the CPU)", n_acc + 1, n_acc);
+            }
+        }
+        if (params.tensor_split[n_acc] == 0.0f) {
+            return string_format("--cpu-tp: -ts value %zu, the CPU's share, is 0", n_acc + 1);
+        }
+    }
+
+    std::vector<ggml_backend_dev_t> devs = accels;
+    devs.push_back(cpu);
+    devs.push_back(nullptr);
+    params.devices = devs;
+
+    std::string names;
+    for (size_t i = 0; i + 1 < devs.size(); ++i) {
+        names += (i ? ", " : "") + std::string(ggml_backend_dev_name(devs[i]));
+        if (any) {
+            names += string_format(" (%g)", params.tensor_split[i]);
+        }
+    }
+    LOG_INF("%s: --cpu-tp: tensor-parallel members %s%s\n", __func__, names.c_str(),
+            any ? "" : ", split sized from free memory at load");
+    return "";
+}
+
+// bytes of tensor data over every file of a (split) GGUF; 0 with an error on failure
+static size_t common_model_tensor_bytes(const std::string & path, std::string & error) {
+    const auto tensor_bytes = [](gguf_context * ctx) {
+        size_t n = 0;
+        for (int64_t i = 0; i < gguf_get_n_tensors(ctx); ++i) {
+            n += gguf_get_tensor_size(ctx, i);
+        }
+        return n;
+    };
+    gguf_init_params ip = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
+    gguf_context * first = gguf_init_from_file(path.c_str(), ip);
+    if (first == nullptr) {
+        error = "cannot read the GGUF header of " + path;
+        return 0;
+    }
+    int n_split = 1;
+    const int64_t kid = gguf_find_key(first, "split.count");
+    if (kid >= 0 && gguf_get_kv_type(first, kid) == GGUF_TYPE_UINT16) {
+        n_split = gguf_get_val_u16(first, kid);
+    }
+    size_t total = tensor_bytes(first);
+    gguf_free(first);
+    if (n_split <= 1) {
+        return total;
+    }
+    char prefix[4096] = {};
+    if (llama_split_prefix(prefix, sizeof(prefix), path.c_str(), 1, n_split) == 0) {
+        error = path + " is not the first file of its " + std::to_string(n_split) + "-file split";
+        return 0;
+    }
+    for (int i = 2; i <= n_split; ++i) {
+        char split[4096] = {};
+        llama_split_path(split, sizeof(split), prefix, i, n_split);
+        gguf_context * ctx = gguf_init_from_file(split, ip);
+        if (ctx == nullptr) {
+            error = std::string("cannot read the GGUF header of ") + split;
+            return 0;
+        }
+        total += tensor_bytes(ctx);
+        gguf_free(ctx);
+    }
+    return total;
+}
+
+std::string common_cpu_tp_size_split(common_params & params) {
+    if (!params.cpu_tp || params.cpu_tp_margin < 0 || params.devices.size() < 3) {
+        return "";
+    }
+    for (size_t i = 0; i < llama_max_devices(); ++i) {
+        if (params.tensor_split[i] != 0.0f) {
+            return ""; // sized by an earlier load (llama-server reloads after sleep)
+        }
+    }
+    std::string error;
+    const size_t model_bytes = common_model_tensor_bytes(params.model.path, error);
+    if (model_bytes == 0) {
+        return error.empty() ? "the model has no tensor data" : error;
+    }
+    const size_t n_acc  = params.devices.size() - 2; // accelerators, the CPU, nullptr
+    const size_t margin = (size_t) params.cpu_tp_margin * 1024 * 1024;
+    constexpr double GiB = 1024.0 * 1024.0 * 1024.0;
+    std::vector<size_t> budget(n_acc);
+    size_t budget_total = 0;
+    for (size_t i = 0; i < n_acc; ++i) {
+        size_t free = 0, total = 0;
+        ggml_backend_dev_memory(params.devices[i], &free, &total);
+        if (free <= margin) {
+            return string_format("%s reports %zu MiB free, not more than the %d MiB margin", ggml_backend_dev_name(params.devices[i]),
+                                 free / (1024 * 1024), params.cpu_tp_margin);
+        }
+        budget[i] = free - margin;
+        budget_total += budget[i];
+    }
+    if (budget_total >= model_bytes) {
+        // nothing for the CPU to take; changing the device set here would be a silent fallback
+        return string_format("the model's %.2f GiB of tensors fit in the %.2f GiB of free accelerator memory left after "
+                             "the margin, so the CPU would get nothing: drop --cpu-tp", model_bytes / GiB, budget_total / GiB);
+    }
+    for (size_t i = 0; i < n_acc; ++i) {
+        params.tensor_split[i] = (float) budget[i];
+    }
+    params.tensor_split[n_acc] = (float) (model_bytes - budget_total);
+    LOG_INF("%s: --cpu-tp: %.2f GiB of tensors over %zu accelerator(s) and the CPU, %d MiB left free on each "
+            "accelerator (weights only; the margin must hold the KV cache and compute buffers):\n",
+            __func__, model_bytes / GiB, n_acc, params.cpu_tp_margin);
+    for (size_t i = 0; i <= n_acc; ++i) {
+        const double bytes = params.tensor_split[i];
+        LOG_INF("%s:   %-10s %7.2f GiB (%4.1f%%)\n", __func__, ggml_backend_dev_name(params.devices[i]), bytes / GiB,
+                100.0 * bytes / (double) model_bytes);
+    }
+    return "";
 }
 
 struct llama_model_params common_model_params_to_llama(common_params & params) {

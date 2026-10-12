@@ -642,6 +642,9 @@ struct common_params {
     // static MoE expert packs (exclusive with an explicit --moe-cache other than off)
     std::string moe_pack_profile; // llama-moe-trace CSV that selects the packed experts
     int32_t     moe_pack_slots = 0; // packed experts per layer, 0 = disabled
+
+    bool    cpu_tp        = false; // the CPU as the last tensor-parallel member (--split-mode tensor)
+    int32_t cpu_tp_margin = -1;    // MiB left free per accelerator when sizing the split (-1 = -ts gives it)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
     bool load_mtp          = false; // load MTP/NextN layers
 
@@ -1056,6 +1059,14 @@ private:
 using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
+
+// --cpu-tp: appends the CPU to the tensor-parallel devices and checks the split; at parse time.
+// Returns an error, empty on success.
+std::string common_cpu_tp_prepare(common_params & params);
+
+// --cpu-tp with --cpu-tp-margin: sizes the split from the model's tensor bytes and the free memory
+// of each accelerator; before the model loads. Returns an error, empty on success.
+std::string common_cpu_tp_size_split(common_params & params);
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);

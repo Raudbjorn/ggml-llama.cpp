@@ -971,6 +971,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --moe-pack-profile and --moe-cache are mutually exclusive\n");
     }
 
+    if (const std::string err = common_cpu_tp_prepare(params); !err.empty()) {
+        throw std::invalid_argument("error: " + err + "\n");
+    }
+
     if (params.moe_cache.mode == COMMON_MOE_CACHE_MODE_ON && !params.no_extra_bufts) {
         LOG_INF("explicit MoE cache mode disables weight repacking\n");
         params.no_extra_bufts = true;
@@ -3065,6 +3069,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_SPLIT_MODE"));
+    add_opt(common_arg(
+        {"--cpu-tp"},
+        "with --split-mode tensor, add the CPU as the last tensor-parallel member: every split weight is\n"
+        "divided by rows between the accelerators and the CPU. give the split with -ts (one value per\n"
+        "accelerator, then the CPU) or size it with --cpu-tp-margin (EXPERIMENTAL)",
+        [](common_params & params) {
+            params.cpu_tp = true;
+        }
+    ).set_env("LLAMA_ARG_CPU_TP"));
+    add_opt(common_arg(
+        {"--cpu-tp-margin"}, "MiB",
+        "size the --cpu-tp split from the model's tensor bytes, giving each accelerator its free memory\n"
+        "minus MiB and the CPU the rest; the margin must hold the KV cache and compute buffers (default: unset, use -ts)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("--cpu-tp-margin must be >= 0");
+            }
+            params.cpu_tp_margin = value;
+        }
+    ).set_env("LLAMA_ARG_CPU_TP_MARGIN"));
     add_opt(common_arg(
         {"-ts", "--tensor-split"}, "N0,N1,N2,...",
         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1",

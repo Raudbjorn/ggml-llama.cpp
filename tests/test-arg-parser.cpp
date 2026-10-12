@@ -340,6 +340,53 @@ static void test(void) {
         assert(pack_params.moe_pack_slots == 4);
     }
 
+    // --cpu-tp: needs --split-mode tensor, an accelerator and exactly one way to give the split
+    {
+        const std::vector<std::vector<std::string>> invalid = {
+            {"binary_name", "-m", "m.gguf", "--cpu-tp", "-ts", "1,1"},
+            {"binary_name", "-m", "m.gguf", "--cpu-tp-margin", "512"},
+            {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-dev", "none", "-ts", "1,1"},
+            {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "--cpu-tp-margin", "-1"},
+        };
+        for (auto argv_case : invalid) {
+            common_params tp_params;
+            assert(false == common_params_parse(argv_case.size(), list_str_to_char(argv_case).data(), tp_params, LLAMA_EXAMPLE_COMMON));
+        }
+
+        ggml_backend_load_all();
+        size_t n_acc = 0;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            n_acc += ggml_backend_dev_buffer_type(ggml_backend_dev_get(i)) != ggml_backend_cpu_buffer_type();
+        }
+        std::string ts_ok, ts_short;
+        for (size_t i = 0; i <= n_acc; ++i) {
+            ts_ok += (i ? "," : "") + std::string("1");
+            ts_short += (i ? "," : "") + std::string(i == n_acc ? "0" : "1");
+        }
+        std::vector<std::string> ok_case = {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-ts", ts_ok};
+        common_params tp_params;
+        const bool ok = common_params_parse(ok_case.size(), list_str_to_char(ok_case).data(), tp_params, LLAMA_EXAMPLE_COMMON);
+        if (n_acc == 0) {
+            assert(!ok); // the CPU alone needs no tensor split
+        } else {
+            assert(ok);
+            assert(tp_params.devices.size() == n_acc + 2);
+            assert(ggml_backend_dev_type(tp_params.devices[n_acc]) == GGML_BACKEND_DEVICE_TYPE_CPU);
+            assert(tp_params.devices[n_acc + 1] == nullptr);
+            const std::vector<std::vector<std::string>> bad_split = {
+                {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp"},                                    // no split
+                {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-ts", ts_short},                   // CPU share 0
+                {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-ts", ts_ok + ",1"},               // one too many
+                {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-ts", ts_ok, "--cpu-tp-margin", "0"}, // both
+            };
+            for (auto argv_case : bad_split) {
+                common_params bad_params;
+                assert(false == common_params_parse(argv_case.size(), list_str_to_char(argv_case).data(), bad_params, LLAMA_EXAMPLE_COMMON));
+            }
+        }
+        printf("test-arg-parser: --cpu-tp checked with %zu accelerator(s)\n", n_acc);
+    }
+
     printf("test-arg-parser: test valid usage\n\n");
 
     argv = {"binary_name", "-m", "model_file.gguf"};
