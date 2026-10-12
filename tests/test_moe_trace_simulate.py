@@ -117,13 +117,29 @@ class PolicyTests(unittest.TestCase):
         # (0,0) used five times becomes hot (uses > 1); a stream of cold experts
         # must evict the other unit, not the hot one
         steps = [[0]] * 6 + [[1], [2], [3], [0]]
-        res = simulate.sim_dynamic({0: steps}, units=2, hot_uses=1)
+        res = simulate.sim_dynamic([[(0, ids)] for ids in steps], units=2, hot_uses=1)
         self.assertAlmostEqual(res.hit, 6 / 10)
 
     def test_dynamic_pool_is_shared_across_layers(self) -> None:
         # one unit total: alternating layers evict each other
-        res = simulate.sim_dynamic({0: [[0]] * 3, 1: [[0]] * 3}, units=1, hot_uses=4)
+        res = simulate.sim_dynamic([[(0, [0]), (1, [0])]] * 3, units=1, hot_uses=4)
         self.assertEqual(res.hit, 0.0)
+
+    def test_dynamic_replays_sessions_in_file_order(self) -> None:
+        # session a stops after layer 0 at pos 1; indexing the per-layer lists would pair
+        # a's layer-1 row at pos 1 with b's layer-0 row at pos 0
+        a = HEADER.format(sid="a") + "0,0,0\n0,1,0\n1,1,1\n"
+        b = HEADER.format(sid="b") + "0,0,2\n0,1,2\n"
+        with tempfile.TemporaryDirectory() as d:
+            trace, err = simulate.parse_traces([write(d, "a.csv", a), write(d, "b.csv", b)])
+        self.assertIsNone(err)
+        assert trace is not None
+        self.assertEqual(simulate.decode_events(trace),
+                         [[(0, [0]), (1, [0])], [(1, [1])], [(0, [2]), (1, [2])]])
+        # one unit: a(0,0) miss, a(1,0) miss, a(1,1) miss, b(0,2) miss, b(1,2) miss
+        res = simulate.sim_dynamic(simulate.decode_events(trace), units=1, hot_uses=4)
+        self.assertEqual(res.hit, 0.0)
+        self.assertAlmostEqual(res.inserts_per_step, 5 / 3)
 
 
 class CliTests(unittest.TestCase):

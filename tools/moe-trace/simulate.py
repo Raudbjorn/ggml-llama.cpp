@@ -141,6 +141,20 @@ def decode_steps(trace: Trace) -> dict[int, list[Step]]:
     return out
 
 
+def decode_events(trace: Trace) -> list[list[tuple[int, Step]]]:
+    """Decode steps in file order across layers: per session, per position, (layer, ids)
+    for every layer routed there. A session whose layers hold different row counts stays
+    aligned by position, unlike the per-layer lists of decode_steps."""
+    out: list[list[tuple[int, Step]]] = []
+    for s in trace.sessions:
+        by_pos: dict[int, list[tuple[int, Step]]] = defaultdict(list)
+        for layer in sorted(s.decode):
+            for pos, ids in s.decode[layer]:
+                by_pos[pos].append((layer, ids))
+        out.extend(by_pos[p] for p in sorted(by_pos))
+    return out
+
+
 def prefill_steps(trace: Trace) -> dict[int, list[Step]]:
     out: dict[int, list[Step]] = defaultdict(list)
     for s in trace.sessions:
@@ -243,18 +257,15 @@ def sim_reelect(decode: dict[int, list[Step]], prefill: dict[int, list[Step]], s
     return Result(hits / max(total, 1), inserts / max(n_decode_steps(decode), 1))
 
 
-def sim_dynamic(decode: dict[int, list[Step]], units: int, hot_uses: int) -> Result:
-    """Global LRU pool over (layer, expert) units with the provider's hot rule."""
+def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int) -> Result:
+    """Global LRU pool over (layer, expert) units with the provider's hot rule, replayed
+    in the order of decode_events."""
     hits = total = inserts = 0
     uses: OrderedDict[tuple[int, int], int] = OrderedDict()  # LRU order, head = oldest
-    layers = sorted(decode)
-    n_steps = n_decode_steps(decode)
-    for step in range(n_steps):
-        for layer in layers:
-            steps = decode[layer]
-            if step >= len(steps):
-                continue
-            for e in steps[step]:
+    n_steps = len(events)
+    for step in events:
+        for layer, ids in step:
+            for e in ids:
                 key = (layer, e)
                 total += 1
                 if key in uses:
@@ -358,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     decode = decode_steps(trace)
+    events = decode_events(trace)
     prefill = prefill_steps(trace)
     if not decode:
         print("error: no decode rows (pos >= 0) in the evaluated trace", file=sys.stderr)
@@ -387,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
         rows.append(("lru", sim_lru(decode, slots)))
         rows.append(("lfu-decay", sim_lfu_decay(decode, slots)))
         rows.append((f"reelect-{args.reelect}", sim_reelect(decode, prefill, slots, args.reelect)))
-        rows.append(("dynamic", sim_dynamic(decode, slots * len(decode), args.hot_uses)))
+        rows.append(("dynamic", sim_dynamic(events, slots * len(decode), args.hot_uses)))
         for name, res in rows:
             if res is None:
                 print(f"{frac:>7.4f} {slots:>5} | {name:>14} {'n/a':>7}")
