@@ -45,6 +45,14 @@ class ParseTests(unittest.TestCase):
         lines = simulate.skew_lines(decode)
         self.assertIn("top  25% of observed (layer, expert) pairs carry 25.0%", lines[1])
 
+    def test_spec_router_trace_is_refused(self) -> None:
+        text = HEADER.format(sid="a").replace("# n_expert", "# kind=spec-router k=2\n# n_expert", 1) + "0,0,0,1\n"
+        with tempfile.TemporaryDirectory() as d:
+            trace, err = simulate.parse_traces([write(d, "s.csv", text)])
+        self.assertIsNone(trace)
+        assert err is not None
+        self.assertIn("holds no routing", err)
+
     def test_sessions_are_not_interleaved(self) -> None:
         a = HEADER.format(sid="a") + "0,0,0,1\n1,0,0,1\n"
         b = HEADER.format(sid="b") + "0,0,2,3\n1,0,2,3\n"

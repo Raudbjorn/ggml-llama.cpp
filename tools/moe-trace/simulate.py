@@ -79,6 +79,9 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
                 if key == "session":
                     current = Session(sid=f"{path}:{value.strip()}")
                     sessions.append(current)
+                elif key == "kind":
+                    # e.g. llama-moe-trace --spec-out: predicted ids, not routed ones
+                    return None, f"{path}:{lineno}: a '{value.strip()}' trace holds no routing"
                 elif key == "n_expert":
                     try:
                         n = int(value)

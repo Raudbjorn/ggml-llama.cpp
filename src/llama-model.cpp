@@ -2138,6 +2138,10 @@ bool moe_pack_read_profile(const char * path, moe_pack_profile & prof, std::stri
             int64_t v = 0;
             if (key == "arch") {
                 prof.arch = val;
+            } else if (key == "kind") {
+                // llama-moe-trace --spec-out writes predicted ids in the same format
+                err = format("'%s':%lld: a '%s' trace holds no routing", path, (long long) lineno, val.c_str());
+                return false;
             } else if (key == "n_layer" || key == "n_expert") {
                 if (!moe_pack_parse_i64(val.data(), val.data() + val.size(), v) || v <= 0) {
                     err = format("'%s':%lld: invalid %s '%s'", path, (long long) lineno, key.c_str(), val.c_str());
