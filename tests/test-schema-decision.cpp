@@ -123,8 +123,16 @@ static void test_schema() {
     expect_schema_error("huge bound", R"({"x": {"type": "number", "minimum": 0, "maximum": 1e300, "step": 1e299, "description": "d"}})", "1e15");
     CHECK(join(encoded(R"({"x": {"type": "number", "minimum": 999999999999999.5, "maximum": 999999999999999.5, "step": 1, "description": "d"}})")) ==
           "999999999999999.5", "decimals kept near 1e15");
-    CHECK(join(encoded(R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 0.30000000001, "maximum": 0.5, "multipleOf": 0.1}}})")) ==
+    CHECK(join(encoded(R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 0.300000001, "maximum": 0.5, "multipleOf": 0.1}}})")) ==
           "0.4,0.5", "a multiple just below minimum is left out");
+    // the double product 909090909090909 * 0.11 prints as the bound; the exact one is 99999999999999.99
+    expect_schema_error("bound that is no multiple at 1e14", R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 99999999999999.98, "maximum": 99999999999999.98, "multipleOf": 0.11}}})", "multiples");
+    CHECK(join(encoded(R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 9000000000000.01, "maximum": 9000000000000.03, "multipleOf": 0.11}}})")) ==
+          "9000000000000.02", "an exact multiple at 9e12");
+    // .99 reads back as the double of .98 at this magnitude
+    expect_schema_error("grid value without a double", R"({"x": {"type": "number", "minimum": 99999999999999.97, "maximum": 100000000000000, "step": 0.01, "description": "d"}})", "no double of its own");
+    expect_schema_error("bounds past 9 decimals", R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 0.30000000001, "maximum": 0.5, "multipleOf": 0.1}}})", "9 decimals");
+    expect_schema_error("past 18 digits", R"({"x": {"type": "number", "minimum": 999999999999.5, "maximum": 999999999999.5, "step": 0.0000001, "description": "d"}})", "18 significant digits");
     expect_schema_error("no multiple in bounds", R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 0.1, "maximum": 0.15, "multipleOf": 0.2}}})", "multiples");
 
     // enums

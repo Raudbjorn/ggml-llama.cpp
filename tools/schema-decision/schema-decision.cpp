@@ -954,6 +954,53 @@ int decimal_places(double x) {
     return -1;
 }
 
+// x as an integer count of 10^-places, from its own shortest decimals (decimal_places(x) <= places)
+// so the binary noise of the double never enters; false past 18 digits
+bool to_fixed(double x, int places, long long & out) {
+    const int k = decimal_places(x);
+    char buf[64];
+    const int len = k < 0 || k > places ? -1 : std::snprintf(buf, sizeof(buf), "%.*f", k, x);
+    if (len <= 0 || len >= (int) sizeof(buf)) {
+        return false;
+    }
+    std::string digits;
+    for (const char * c = buf; *c; ++c) {
+        if (*c >= '0' && *c <= '9') {
+            digits += *c;
+        }
+    }
+    digits.append((size_t) (places - k), '0');
+    digits.erase(0, std::min(digits.find_first_not_of('0'), digits.size() - 1));
+    if (digits.size() > 18) {
+        return false;
+    }
+    out = std::stoll(digits) * (buf[0] == '-' ? -1 : 1);
+    return true;
+}
+
+long long floor_div(long long a, long long b) { return a / b - (a % b != 0 && a < 0); } // b > 0
+long long ceil_div(long long a, long long b) { return a / b + (a % b != 0 && a > 0); }  // b > 0
+
+// v counts 10^-places; prints it with `shown` <= places decimals (v must be a multiple of the
+// dropped digits), never as -0
+std::string fixed_text(long long v, int places, int shown) {
+    for (int i = shown; i < places; ++i) {
+        v /= 10;
+    }
+    const bool neg = v < 0;
+    const unsigned long long a = neg ? 0ull - (unsigned long long) v : (unsigned long long) v;
+    unsigned long long scale = 1;
+    for (int i = 0; i < shown; ++i) {
+        scale *= 10;
+    }
+    std::string text = (neg ? "-" : "") + std::to_string(a / scale);
+    if (shown > 0) {
+        std::string frac = std::to_string(a % scale);
+        text += "." + std::string((size_t) shown - frac.size(), '0') + frac;
+    }
+    return text;
+}
+
 std::string json_text(const std::string & s) {
     return common_json::make(s).dump();
 }
@@ -1079,56 +1126,47 @@ outcome<field_spec> make_field(const std::string & name, const std::string & typ
             return bad(std::string("number needs ordered bounds within 1e15 and a positive ") + step_key);
         }
         const int p_lo = decimal_places(lo), p_hi = decimal_places(hi), p_step = decimal_places(step);
-        if (p_step < 0 || (!json_schema && (p_lo < 0 || p_hi < 0))) {
-            return bad("number grid values need at most 9 decimals");
+        if (p_lo < 0 || p_hi < 0 || p_step < 0) {
+            return bad("number grid bounds and step need at most 9 decimals");
+        }
+        // the grid in fixed point: integer counts of 10^-places, so no value comes from double
+        // rounding (99999999999999.98 is not a multiple of 0.11, the double product says it is)
+        const int places = std::max({ p_lo, p_hi, p_step });
+        long long lo_i = 0, hi_i = 0, step_i = 0;
+        if (!to_fixed(lo, places, lo_i) || !to_fixed(hi, places, hi_i) || !to_fixed(step, places, step_i) || step_i <= 0) {
+            return bad("number grid values need at most 18 significant digits");
         }
         // compact "step": the grid starts at minimum and must end at maximum. JSON Schema
         // "multipleOf": the values are the multiples of the step within the bounds.
-        double first = lo;
-        long long n = 0; // index of the last grid value
-        int places = std::max({ p_lo, p_hi, p_step });
+        long long first_i = lo_i;
+        long long n       = 0; // index of the last grid value
+        int       shown   = places;
         if (json_schema) {
-            const double k_lo = std::ceil(lo / step - 1e-9), k_hi = std::floor(hi / step + 1e-9);
-            if (!(k_hi >= k_lo) || k_hi - k_lo > (double) (max_values - 1)) {
+            const long long k_lo = ceil_div(lo_i, step_i), k_hi = floor_div(hi_i, step_i);
+            if (k_hi < k_lo || k_hi - k_lo > (long long) max_values - 1) {
                 return bad("the multiples of multipleOf within the bounds must be 1-" + std::to_string(max_values) + " values");
             }
-            first  = k_lo * step;
-            n      = (long long) (k_hi - k_lo);
-            places = p_step;
+            first_i = k_lo * step_i;
+            n       = k_hi - k_lo;
+            shown   = p_step; // a multiple of the step has no more decimals than the step
         } else {
-            const double count = (hi - lo) / step;
-            if (count > (double) (max_values - 1) || std::fabs(count - std::nearbyint(count)) > 1e-7) {
+            if ((hi_i - lo_i) % step_i != 0 || (hi_i - lo_i) / step_i > (long long) max_values - 1) {
                 return bad("the number grid must include both ends and hold 1-" + std::to_string(max_values) + " values");
             }
-            n = (long long) std::nearbyint(count);
+            n = (hi_i - lo_i) / step_i;
         }
         f.type = "number";
         for (long long i = 0; i <= n; ++i) {
-            char buf[64];
-            double v = first + (double) i * step;
-            if (std::fabs(v) < 0.5 * std::pow(10.0, -places)) {
-                v = 0.0; // never print -0
-            }
-            const int len = std::snprintf(buf, sizeof(buf), "%.*f", places, v);
-            if (len <= 0 || len >= (int) sizeof(buf)) {
-                return bad("a grid value does not print in 63 characters");
-            }
-            // the bounds print exactly at these decimals, so a grid value on a bound reads back
-            // as that bound
-            const double back = std::strtod(buf, nullptr);
-            if (back < lo || back > hi) {
-                if (json_schema && (i == 0 || i == n)) {
-                    continue; // a multiple just past a bound that is not itself a multiple
-                }
-                return bad(std::string("grid value ") + buf + " falls outside the bounds");
-            }
-            // the count check tolerates 1e-7 steps of division noise, which also passes a
-            // maximum a little past the last step (0..1.00000001 by 0.5): the last value must be it
-            if (!json_schema && i == n && back != hi) {
-                return bad(std::string("the number grid must include both ends; its last value is ") + buf);
+            const std::string text = fixed_text(first_i + i * step_i, places, shown);
+            const double      back = std::strtod(text.c_str(), nullptr);
+            // the value goes out as a JSON number: it must print back as the same grid value
+            char again[64];
+            const int len = std::snprintf(again, sizeof(again), "%.*f", shown, back);
+            if (len <= 0 || len >= (int) sizeof(again) || text != again) {
+                return bad("grid value " + text + " has no double of its own (" + again + ")");
             }
             f.values.push_back(common_json(back));
-            f.encoded.push_back(buf); // fixed decimals: every value has the same shape
+            f.encoded.push_back(text); // fixed decimals: every value has the same shape
             f.numbers.push_back(back);
         }
     } else {

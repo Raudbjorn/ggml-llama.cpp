@@ -100,8 +100,10 @@ always answered, so `required` must list properties of the schema, each at most 
 | `number`, compact | `minimum`, `maximum`, `step` | `minimum + k*step`, which must reach `maximum` exactly |
 | `number`, JSON Schema | `minimum`, `maximum`, `multipleOf` | the multiples of `multipleOf` within the bounds |
 
-Numbers must be finite, within 1e15 in magnitude, and need at most 9 decimals; every value of a
-field prints with the same number of decimals. `aggregate` (or `x-aggregate`) picks the answer of
+Numbers must be finite, within 1e15 in magnitude, and need at most 9 decimals (bounds included)
+and at most 18 significant digits at the grid's precision; the grid is computed in fixed point,
+so every value is an exact grid point, and a value whose decimals no double can hold (two
+decimals near 1e14) is an error. Every value of a field prints with the same number of decimals. `aggregate` (or `x-aggregate`) picks the answer of
 a numeric `tree` field: `mode` (default, the most likely value), `median`, or `mean` (the grid
 value nearest to the expected value); integer aggregates are exact over the full 64-bit range,
 the reported `mean` is a double. A key of another type (`enum` on a `boolean`, `minimum` on an
