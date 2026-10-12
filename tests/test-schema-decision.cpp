@@ -144,6 +144,10 @@ static void test_schema() {
     expect_schema_error("boolean enum", R"({"type": "object", "properties": {"b": {"type": "boolean", "enum": [true]}}})", "does not apply");
     expect_schema_error("integer enum", R"({"n": {"type": "integer", "minimum": 0, "maximum": 3, "enum": [1], "description": "d"}})", "does not apply");
     expect_schema_error("enum bounds", R"({"e": {"type": "enum", "choices": ["a"], "minimum": 0, "description": "d"}})", "does not apply");
+    CHECK(compile_text(R"({"type": "object", "properties": {"a": {"type": "boolean"}}, "required": ["a"]})").ok(), "required property");
+    expect_schema_error("required unknown", R"({"type": "object", "properties": {"a": {"type": "boolean"}}, "required": ["b"]})", "not a property");
+    expect_schema_error("required twice", R"({"type": "object", "properties": {"a": {"type": "boolean"}}, "required": ["a", "a"]})", "twice");
+    expect_schema_error("required not a list", R"({"type": "object", "properties": {"a": {"type": "boolean"}}, "required": "a"})", "array");
     expect_schema_error("exclusiveMinimum", R"({"type": "object", "properties": {"x": {"type": "number", "minimum": 0, "maximum": 1, "multipleOf": 0.5, "exclusiveMinimum": 0}}})", "exclusiveMinimum");
     expect_schema_error("pattern", R"({"type": "object", "properties": {"s": {"type": "string", "enum": ["a"], "pattern": "a"}}})", "pattern");
     expect_schema_error("anyOf at the top", R"({"type": "object", "properties": {"b": {"type": "boolean"}}, "anyOf": []})", "anyOf");

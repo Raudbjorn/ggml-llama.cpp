@@ -1203,6 +1203,26 @@ outcome<compiled_schema> compile_schema(const common_json & schema, const std::s
             out.error = "the schema must define 1-" + std::to_string(max_fields) + " fields";
             return out;
         }
+        // every property is always answered, so "required" holds exactly when it names properties
+        if (json_schema && schema.contains("required")) {
+            const common_json & req = schema.at("required");
+            if (!req.is_array()) {
+                out.error = "\"required\" must be an array of property names";
+                return out;
+            }
+            for (size_t i = 0; i < req.size(); ++i) {
+                if (!req[i].is_string() || !props.contains(req[i].get<std::string>())) {
+                    out.error = "\"required\" names " + req[i].dump() + ", which is not a property";
+                    return out;
+                }
+                for (size_t j = 0; j < i; ++j) {
+                    if (req[j] == req[i]) {
+                        out.error = "\"required\" names " + req[i].dump() + " twice";
+                        return out;
+                    }
+                }
+            }
+        }
         for (const auto & e : props.items()) {
             const common_json & spec = e.value();
             if (e.key().empty() || e.key().size() > max_name_bytes) {

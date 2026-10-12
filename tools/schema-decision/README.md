@@ -88,9 +88,9 @@ Numeric fields also return `interval_p10_p90`, and `mean` with the `mean` aggreg
 ### Schema
 
 Compact form: `{"name": {"type": ..., "description": ..., ...}}`, every field needs a
-description. JSON Schema form: `{"type": "object", "properties": {...}}` (`required`,
-`additionalProperties`, `title`, `description`, `$schema` and `$comment` are accepted and have no
-effect; every field is always answered).
+description. JSON Schema form: `{"type": "object", "properties": {...}}` (`additionalProperties`,
+`title`, `description`, `$schema` and `$comment` are accepted and have no effect; every field is
+always answered, so `required` must list properties of the schema, each at most once).
 
 | type | keys | values |
 | --- | --- | --- |
