@@ -242,6 +242,8 @@ with their expert scale tensors stripped:
 
 `llama-bench --moe-pack off,PROFILE:SLOTS` compares the arms in one run and
 reports a `moe-pack` column; an instance with a pack runs with `moe-cache off`.
+The column shows the pack that was built: an arm whose profile selects no layer,
+or whose allocation fails, is reported as `off`, with a warning on stderr.
 
 Not yet run: the SYCL backend on the Arc A770, and any throughput measurement.
 The same test covers a SYCL device unchanged (`ctest -R test-moe-pack` in a

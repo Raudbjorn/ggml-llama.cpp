@@ -27,6 +27,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // llama_model_n_moe_pack_layers
 #include "log.h"
 
 #ifdef _WIN32
@@ -1802,7 +1803,13 @@ struct test {
         n_gpu_layers   = mparams.n_gpu_layers;
         n_cpu_moe      = inst.n_cpu_moe;
         moe_cache      = inst.moe_cache;
+        // report the pack that was built: a profile that selects no layer, or a failed
+        // allocation, leaves the model unpacked
         moe_pack       = inst.moe_pack;
+        if (moe_pack != "off" && llama_model_n_moe_pack_layers(lmodel) == 0) {
+            fprintf(stderr, "warning: --moe-pack %s built no pack (see the load log), reported as off\n", moe_pack.c_str());
+            moe_pack = "off";
+        }
         moe_cache_fit  = cache_fit_selected;
         repack         = mparams.use_extra_bufts;
         split_mode     = mparams.split_mode;

@@ -546,6 +546,8 @@ if (LLAMA_TEST_BASH AND TARGET test-llama-archs)
             ${CMAKE_CURRENT_SOURCE_DIR}/test-moe-pack.sh
             $<TARGET_FILE:test-llama-archs>
             $<TARGET_FILE:test-moe-pack>
+            # tools/ is configured after tests/, so the target is checked at generate time
+            $<$<TARGET_EXISTS:llama-bench>:$<TARGET_FILE:llama-bench>>
     )
     set_tests_properties(test-moe-pack PROPERTIES TIMEOUT 300)
 endif()

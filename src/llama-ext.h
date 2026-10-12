@@ -86,6 +86,9 @@ using llama_memory_breakdown = std::map<ggml_backend_buffer_type_t, llama_memory
 LLAMA_API int32_t llama_model_n_expert (const struct llama_model * model);
 LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 
+// layers that got a static expert pack at load: 0 when none was requested or built
+LLAMA_API int32_t llama_model_n_moe_pack_layers(const struct llama_model * model);
+
 struct llama_moe_tensor_info {
     enum ggml_type type;
     size_t expert_size;
