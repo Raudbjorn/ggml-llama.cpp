@@ -381,6 +381,10 @@ def main(argv: list[str] | None = None) -> int:
         if err:
             print(f"error: profile: {err}", file=sys.stderr)
             return 2
+        # packs are chosen from decode routing, like the model's profile loader
+        if not decode_steps(profile):
+            print("error: profile: no decode rows (pos >= 0) to choose a static pack from", file=sys.stderr)
+            return 2
 
     decode = decode_steps(trace)
     events = decode_events(trace)

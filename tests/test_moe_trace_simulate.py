@@ -193,6 +193,12 @@ class CliTests(unittest.TestCase):
         code, _, err = run([self.trace, "--n-expert", "4", "--budgets", "0.5"])
         self.assertEqual(code, 0, err)
 
+    def test_prefill_only_profile_is_rejected(self) -> None:
+        prompt_only = write(self.tmp.name, "p.csv", HEADER.format(sid="p") + "-1,0,0,1\n-2,0,2,3\n")
+        code, _, err = run([self.trace, "--profile", prompt_only])
+        self.assertEqual(code, 2)
+        self.assertIn("no decode rows", err)
+
     def test_out_of_range_expert_is_rejected(self) -> None:
         bad = write(self.tmp.name, "bad.csv", HEADER.format(sid="b") + "0,0,0,7\n")
         code, _, err = run([bad])
