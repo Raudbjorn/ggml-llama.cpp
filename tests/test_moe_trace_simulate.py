@@ -45,6 +45,27 @@ class ParseTests(unittest.TestCase):
         lines = simulate.skew_lines(decode)
         self.assertIn("top  25% of observed (layer, expert) pairs carry 25.0%", lines[1])
 
+    def test_expert_tensors_lines(self) -> None:
+        line = "# expert_tensors=1:q4_K/100,q4_K/100,q6_K/150\n"
+        with tempfile.TemporaryDirectory() as d:
+            trace, err = simulate.parse_traces([write(d, "t.csv", HEADER.format(sid="a") + line + "0,1,0,1\n")])
+            self.assertIsNone(err)
+            assert trace is not None
+            self.assertEqual(trace.tensors, {1: [("q4_K", 100), ("q4_K", 100), ("q6_K", 150)]})
+            for bad in ("1", "1:", "x:f32/1", "-1:f32/1", "1:f32", "1:f32/0", "1:/4", "1:f32/1,"):
+                with self.subTest(bad=bad):
+                    text = HEADER.format(sid="a") + f"# expert_tensors={bad}\n0,1,0,1\n"
+                    trace, err = simulate.parse_traces([write(d, "bad.csv", text)])
+                    self.assertIsNone(trace)
+                    self.assertIn("invalid expert_tensors", err or "")
+            # two traces of one model agree; another layout for the same layer is an error
+            a = write(d, "a.csv", HEADER.format(sid="a") + line + "0,1,0,1\n")
+            b = write(d, "b.csv", HEADER.format(sid="b") + "# expert_tensors=1:f32/100\n0,1,0,1\n")
+            self.assertIsNone(simulate.parse_traces([a, a])[1])
+            trace, err = simulate.parse_traces([a, b])
+            self.assertIsNone(trace)
+            self.assertIn("expert tensors conflict", err or "")
+
     def test_spec_router_trace_is_refused(self) -> None:
         text = HEADER.format(sid="a").replace("# n_expert", "# kind=spec-router k=2\n# n_expert", 1) + "0,0,0,1\n"
         with tempfile.TemporaryDirectory() as d:
@@ -161,6 +182,37 @@ class PolicyTests(unittest.TestCase):
         res = simulate.sim_dynamic([[(0, [0, 1])], [(0, [0])]], units=1, hot_uses=4)
         self.assertAlmostEqual(res.hit, 1 / 3)
         self.assertAlmostEqual(res.inserts_per_step, 1 / 2)
+
+    def test_dynamic_tensors_of_one_type_share_the_pool(self) -> None:
+        # experts 0 and 1 on every step, S = 2 of 4 experts. Gate, up and down of one type and
+        # size share one pool of min(2 x 3, 4) = 4 slabs, too few for 2 experts x 3 tensors:
+        # each plan evicts the slabs of the plans before it, so nothing ever hits.
+        steps = [[(0, [0, 1])]] * 8
+        shared = {0: [("f32", 100)] * 3}
+        pools = simulate.dynamic_pools(shared, [0], 2, 4)
+        self.assertEqual(pools, {("f32", 100): 4})
+        self.assertEqual(simulate.sim_dynamic_tensors(steps, shared, pools, hot_uses=4).hit, 0.0)
+        # one unit per (layer, expert) holds both experts: the upper bound
+        self.assertAlmostEqual(simulate.sim_dynamic(steps, units=2, hot_uses=4).hit, 14 / 16)
+
+    def test_dynamic_tensors_of_two_types_use_two_pools(self) -> None:
+        # gate and up share a pool of 4 slabs, down has its own of 2: both experts stay resident.
+        # Step 0 fills 2 slabs of each tensor, 2 (layer, expert) units over 8 steps.
+        steps = [[(0, [0, 1])]] * 8
+        split = {0: [("q4_K", 100), ("q4_K", 100), ("q6_K", 150)]}
+        pools = simulate.dynamic_pools(split, [0], 2, 4)
+        self.assertEqual(pools, {("q4_K", 100): 4, ("q6_K", 150): 2})
+        res = simulate.sim_dynamic_tensors(steps, split, pools, hot_uses=4)
+        self.assertAlmostEqual(res.hit, 7 / 8)
+        self.assertAlmostEqual(res.inserts_per_step, 2 / 8)
+
+    def test_dynamic_tensor_plans_fill_separately(self) -> None:
+        # each tensor's plan has its own fill budget: one fill per plan still inserts both
+        # tensors of expert 0 in step 0, so step 1 hits it in both (2 of 4 tensor reads)
+        two = {0: [("f32", 100), ("f32", 100)]}
+        steps = [[(0, [0, 1])], [(0, [0, 2])]]
+        res = simulate.sim_dynamic_tensors(steps, two, {("f32", 100): 4}, hot_uses=4, inserts_per_plan=1)
+        self.assertAlmostEqual(res.hit, 2 / 8)
 
     def test_reelect_applies_each_prompt_when_its_session_starts(self) -> None:
         # a: prompt and decode on expert 0; b: a long prompt on expert 1, then expert 1.
@@ -327,6 +379,31 @@ class CliTests(unittest.TestCase):
                 self.assertIn("layer 2", err)
         code, _, err = run([good, "--budgets", "0.5"])
         self.assertEqual(code, 0, err)
+
+    def test_dynamic_follows_the_expert_tensors_lines(self) -> None:
+        rows = "".join(f"{p},0,0,1\n" for p in range(8))
+
+        def dynamic_hit(text: str) -> str:
+            code, out, err = run([write(self.tmp.name, "e.csv", text), "--budgets", "0.5"])
+            self.assertEqual(code, 0, err)
+            line = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == "dynamic")
+            return line.split("|")[1].split()[1]
+
+        self.assertEqual(dynamic_hit(HEADER.format(sid="e") + rows), "87.5%")
+        shared = HEADER.format(sid="e") + "# expert_tensors=0:f32/100,f32/100,f32/100\n" + rows
+        self.assertEqual(dynamic_hit(shared), "0.0%")
+        split = HEADER.format(sid="e") + "# expert_tensors=0:q4_K/100,q4_K/100,q6_K/150\n" + rows
+        self.assertEqual(dynamic_hit(split), "87.5%")
+        code, out, _ = run([write(self.tmp.name, "e.csv", shared)])
+        self.assertIn("weighted by bytes", out)
+        code, out, _ = run([self.trace])
+        self.assertIn("upper bound", out)
+
+    def test_expert_tensors_must_cover_every_routed_layer(self) -> None:
+        text = HEADER.format(sid="m") + "# expert_tensors=0:f32/100\n0,0,0,1\n0,1,0,1\n"
+        code, _, err = run([write(self.tmp.name, "m.csv", text)])
+        self.assertEqual(code, 2)
+        self.assertIn("layer 1 routes experts but has no '# expert_tensors=' line", err)
 
     def test_prefill_only_trace_is_rejected(self) -> None:
         pre = write(self.tmp.name, "pre.csv", HEADER.format(sid="c") + "-1,0,0,1\n")

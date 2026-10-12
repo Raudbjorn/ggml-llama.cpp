@@ -24,6 +24,7 @@
 #include "log.h"
 #include "sampling.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // llama_model_get_moe_tensor_info
 
 #include <algorithm>
 #include <cerrno>
@@ -33,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <random>
 #include <string>
 #include <system_error>
@@ -249,6 +251,27 @@ static std::string meta_str(const llama_model * model, const std::string & key) 
     return n < 0 ? std::string() : std::string(buf);
 }
 
+// the expert tensors of each MoE layer, in model order, as TYPE/BYTES per expert: the --moe-cache
+// provider keeps one pool per weight type and expert size, so simulate.py replays them per pool
+static bool write_expert_tensors(FILE * out, const llama_model * model) {
+    std::vector<llama_moe_tensor_info> info(llama_model_get_moe_tensor_info(model, nullptr, 0));
+    info.resize(std::min(info.size(), llama_model_get_moe_tensor_info(model, info.data(), info.size())));
+    std::map<int64_t, std::string> by_layer;
+    for (const llama_moe_tensor_info & t : info) {
+        if (t.layer < 0) {
+            continue;
+        }
+        std::string & line = by_layer[t.layer];
+        line += line.empty() ? "" : ",";
+        line += std::string(ggml_type_name(t.type)) + "/" + std::to_string(t.expert_size);
+    }
+    bool failed = false;
+    for (const auto & [layer, line] : by_layer) {
+        failed |= fprintf(out, "# expert_tensors=%lld:%s\n", (long long) layer, line.c_str()) < 0;
+    }
+    return !failed;
+}
+
 static bool write_header(FILE * out, const llama_model * model, const llama_context * lctx, const common_params & params,
                          uint32_t seed, size_t n_prompt, uint64_t session, const char * kind) {
     char desc[256] = {};
@@ -275,6 +298,7 @@ static bool write_header(FILE * out, const llama_model * model, const llama_cont
     if (!n_used.empty()) {
         failed |= fprintf(out, "# n_expert_used=%s\n", n_used.c_str()) < 0;
     }
+    failed |= !write_expert_tensors(out, model);
     // the context's sizes, not the requested ones: -c 0 takes the model's, and n_batch/n_ubatch are capped
     failed |= fprintf(out, "# n_prompt=%zu n_predict=%d n_ctx=%u n_batch=%u n_ubatch=%u\n", n_prompt, params.n_predict,
                       llama_n_ctx(lctx), llama_n_batch(lctx), llama_n_ubatch(lctx)) < 0;

@@ -16,11 +16,15 @@ Per-layer policies use S slots per MoE layer (S = budget x n_expert):
   lfu-decay        per-layer exponentially decayed frequency
   reelect-K        per-layer decayed counts, membership re-elected every K steps
 
-The dynamic policy models the --moe-cache provider: one pool shared by all
-layers with min(S x n_layers, n_expert) (layer, expert) units, LRU order, and resident
-experts with more than --hot-uses uses evicted only when every unit is hot.
-Each layer of each step fills at most --inserts-per-plan misses and never
-evicts a unit it hit or filled; its other misses stay on the CPU.
+The dynamic policy models the --moe-cache provider: LRU order, and resident
+units with more than --hot-uses uses evicted only when every unit is hot. Each
+plan fills at most --inserts-per-plan misses and never evicts a unit it hit or
+filled; its other misses stay on the CPU. With the trace's '# expert_tensors='
+lines, every expert tensor of a layer is its own plan on the pool of its weight
+type and expert size, which holds min(S x member tensors, n_expert) slabs, so
+gate, up and down of one type compete for one pool; hit and ins/tok are then
+weighted by bytes. Without them, one pool of min(S x n_layers, n_expert)
+(layer, expert) units with one plan per layer is an upper bound.
 
 Sessions ('# session=' lines) are replayed in file order and never
 interleaved; cache state carries over between sessions as in a long-running
@@ -33,7 +37,8 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-from collections import OrderedDict, defaultdict
+from collections import Counter, OrderedDict, defaultdict
+from collections.abc import Hashable, Iterable
 from dataclasses import dataclass, field
 
 Step = list[int]
@@ -53,6 +58,8 @@ class Trace:
     widths: dict[int, int]  # routed experts per row, per layer (expert_used_count may vary by layer)
     arch: str | None = None
     n_layer: int | None = None
+    # per MoE layer, its expert tensors as (weight type, bytes per expert), from '# expert_tensors='
+    tensors: dict[int, list[tuple[str, int]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -68,6 +75,7 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
     widths: dict[int, int] = {}
     arch: str | None = None
     n_layer: int | None = None
+    tensors: dict[int, list[tuple[str, int]]] = {}
     for path in paths:
         try:
             with open(path, encoding="utf-8") as f:
@@ -110,6 +118,13 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
                     if n <= 0 or (n_layer is not None and n != n_layer):
                         return None, f"{path}:{lineno}: n_layer {n} conflicts with {n_layer}"
                     n_layer = n
+                elif key == "expert_tensors":
+                    parsed = parse_expert_tensors(value.strip())
+                    if parsed is None:
+                        return None, f"{path}:{lineno}: invalid expert_tensors '{value.strip()}'"
+                    layer, layout = parsed
+                    if tensors.setdefault(layer, layout) != layout:
+                        return None, f"{path}:{lineno}: layer {layer}: expert tensors conflict with an earlier trace"
                 continue
             if line.startswith("pos,"):
                 continue
@@ -143,7 +158,29 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
             rows.sort(key=lambda r: -r[0])  # pos = -(p + 1): prompt order
         for rows in s.decode.values():
             rows.sort(key=lambda r: r[0])
-    return Trace(sessions=sessions, n_expert=n_expert, widths=widths, arch=arch, n_layer=n_layer), None
+    return Trace(sessions=sessions, n_expert=n_expert, widths=widths, arch=arch, n_layer=n_layer, tensors=tensors), None
+
+
+def parse_expert_tensors(value: str) -> tuple[int, list[tuple[str, int]]] | None:
+    """'LAYER:TYPE/BYTES,TYPE/BYTES,...' as llama-moe-trace writes it, or None if malformed."""
+    layer_text, sep, rest = value.partition(":")
+    if not sep or not rest:
+        return None
+    try:
+        layer = int(layer_text)
+    except ValueError:
+        return None
+    layout: list[tuple[str, int]] = []
+    for item in rest.split(","):
+        ty, sep, size = item.partition("/")
+        try:
+            nbytes = int(size)
+        except ValueError:
+            return None
+        if not sep or not ty or nbytes <= 0:
+            return None
+        layout.append((ty, nbytes))
+    return (layer, layout) if layer >= 0 else None
 
 
 def validate_ids(trace: Trace, n_expert: int) -> str | None:
@@ -304,42 +341,80 @@ def sim_reelect(trace: Trace, slots: int, interval: int, n_steps: int, alpha: fl
 PROVIDER_INSERTS_PER_PLAN = 8  # GGML_CUDA_MOE_CACHE_INSERTS default, ggml-moe-cache-common.h
 
 
+def plan(uses: OrderedDict[Hashable, int], units: int, keys: Iterable[Hashable], hot_uses: int,
+         inserts_per_plan: int) -> tuple[int, int]:
+    """One provider plan on one pool (uses: LRU order, head = oldest): it fills at most
+    inserts_per_plan of its misses, and it cannot evict a unit it hit or filled (the
+    provider pins those); its other misses run on the CPU and are not inserted.
+    Returns (hits, inserts)."""
+    hits = inserts = fills = 0
+    pinned: set[Hashable] = set()
+    for key in keys:
+        if key in uses:
+            hits += 1
+            uses[key] += 1
+            uses.move_to_end(key)
+            pinned.add(key)
+            continue
+        if units <= 0 or fills >= inserts_per_plan:
+            continue
+        fills += 1  # the provider spends the budget before it looks for a victim
+        if len(uses) >= units:
+            victim = next((k for k, u in uses.items() if u <= hot_uses and k not in pinned), None)
+            if victim is None:
+                victim = next((k for k in uses if k not in pinned), None)
+            if victim is None:
+                continue  # every unit is pinned by this plan
+            del uses[victim]
+        uses[key] = 0
+        pinned.add(key)
+        inserts += 1
+    return hits, inserts
+
+
 def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int,
                 inserts_per_plan: int = PROVIDER_INSERTS_PER_PLAN) -> Result:
     """Global LRU pool over (layer, expert) units with the provider's rules, replayed in
-    the order of decode_events. Each (step, layer) is one provider plan: it fills at most
-    inserts_per_plan of its misses, and it cannot evict a unit it hit or filled (the
-    provider pins those); its other misses run on the CPU and are not inserted."""
+    the order of decode_events, one plan per (step, layer). An upper bound when a layer's
+    expert tensors share a pool: see sim_dynamic_tensors."""
     hits = total = inserts = 0
-    uses: OrderedDict[tuple[int, int], int] = OrderedDict()  # LRU order, head = oldest
-    n_steps = len(events)
+    uses: OrderedDict[Hashable, int] = OrderedDict()
     for step in events:
         for layer, ids in step:
-            pinned: set[tuple[int, int]] = set()
-            fills = 0
-            for e in ids:
-                key = (layer, e)
-                total += 1
-                if key in uses:
-                    hits += 1
-                    uses[key] += 1
-                    uses.move_to_end(key)
-                    pinned.add(key)
-                    continue
-                if units <= 0 or fills >= inserts_per_plan:
-                    continue
-                fills += 1  # the provider spends the budget before it looks for a victim
-                if len(uses) >= units:
-                    victim = next((k for k, u in uses.items() if u <= hot_uses and k not in pinned), None)
-                    if victim is None:
-                        victim = next((k for k in uses if k not in pinned), None)
-                    if victim is None:
-                        continue  # every unit is pinned by this plan
-                    del uses[victim]
-                uses[key] = 0
-                pinned.add(key)
-                inserts += 1
-    return Result(hits / max(total, 1), inserts / max(n_steps, 1))
+            h, i = plan(uses, units, [(layer, e) for e in ids], hot_uses, inserts_per_plan)
+            hits += h
+            inserts += i
+            total += len(ids)
+    return Result(hits / max(total, 1), inserts / max(len(events), 1))
+
+
+def dynamic_pools(tensors: dict[int, list[tuple[str, int]]], layers: Iterable[int], slots: int,
+                  n_expert: int) -> dict[tuple[str, int], int]:
+    """Slabs of each provider pool: one pool per weight type and expert size, S slabs per
+    member tensor, capped at n_expert slabs (moe-cache.cpp)."""
+    members = Counter(t for layer in layers for t in tensors[layer])
+    return {t: min(slots * n, n_expert) for t, n in members.items()}
+
+
+def sim_dynamic_tensors(events: list[list[tuple[int, Step]]], tensors: dict[int, list[tuple[str, int]]],
+                        pools: dict[tuple[str, int], int], hot_uses: int,
+                        inserts_per_plan: int = PROVIDER_INSERTS_PER_PLAN) -> Result:
+    """The provider's keys: an entry per (expert tensor, expert), and a plan per MUL_MAT_ID,
+    so each expert tensor of a layer is its own plan on the pool of its type and size, in
+    the trace's tensor order. Hits are the fraction of routed expert bytes served from the
+    pools; inserts are counted in (layer, expert) units of all the layer's tensors."""
+    hit_bytes = total_bytes = 0
+    inserted = 0.0
+    state: dict[tuple[str, int], OrderedDict[Hashable, int]] = {t: OrderedDict() for t in pools}
+    for step in events:
+        for layer, ids in step:
+            layer_bytes = sum(nbytes for _, nbytes in tensors[layer])
+            for ti, t in enumerate(tensors[layer]):
+                h, i = plan(state[t], pools[t], [(layer, ti, e) for e in ids], hot_uses, inserts_per_plan)
+                hit_bytes += h * t[1]
+                total_bytes += len(ids) * t[1]
+                inserted += i * t[1] / layer_bytes
+    return Result(hit_bytes / max(total_bytes, 1), inserted / max(len(events), 1))
 
 
 def skew_lines(decode: dict[int, list[Step]]) -> list[str]:
@@ -447,6 +522,10 @@ def main(argv: list[str] | None = None) -> int:
     if not decode:
         print("error: no decode rows (pos >= 0) in the evaluated trace", file=sys.stderr)
         return 2
+    missing = sorted(set(decode) - set(trace.tensors))
+    if trace.tensors and missing:
+        print(f"error: layer {missing[0]} routes experts but has no '# expert_tensors=' line", file=sys.stderr)
+        return 2
 
     lo, hi = min(trace.widths.values()), max(trace.widths.values())
     active = str(lo) if lo == hi else f"{lo}-{hi}"
@@ -476,10 +555,15 @@ def main(argv: list[str] | None = None) -> int:
         rows.append(("lru", sim_lru(decode, slots, len(events))))
         rows.append(("lfu-decay", sim_lfu_decay(decode, slots, len(events))))
         rows.append((f"reelect-{args.reelect}", sim_reelect(trace, slots, args.reelect, len(events))))
-        # the provider shares one pool per expert shape and weight type across all layers and caps
+        # the provider shares one pool per expert size and weight type across all layers and caps
         # it at the creating tensor's n_expert slabs (moe-cache.cpp), whatever the budget
-        units = min(slots * len(decode), n_expert)
-        rows.append(("dynamic", sim_dynamic(events, units, args.hot_uses, args.inserts_per_plan)))
+        if trace.tensors:
+            pools = dynamic_pools(trace.tensors, decode, slots, n_expert)
+            rows.append(("dynamic", sim_dynamic_tensors(events, trace.tensors, pools, args.hot_uses,
+                                                        args.inserts_per_plan)))
+        else:
+            units = min(slots * len(decode), n_expert)
+            rows.append(("dynamic", sim_dynamic(events, units, args.hot_uses, args.inserts_per_plan)))
         for name, res in rows:
             if res is None:
                 print(f"{frac:>7.4f} {slots:>5} | {name:>14} {'n/a':>7}")
@@ -495,9 +579,15 @@ def main(argv: list[str] | None = None) -> int:
         print("* assumed cost model from --slab-mb/--ram-gbs/--link-gbs; excludes kernels, "
               "activation transfers, synchronization and compilation")
     print("static-oracle selects residents from the scored trace itself and is optimistic")
+    if trace.tensors:
+        print("dynamic replays each expert tensor as its own plan on the pool of its weight type and size; "
+              "hit and ins/tok are weighted by bytes")
+    else:
+        print("dynamic counts one pool unit per (layer, expert): the trace has no '# expert_tensors=' lines, so it is an "
+              "upper bound where gate, up and down of one weight type share a pool")
     print("dynamic assumes the --moe-cache provider takes every MoE layer; it leaves on the CPU expert tensors below its "
-          "minimum (logged as min-expert=, GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB) and unsupported weight types, which a trace "
-          "does not record")
+          "minimum (logged as min-expert=, GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB) and unsupported weight types, which the "
+          "replay does not apply")
     return 0
 
 

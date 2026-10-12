@@ -22,7 +22,9 @@ Lines starting with `#` carry provenance: tool version, a per-run `session`
 id, model path/description/size, architecture, `n_layer`, `n_expert`,
 `n_expert_used`, prompt length and the context's `n_ctx`, `n_batch` and `n_ubatch`
 (as the context resolved them, not as requested), and the sampling seed and settings.
-Then a header row and one row per (token, layer):
+One `# expert_tensors=LAYER:TYPE/BYTES,...` line per MoE layer lists its expert
+tensors in model order, with the weight type and bytes per expert; the simulator
+groups them into the provider's pools. Then a header row and one row per (token, layer):
 
 ```
 pos,layer,id0,...,idK-1
@@ -127,24 +129,29 @@ one layer on the target link.
 n_expert` slots: `static` (top-S from a separate `--profile` trace),
 `static-oracle` (top-S from the scored trace itself; optimistic, not
 deployable), `static-prefill`, `lru`, `lfu-decay` and `reelect-K`. The
-`dynamic` policy models the `--moe-cache` provider: one pool of
-`min(S x n_layers, n_expert)` units shared by all layers (the provider keeps one
-pool per expert shape and weight type, and caps it at the creating tensor's
-`n_expert` slabs whatever the budget; that is an upper bound, since gate, up and
-down slabs of one weight type have the same size and then share the pool, which
-holds `n_expert / 3` units), LRU order, and units with more than
-`--hot-uses` uses evicted only when every unit is hot. Like the provider, each
-layer of each step fills at most `--inserts-per-plan` misses (default 8, as
-`GGML_CUDA_MOE_CACHE_INSERTS`) and never evicts a unit it hit or filled; the
-other misses run on the CPU and are not inserted. The provider also caps fills
+`dynamic` policy models the `--moe-cache` provider. The provider keeps one pool
+per weight type and expert size, caps it at the creating tensor's `n_expert`
+slabs whatever the budget, keys its entries by (expert tensor, expert) and plans
+each `MUL_MAT_ID` on its own. With the trace's `# expert_tensors=` lines the
+replay does the same: each expert tensor of a layer is its own plan, in the
+listed order, on the pool of its type and size, which holds `min(S x member
+tensors, n_expert)` slabs. Gate, up and down of one type and size therefore
+compete for one pool, and hit and `ins/tok` are weighted by bytes, the inserts
+in (layer, expert) units. A trace without those lines (older traces) gets one
+pool of `min(S x n_layers, n_expert)` (layer, expert) units and one plan per
+layer: an upper bound wherever tensors of a layer share a pool. In both, the
+order is LRU, units with more than `--hot-uses` uses are evicted only when every
+unit is hot, and like the provider each plan fills at most `--inserts-per-plan`
+misses (default 8, as `GGML_CUDA_MOE_CACHE_INSERTS`) and never evicts a unit it
+hit or filled; the other misses run on the CPU and are not inserted. The provider also caps fills
 at `GGML_CUDA_MOE_CACHE_QUEUE_MB / expert size`, which the simulator does not
 model (with the 512 MiB default it binds only above 64 MiB per expert tensor).
 The replay assumes the provider takes every MoE layer. It does not: expert tensors
 below its minimum (`GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB`; the provider logs the value
 in use as `min-expert=`), unsupported weight types and batches above
-`GGML_CUDA_MOE_CACHE_MAX_BATCH` stay on the CPU. A trace records neither tensor
-sizes nor types, so check a small-expert model against that log line before
-reading its `dynamic` row.
+`GGML_CUDA_MOE_CACHE_MAX_BATCH` stay on the CPU. The `# expert_tensors=` sizes
+can be compared with that `min-expert=` value; the replay does not apply it, nor
+the per-backend list of supported types.
 
 Expert counts come from the trace's `# n_expert=` line, or from `--n-expert`
 for a trace without one (a different value is an error), never from the
