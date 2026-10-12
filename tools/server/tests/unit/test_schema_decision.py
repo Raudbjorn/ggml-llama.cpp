@@ -261,6 +261,35 @@ def test_decision_ignores_per_request_lora():
         assert abs(b[name]["probability"] - a[name]["probability"]) < 1e-5, name
 
 
+def test_decision_prefix_follows_global_lora_scale():
+    global server
+    server = ServerPreset.stories15m_moe()
+    server.lora_files = [download_file("https://huggingface.co/ggml-org/stories15M_MOE/resolve/main/moe_shakespeare15M.gguf")]
+    server.n_ctx = 2048
+    server.n_batch = 256
+    server.decision_seqs = 6
+    server.start()
+    assert decide(CONTEXTS[:1]).status_code == 200
+    assert decide(CONTEXTS[:1]).body["usage"]["cached_tokens"] > 0
+    res = server.make_request("POST", "/lora-adapters", data=[{"id": 0, "scale": 0.0}])
+    assert res.status_code == 200, res.body
+    # the cached prefix was computed under the old scale
+    after = decide(CONTEXTS[:1])
+    assert after.status_code == 200, after.body
+    assert after.body["usage"]["cached_tokens"] == 0
+    # scale 0 scores like a server without the adapter
+    server.stop()
+    server.lora_files = None
+    server.start()
+    fresh = decide(CONTEXTS[:1])
+    assert fresh.status_code == 200, fresh.body
+    a = fresh.body["results"][0]["fields"]
+    b = after.body["results"][0]["fields"]
+    for name in a:
+        assert b[name]["value"] == a[name]["value"], name
+        assert abs(b[name]["probability"] - a[name]["probability"]) < 1e-5, name
+
+
 def test_slot_reclaims_the_cached_decision_prefix():
     global server
     server.start()

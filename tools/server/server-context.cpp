@@ -3326,6 +3326,10 @@ private:
                     }
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
                     params_base.lora_adapters = new_loras;
+                    // the cached decision prefix was computed under the old scales
+                    if (schema_decision_engine) {
+                        schema_decision_engine->reset();
+                    }
                     auto res = std::make_unique<server_task_result_apply_lora>();
                     res->id = task.id;
                     queue_results.send(std::move(res));
