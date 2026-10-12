@@ -19,24 +19,37 @@ addition to it: a run uses one or the other.
 | Needs | a routing profile of the intended workload | nothing |
 | Supported layers | plain SiLU-gated experts (below) | also scaled and biased experts |
 
-## Workflow
+## Quick start
 
 ```sh
-# 1. record routing on a workload that represents the deployment
-llama-moe-trace -m model.gguf -ngl 99 --n-cpu-moe 99 -f work.txt -n 512 --temp 0.7 --seed 1 -o work.csv
+# 0. build the server, the bench and the trace tool (SYCL: see SYCL.md for the oneAPI setup)
+cmake --build build --target llama-server llama-bench llama-moe-trace
 
-# 2. pick a slot count; score a held-out workload against the work profile
+# 1. baseline: experts on the CPU, without and with the dynamic cache
+llama-bench -m model.gguf -ngl 99 --n-cpu-moe 99 -p 512 -n 128 --moe-cache off,on
+
+# 2. record routing on a workload that represents the deployment, and on a held-out one
+llama-moe-trace -m model.gguf -ngl 99 --n-cpu-moe 99 -f work.txt    -n 512 --temp 0.7 --seed 1 -o work.csv
+llama-moe-trace -m model.gguf -ngl 99 --n-cpu-moe 99 -f heldout.txt -n 512 --temp 0.7 --seed 2 -o heldout.csv
+
+# 3. pick a slot count: held-out hit rate with 1/16, 1/8 and 1/4 of each layer's experts packed
 tools/moe-trace/simulate.py heldout.csv --profile work.csv --budgets 0.0625,0.125,0.25
 
-# 3. run with the pack
+# 4. A/B at equal VRAM: the pack against the dynamic cache with the pack's budget in MiB
+#    (the load log prints it: "static expert packs on DEV: ... MiB")
+llama-bench -m model.gguf -ngl 99 --n-cpu-moe 99 -p 512 -n 128 --moe-pack off,work.csv:16 --moe-cache off,MIB
+
+# 5. serve; --fit places the layers with the pack bytes included
 llama-server -m model.gguf -ngl 99 --n-cpu-moe 99 --fit on \
     --moe-pack-profile work.csv --moe-pack-slots 16
 ```
 
-See [tools/moe-trace/README.md](../../tools/moe-trace/README.md) for the trace
-format and the simulator's policies. Keep the profile and the evaluation
-workload separate: a profile scored against its own trace (`static-oracle`) is
-optimistic.
+A slot costs one expert slab of each of the layer's expert tensors (gate, up and
+down, or gate_up and down) on the layer's GPU. See
+[tools/moe-trace/README.md](../../tools/moe-trace/README.md) for the trace format,
+the simulator's policies and the expert prediction diagnostics. Keep the profile
+and the evaluation workload separate: a profile scored against its own trace
+(`static-oracle`) is optimistic.
 
 ## Options
 
@@ -162,6 +175,22 @@ abort fails in OpenVINO's ScatterUpdate with or without the worker, so the test
 skips that case there. Qwen3-0.6B Q8_0 on Vulkan with `-ngl 14` gives
 perplexity 51.0296 in both modes (85 CPU splits on the worker). No speed
 measurement exists: llvmpipe runs on the CPU.
+
+## Troubleshooting
+
+| Log line or symptom | Cause | What to do |
+| --- | --- | --- |
+| `profile '...' selected no layer for a static expert pack` | no profiled layer qualifies | `-lv 4` lists the reason per layer, see [Which layers get a pack](#which-layers-get-a-pack) |
+| `profiled layer(s) without a pack: experts not CPU-resident` | the experts already sit on the GPU | packs only serve offloaded experts: `--n-cpu-moe` or `-ot` |
+| `profiled layer(s) without a pack: the layer does not run on a GPU` | the layer is on the CPU | offload the layer (`-ngl`) |
+| `was traced on arch`, `routes expert`, `routes layer`, `has n_layer=` | the profile belongs to another model | retrace with the deployed model |
+| `has no decode rows (pos >= 0)`, `malformed row` | not a decode trace, or edited by hand | retrace with `-n` > 0 |
+| `allocating ... MiB of expert packs on DEV failed` | not enough device memory | fewer slots (the line prints how many fit) or `--fit on`; SYCL without Level Zero Sysman reports free = total |
+| `the graph uses M of N static expert packs` | the architecture's FFN graph does not qualify (LoRA, other activation) | the pack memory of those layers is wasted; drop them from the profile |
+| `--moe-pack-profile and --moe-cache are mutually exclusive` | both were given | choose one |
+| `static expert packs are not supported with split mode tensor` | `-sm tensor` | use layer split |
+| decode not faster | low held-out hit rate, or 2-8 token batches on the blocking sorted SYCL `MUL_MAT_ID` path (two per projection with a pack) | check `simulate.py` on held-out traces; compare `-np 1` decode with and without |
+| `--sched-async-cpu`: `splits launched beside one: 0` | OpenVINO, or batches above 8 tokens | expected: see [Overlapping the cold chain](#overlapping-the-cold-chain---sched-async-cpu-experimental) |
 
 ## Validation status
 
