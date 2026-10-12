@@ -1153,8 +1153,13 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
+// ggml_new_tensor_impl already points view_src at the root; walk the chain anyway so that a
+// tensor built another way cannot hide a dependency from the CPU worker's conflict check
 static const ggml_tensor * ggml_sched_tensor_root(const ggml_tensor * t) {
-    return t->view_src ? t->view_src : t;
+    while (t->view_src) {
+        t = t->view_src;
+    }
+    return t;
 }
 
 // Opt-in, see ggml_backend_sched_set_async_cpu(): one thread per scheduler computes the splits of
