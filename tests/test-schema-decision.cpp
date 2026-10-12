@@ -188,7 +188,7 @@ static void test_schema() {
     // aggregates over a tree distribution
     {
         auto cs = compile_text(R"({"x": {"type": "integer", "minimum": 1, "maximum": 5, "aggregate": "median", "description": "d"}})");
-        CHECK(cs.ok(), "median schema");
+        CHECK(cs.ok() && cs.value.inputs.size() == 1 && cs.value.inputs[0].needs_tree, "median schema scores a tree");
         result r;
         field_result fr;
         fr.winner = 0;
@@ -497,7 +497,7 @@ static void compare_with_oracle(const char * label, oracle & o, const token_plan
                 return;
             }
             const field_result & fr = r.items[i].fields[f];
-            const bool tree = opt.mode == score_mode::tree ||
+            const bool tree = opt.mode == score_mode::tree || fields[f].needs_tree ||
                               (opt.mode == score_mode::automatic && fields[f].paths.size() <= (size_t) opt.tree_max);
             CHECK(fr.tree == tree, "%s: context %zu field %zu: tree %d, expected %d", label, i, f, fr.tree, tree);
             if (tree) {
@@ -700,6 +700,21 @@ static void test_model(const std::string & path) {
         opt.mode     = score_mode::automatic;
         opt.tree_max = 4; // fields 0-2 and 4 tree, field 3 greedy
         compare_with_oracle("auto, tree_max 4", o, plan, e.decide_plan(plan, opt, err), opt, tol);
+
+        // a median or mean field: auto scores it as a tree past tree_max, greedy refuses it
+        {
+            token_plan agg = plan;
+            agg.tails[0][3].needs_tree = true;
+            const batch_result r = e.decide_plan(agg, opt, err);
+            CHECK(!err && !r.items.empty() && r.items[0].fields[3].tree && r.items[0].fields[3].probs.size() == 12,
+                  "%s: aggregate field scored as a tree: %s", name.c_str(), err.message.c_str());
+            compare_with_oracle("auto, tree_max 4, aggregate field", o, agg, r, opt, tol);
+            opt.mode = score_mode::greedy;
+            e.decide_plan(agg, opt, err);
+            CHECK(err.code == error_code::invalid_request && err.message.find("aggregate") != std::string::npos,
+                  "%s: greedy aggregate: '%s'", name.c_str(), err.message.c_str());
+            opt.mode = score_mode::automatic;
+        }
 
         // each context alone gives the same answer as the batch
         opt.mode = score_mode::tree;

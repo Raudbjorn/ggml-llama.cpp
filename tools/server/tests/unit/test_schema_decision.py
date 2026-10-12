@@ -105,13 +105,19 @@ def test_decision_batch_matches_single_contexts():
 def test_decision_modes():
     global server
     server.start()
-    greedy = decide(CONTEXTS[:1], mode="greedy")
+    no_aggregate = {k: v for k, v in SCHEMA.items() if k != "score"}
+    greedy = decide(CONTEXTS[:1], mode="greedy", schema=no_aggregate)
     assert greedy.status_code == 200
     assert all(not f["tree"] for f in greedy.body["results"][0]["fields"].values() if f["scored_nodes"] > 0)
+    # the median of "score" needs the distribution, which greedy mode does not compute
+    res = decide(CONTEXTS[:1], mode="greedy")
+    assert res.status_code == 400
+    assert '"score" has a median aggregate' in res.body["error"]["message"]
     auto = decide(CONTEXTS[:1], mode="auto", tree_max=4)
     assert auto.status_code == 200
     fields = auto.body["results"][0]["fields"]
-    assert fields["category"]["tree"] and not fields["priority"]["tree"]
+    # 5 score values exceed tree_max, but the aggregate keeps the field a tree
+    assert fields["category"]["tree"] and fields["score"]["tree"] and not fields["priority"]["tree"]
     check_result(auto.body["results"][0])
 
 

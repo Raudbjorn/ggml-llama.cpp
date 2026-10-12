@@ -78,6 +78,7 @@ using tokens_t = std::vector<llama_token>;
 struct field_input {
     std::string              suffix;     // e.g. '\n  "fire": '
     std::vector<std::string> candidates; // allowed values without the suffix's shared prefix
+    bool                     needs_tree = false; // a median or mean aggregate reads the distribution
 };
 
 enum class score_mode { automatic, tree, greedy };
@@ -125,6 +126,7 @@ struct batch_result {
 struct field_tokens {
     tokens_t              suffix; // tokens every value of the field starts with
     std::vector<tokens_t> paths;  // per value, the rest including the terminator
+    bool                  needs_tree = false; // see field_input
 };
 
 struct token_plan {

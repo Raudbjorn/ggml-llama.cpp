@@ -22,6 +22,8 @@ ported from thecodacus/llama.cpp `decision-upstream` (a8d96e948, `tools/parallel
   need one scoring round per divergence on the chosen path and can miss the value with the best
   complete-path score. `probability` is then the product of the step probabilities.
 - `auto` (default) scores fields with up to `tree_max` values as `tree`, larger ones `greedy`.
+  A field with a `median` or `mean` aggregate needs the distribution, so `auto` always scores it
+  as `tree` and `greedy` mode refuses the request (400).
 - Fields are independent: no field conditions on another field's answer. Cross-field
   constraints and JSON Schema keywords beyond the subset below are not supported and are
   rejected rather than ignored.

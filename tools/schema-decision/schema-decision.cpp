@@ -426,6 +426,7 @@ outcome<token_plan> plan_tokens(const llama_vocab * vocab, const std::string & s
                 common = std::min({ common, common_prefix(sq, fs[0]), sq.size() - 1 });
             }
             field_tokens ft;
+            ft.needs_tree = inputs[fi].needs_tree;
             ft.suffix.assign(fs[0].begin(), fs[0].begin() + common);
             for (const auto & sq : fs) {
                 ft.paths.emplace_back(sq.begin() + common, sq.end());
@@ -764,7 +765,13 @@ batch_result engine::decide_plan(const token_plan & plan, const options & opt, f
                 decision_field field(tf[f].suffix, tf[f].paths);
                 field.build_nodes();
                 const size_t n = tf[f].paths.size();
-                field.use_tree = opt.mode == score_mode::tree ? true : opt.mode == score_mode::greedy ? false : n <= (size_t) opt.tree_max;
+                // a median or mean needs the whole distribution: auto scores such a field as a
+                // tree whatever its size, and greedy cannot answer it
+                if (tf[f].needs_tree && opt.mode == score_mode::greedy) {
+                    return invalid("field " + std::to_string(f) + " has a median or mean aggregate, which greedy mode cannot score");
+                }
+                field.use_tree = opt.mode == score_mode::tree || tf[f].needs_tree ||
+                                 (opt.mode == score_mode::automatic && n <= (size_t) opt.tree_max);
                 rows      += field.use_tree ? field.tree_rows() : field.greedy_max_rows();
                 branches  += field.use_tree ? field.node_prefix.size() : (n > 1 ? 1 : 0);
                 max_branch = std::max(max_branch, field.suffix.size() + field.max_path());
@@ -1253,7 +1260,8 @@ outcome<compiled_schema> compile_schema(const common_json & schema, const std::s
                 common.resize(c);
             }
             field_input in;
-            in.suffix = "  " + json_text(f.name) + ": " + common;
+            in.suffix     = "  " + json_text(f.name) + ": " + common;
+            in.needs_tree = f.aggregate != "mode";
             for (const auto & v : f.encoded) {
                 in.candidates.push_back(v.substr(common.size()));
             }
@@ -1476,6 +1484,13 @@ outcome<common_json> run(engine & eng, const common_chat_templates * tmpls, bool
     outcome<common_json> out;
     const auto t0 = std::chrono::steady_clock::now();
     try {
+        // the engine refuses this too, by field index; name the field here
+        for (const auto & sp : req.schema.specs) {
+            if (req.opt.mode == score_mode::greedy && sp.aggregate != "mode") {
+                out.error = "field \"" + sp.name + "\" has a " + sp.aggregate + " aggregate, which greedy mode cannot score";
+                return out;
+            }
+        }
         auto rp = render_prompt(tmpls, use_jinja, req.schema.system_text);
         if (!rp.ok()) {
             out.error = rp.error;
