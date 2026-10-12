@@ -129,21 +129,26 @@ def wait_for(process, predicate, seconds=30):
     raise AssertionError("fixture deadline expired")
 
 
-def validate(folder, case, ignore, consumer):
+def validate(folder, case, ignore, consumer, partial=False, recurrent_draft=False):
     events = observations(folder / "process.log")
     decisions = [e for e in events if e["event"] == "decision"]
     require(len(decisions) == 1, "must reach exactly one injected consumer decision")
     decision = decisions[0]
     proposal = decision["proposal"]
     require(decision["original_draft"] == 3, "must exercise three-token proposal")
-    cycles = [json.loads(line) for line in (folder / "cycles.jsonl").read_text().splitlines()]
-    cycle = [r for r in cycles if r["proposal_id"] == proposal]
-    require(len(cycle) == 1, "missing actual P04 completion/cancellation")
-    cycle = cycle[0]
-    require(cycle["distribution_attempts"] == 1 and cycle["exact_match_attempts"] == 0,
-            "repair must not add another acceptance attempt")
-    phases = cycle["verify_phases"]
-    require(all(p["end_us"] >= p["start_us"] > 0 for p in phases), "unfinished actual verify phase")
+    require(decision["production_distribution"] == (not partial), "wrong production acceptance route")
+    if partial:
+        require(consumer == "server" and case.startswith("eog_") and not ignore and proposal == 0,
+                "draft-simple fixture covers EOG cache behavior only")
+    else:
+        cycles = [json.loads(line) for line in (folder / "cycles.jsonl").read_text().splitlines()]
+        cycle = [r for r in cycles if r["proposal_id"] == proposal]
+        require(len(cycle) == 1, "missing actual P04 completion/cancellation")
+        cycle = cycle[0]
+        require(cycle["distribution_attempts"] == 1 and cycle["exact_match_attempts"] == 0,
+                "repair must not add another acceptance attempt")
+        phases = cycle["verify_phases"]
+        require(all(p["end_us"] >= p["start_us"] > 0 for p in phases), "unfinished actual verify phase")
     start = events.index(decision)
     tail = events[start + 1:]
     if case == "cancel":
@@ -166,7 +171,8 @@ def validate(folder, case, ignore, consumer):
     repairs = [e for e in tail if e["event"] == "repaired"]
     expected_repair = case.startswith("repair") or (case == "eog_correction" and ignore)
     require(len(repairs) == int(expected_repair), "wrong repair branch")
-    require(len(phases) == (2 if expected_repair else 1), "wrong actual verify phase count")
+    if not partial:
+        require(len(phases) == (2 if expected_repair else 1), "wrong actual verify phase count")
     if expected_repair:
         repaired = repairs[0]
         require(repaired["selected"] == decision["selected"] and repaired["sampler_preserved"],
@@ -194,23 +200,38 @@ def validate(folder, case, ignore, consumer):
                 "consumer visited a post-EOG token/bonus")
         require(not any(e["event"] == "decode" for e in stopped), "decode after stopping EOG")
         require(any(e["event"] == "policy" and e["stops"] for e in stopped), "EOG policy not reached")
+        if consumer == "server":
+            cache = [e for e in stopped if e["event"] == "eog_cache"]
+            require(len(cache) == 1 and cache[0]["partial"] == partial, "missing actual EOG cache route")
+            cache = cache[0]
+            require(cache["draft_full"] == recurrent_draft, "unexpected draft removal capability")
+            expected_clear = (not partial or recurrent_draft) and case != "eog_bonus"
+            require(cache["cleared"] == expected_clear, "wrong EOG cache clearing policy")
+            if expected_clear:
+                require(cache["tokens"] == 0 and cache["pos_max"] == -1, "untrimmable EOG cache survived")
+            else:
+                require(cache["tokens"] > 0 and cache["pos_max"] == cache["pos_next"] - 1,
+                        "trimmable EOG prefix not retained at the committed position")
     if eog and ignore:
         last_visit = [i for i, e in enumerate(tail) if e["event"] == "visit"][len(selected) - 1]
         require(any(e["event"] == "decode" for e in tail[last_visit + 1:]), "ignore-EOG did not continue decoding")
-    if case in {"eog_early", "eog_final"}:
+    if case in {"eog_early", "eog_final", "eog_bonus"}:
         require(len(selected) == 4, "acceptor must return G+1 even at EOG")
     return {"case": case, "ignore_eos": ignore, "synthetic": True, "proposal": proposal, "verified": True}
 
 
-def run_case(args, models, consumer, case, ignore):
-    folder = args.output / f"{consumer}-{case}-ignore{int(ignore)}"
+def run_case(args, models, consumer, case, ignore, partial=False, recurrent_draft=False):
+    folder = args.output / f"{consumer}-{case}-ignore{int(ignore)}{'-partial' if partial else ''}{'-recurrent-draft' if recurrent_draft else ''}"
     folder.mkdir()
     env = {k: v for k, v in os.environ.items() if not k.startswith("LLAMA_") and k != "LD_LIBRARY_PATH"}
     env.update(LLAMA_TEST_SPEC_CONSUMER_CASE=case, LLAMA_SPEC_SAMPLE_TEMP="0.8", LLAMA_SPEC_DRAFT_TOPP="1",
                LLAMA_SPEC_CHAIN="0", LLAMA_DRAFT_TOP_K="10", LLAMA_SPEC_LOG=str(folder / "cycles.jsonl"), LLAMA_TRACE="1")
+    if partial:
+        env.update(LLAMA_TEST_SPEC_CONSUMER_SIMPLE="1", LLAMA_SPEC_SAMPLE_TEMP="0")
+    draft_model = "target.gguf" if recurrent_draft else "target-partial.gguf" if partial else "head.gguf"
     command = [str(args.server if consumer == "server" else args.simple),
-               "-m", str(models / "target.gguf"), "-md", str(models / "head.gguf"),
-               "--spec-type", "draft-mtp", "--no-spec-draft-backend-sampling", "--spec-draft-n-max", "3",
+               "-m", str(models / ("target-partial.gguf" if partial else "target.gguf")), "-md", str(models / draft_model),
+               "--spec-type", "draft-simple" if partial else "draft-mtp", "--no-spec-draft-backend-sampling", "--spec-draft-n-max", "3",
                "--spec-draft-n-min", "0", "--spec-draft-p-min", "0", "-ngl", "0", "-ngld", "0",
                "-c", "128", "-b", "32", "-ub", "32", "-t", "2", "-tb", "2", "-fa", "off",
                "--fit", "off", "--temp", "0.8", "--seed", "1201", "--logit-bias", "31-inf"]
@@ -264,10 +285,16 @@ def run_case(args, models, consumer, case, ignore):
                 if case.startswith("eog_") and ignore:
                     require(response["tokens_predicted"] == payload["n_predict"] and response["stop_type"] == "limit",
                             "original ignore-EOG request did not reach its generation limit")
-            reuse = request(port, "POST", "/completion", {**payload, "n_predict": 8, "ignore_eos": True})
+            reuse_payload = {**payload, "n_predict": 8, "ignore_eos": True}
+            retained = case.startswith("eog_") and not ignore and ((partial and not recurrent_draft) or case == "eog_bonus")
+            if retained:
+                reuse_payload.update(prompt=payload["prompt"] + response["tokens"][:-1] + [7], cache_prompt=True)
+            reuse = request(port, "POST", "/completion", reuse_payload)
             save(folder / "reuse.json", reuse)
             require(reuse["tokens_predicted"] == 8 and reuse["stop_type"] == "limit", "slot reuse failed")
-    result = validate(folder, case, ignore, consumer)
+            if retained:
+                require(reuse["timings"]["prompt_n"] < len(reuse_payload["prompt"]), "retained EOG prefix was reprocessed")
+    result = validate(folder, case, ignore, consumer, partial, recurrent_draft)
     save(folder / "result.json", result)
     return {"consumer": consumer, **result}
 
@@ -288,11 +315,14 @@ def main():
     with child([str(args.generator), "--write-consumer-fixture", str(models)], clean, args.output / "generator.log") as process:
         require(process.wait(timeout=30) == 0, "fixture export failed")
     cases = [(f"repair{i}", True) for i in range(3)]
-    cases += [(case, ignore) for case in ("eog_early", "eog_final", "eog_correction") for ignore in (False, True)]
+    cases += [(case, ignore) for case in ("eog_early", "eog_final", "eog_correction", "eog_bonus") for ignore in (False, True)]
     results = []
     for consumer in ("simple", "server"):
         for case, ignore in cases:
             results.append(run_case(args, models, consumer, case, ignore))
+    for case in ("eog_early", "eog_final", "eog_correction", "eog_bonus"):
+        results.append(run_case(args, models, "server", case, False, partial=True))
+        results.append(run_case(args, models, "server", case, False, partial=True, recurrent_draft=True))
     results.append(run_case(args, models, "server", "cancel", True))
     save(args.output / "report.json", {"synthetic": True, "trained_model_evidence": False, "cases": results})
     print(f"PASS: {len(results)} synthetic executable consumer cases; real-model P06 campaign remains separate")

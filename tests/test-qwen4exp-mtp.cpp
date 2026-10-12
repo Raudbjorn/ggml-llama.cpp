@@ -41,19 +41,19 @@ static void require(bool ok, const char * message) {
 // Small canonical files exercise the real GGUF loader, including missing required tensors.
 static void write_fixture(const std::string & path, bool mtp_only, int omit_head = -1, float trunk_scale = 1.0f,
                           bool shared_embd = true, float output_scale = 1.0f, int vocab_size = n_vocab,
-                          const char * omit_tensor = nullptr, bool consumer_vocab = false) {
+                          const char * omit_tensor = nullptr, bool consumer_vocab = false, bool dense = false) {
     gguf_context_ptr meta(gguf_init_empty());
-    llama_model_saver ms(LLM_ARCH_QWEN4EXP, meta.get());
-    ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, "qwen4exp");
+    llama_model_saver ms(dense ? LLM_ARCH_QWEN3 : LLM_ARCH_QWEN4EXP, meta.get());
+    ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, dense ? "qwen3" : "qwen4exp");
     ms.add_kv(LLM_KV_CONTEXT_LENGTH, uint32_t(128));
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH, uint32_t(n_embd));
-    ms.add_kv(LLM_KV_BLOCK_COUNT, uint32_t(3));
-    ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
+    ms.add_kv(LLM_KV_BLOCK_COUNT, uint32_t(dense ? 2 : 3));
+    ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(dense ? 0 : 1));
     ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, uint32_t(64));
     ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, uint32_t(64));
     ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, uint32_t(64));
-    ms.add_kv(LLM_KV_EXPERT_COUNT, uint32_t(2));
-    ms.add_kv(LLM_KV_EXPERT_USED_COUNT, uint32_t(2));
+    ms.add_kv(LLM_KV_EXPERT_COUNT, uint32_t(dense ? 0 : 2));
+    ms.add_kv(LLM_KV_EXPERT_USED_COUNT, uint32_t(dense ? 0 : 2));
     ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, uint32_t(1));
     ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, uint32_t(1));
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, 1e-6f);
@@ -111,6 +111,23 @@ static void write_fixture(const std::string & path, bool mtp_only, int omit_head
     if (shared_embd) {
         add("token_embd.weight", {n_embd, vocab_size});
         add("output.weight", {n_embd, vocab_size}, output_scale);
+    }
+    if (dense) {
+        add("output_norm.weight", {n_embd});
+        for (int il = 0; il < 2; ++il) {
+            const std::string p = "blk." + std::to_string(il) + ".";
+            for (const char * name : {"attn_norm", "attn_q_norm", "attn_k_norm", "ffn_norm"}) {
+                add(p + name + ".weight", {n_embd});
+            }
+            for (const char * name : {"attn_q", "attn_k", "attn_v", "attn_output"}) {
+                add(p + name + ".weight", {n_embd, n_embd});
+            }
+            add(p + "ffn_gate.weight", {n_embd, 64});
+            add(p + "ffn_up.weight", {n_embd, 64});
+            add(p + "ffn_down.weight", {64, n_embd});
+        }
+        require(gguf_write_to_file(meta.get(), path.c_str(), false), "write dense fixture");
+        return;
     }
     if (!mtp_only) {
         add("output_hc_norm.weight", {n_hidden}, trunk_scale);
@@ -1120,6 +1137,7 @@ int main(int argc, char ** argv) {
         const std::filesystem::path dir(argv[2]);
         require(std::filesystem::is_directory(dir), "consumer fixture output directory exists");
         write_fixture((dir / "target.gguf").string(), false, -1, 1, true, 1, n_vocab, nullptr, true);
+        write_fixture((dir / "target-partial.gguf").string(), false, -1, 1, true, 1, n_vocab, nullptr, true, true);
         write_fixture((dir / "head.gguf").string(), true, -1, 1, true, 1, n_vocab, nullptr, true);
         fprintf(stderr, "wrote synthetic consumer fixtures (not trained-model evidence)\n");
         return 0;

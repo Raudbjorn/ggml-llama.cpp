@@ -1591,7 +1591,8 @@ private:
 
         ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
 #ifdef LLAMA_TEST_SPEC_CONSUMER
-        GGML_ASSERT(ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+        GGML_ASSERT(ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART);
 #endif
         if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
@@ -3726,7 +3727,7 @@ private:
                 const bool use_ckpt_dft =
                    (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_dft));
 
-                if (use_ckpt_tgt) {
+                if (use_ckpt_tgt || use_ckpt_dft || ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
                     //const int64_t t_start = ggml_time_us();
 
                     ckpt.update_tgt(ctx_tgt, slot.id, spec_ckpt_place(slot, false));
@@ -4701,6 +4702,7 @@ private:
 
             size_t verified_drafts = 0;
             bool stops_at_eog = false;
+            bool clear_on_eog = false;
             // verify and try to accept the draft
             {
                 common_sampler_ptr smpl_save;
@@ -4749,15 +4751,20 @@ private:
                 slot.spec_fixture.policy(stops_at_eog, effective_size, slot.task->params.sampling.ignore_eos);
 #endif
                 verified_drafts = std::min(accepted.size() - 1, effective_size);
-                const uint32_t n_rollback = n_decode + 1 - accepted.size();
+                // Include accepted rows discarded by the EOG stopping policy.
+                const uint32_t n_rollback = n_decode + 1 - effective_size;
 
                 const bool use_ckpt_tgt =
                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
                     (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_rollback > llama_n_rs_seq(ctx_tgt));
+                const bool use_ckpt_dft = slot.ctx_dft &&
+                    (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                     (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_rollback > llama_n_rs_seq(slot.ctx_dft)));
+                clear_on_eog = stops_at_eog && n_rollback > 0 && use_ckpt_tgt;
 
                 // check for partial draft acceptance
                 if (n_rollback > 0 && !stops_at_eog) {
-                    if (use_ckpt_tgt) {
+                    if (use_ckpt_tgt || use_ckpt_dft) {
                         if (trace > 0) {
                             SLT_INF(slot, "accepted %2zu/%2zu draft tokens (restore checkpoint)\n", accepted.size() - 1, slot.spec_draft.size());
                         }
@@ -4842,8 +4849,15 @@ private:
             slot.sampled = ids.back(); // last accepted token
             SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
 
-            // A recurrent state cannot trim inside the verified block; EOG releases it in full below.
-            if (!stops_at_eog) { slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1); }
+            if (stops_at_eog && slot.ctx_dft) {
+                const auto n_rollback_dft = llama_memory_seq_pos_max(llama_get_memory(slot.ctx_dft), slot.id) + 1 -
+                        slot.prompt.tokens.pos_next();
+                clear_on_eog |= n_rollback_dft > 0 &&
+                        (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                         (ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_rollback_dft > llama_n_rs_seq(slot.ctx_dft)));
+            }
+            // Only an untrimmable EOG suffix requires discarding the cached prompt.
+            if (!clear_on_eog) { slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1); }
 
             for (size_t i = 0; i < ids.size(); ++i) {
                 completion_token_output result;
@@ -4865,7 +4879,16 @@ private:
                 if (!process_token(result, slot)) {
                     slot.print_timings();
                     send_final_response(slot);
-                    if (stops_at_eog) { slot.prompt_clear(); }
+                    if (clear_on_eog) { slot.prompt_clear(); }
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+                    if (stops_at_eog) {
+                        slot.spec_fixture.event("eog_cache", {{"cleared", clear_on_eog},
+                                {"tokens", slot.prompt.n_tokens()}, {"pos_next", slot.prompt.tokens.pos_next()},
+                                {"pos_max", llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id)},
+                                {"draft_full", ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL},
+                                {"partial", ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART}});
+                    }
+#endif
                     slot.release();
 
                     return;

@@ -98,17 +98,19 @@ struct test_spec_consumer {
             const llama_tokens & draft, llama_token last, uint64_t id, bool used_distribution,
             llama_context * ctx, const llama_vocab * vocab, bool ignore) {
         if (name.empty() || injected || draft.size() != 3) { return; }
-        GGML_ASSERT(used_distribution && before);
+        const bool simple = std::getenv("LLAMA_TEST_SPEC_CONSUMER_SIMPLE") != nullptr;
+        GGML_ASSERT(before && used_distribution == !simple);
         injected = true;
         target = ctx;
         proposal = id;
         seed = last;
-        GGML_ASSERT(proposal != 0 && llama_vocab_eos(vocab) == 31);
+        GGML_ASSERT((simple ? proposal == 0 : proposal != 0) && llama_vocab_eos(vocab) == 31);
         llama_tokens fixture_draft = draft;
         const bool early = name == "eog_early";
         const bool final = name == "eog_final";
         const bool correction_eog = name == "eog_correction";
-        const bool full = early || final;
+        const bool bonus_eog = name == "eog_bonus";
+        const bool full = early || final || bonus_eog;
         int prefix = name == "repair1" ? 1 : name == "repair2" ? 2 : 0;
         GGML_ASSERT(full || correction_eog || name == "repair0" || name == "repair1" ||
                     name == "repair2" || name == "cancel");
@@ -116,7 +118,7 @@ struct test_spec_consumer {
         // evidence concerns consumer stopping, not agreement with decoded logits.
         if (full) {
             fixture_draft = {4, 5, 6};
-            fixture_draft[early ? 0 : 2] = 31;
+            if (!bonus_eog) { fixture_draft[early ? 0 : 2] = 31; }
         }
         if (correction_eog) { fixture_draft = {4, 5, 6}; }
         std::vector<row> q, p;
@@ -124,7 +126,7 @@ struct test_spec_consumer {
             q.push_back({{token, 0, 1}});
             p.push_back({{token, 0, 1}});
         }
-        p.push_back({{7, 0, 1}});
+        p.push_back({{bonus_eog ? 31 : 7, 0, 1}});
         if (!full) {
             const llama_token correction = correction_eog ? 31 : (fixture_draft[prefix] == 4 ? 5 : 4);
             GGML_ASSERT(correction != fixture_draft[prefix]);
@@ -138,6 +140,7 @@ struct test_spec_consumer {
         saved_attempts = attempts;
         awaiting = !full && (!correction_eog || ignore);
         event("decision", {{"draft", draft}, {"fixture_draft", fixture_draft}, {"selected", ids},
+                {"production_distribution", used_distribution},
                 {"seed", seed}, {"original_draft", draft.size()}, {"attempts", attempts}});
     }
 
