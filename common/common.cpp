@@ -1804,6 +1804,7 @@ std::string common_cpu_tp_prepare(common_params & params) {
     if (params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
         return "--cpu-tp needs --split-mode tensor";
     }
+    ggml_backend_load_all(); // with GGML_BACKEND_DL the CPU is a plugin too
     ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (cpu == nullptr) {
         return "--cpu-tp: no CPU device";
