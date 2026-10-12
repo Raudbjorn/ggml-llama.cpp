@@ -1,7 +1,6 @@
 """P04 verifier negative fixtures; optional compiled recorder checks via SPEC_CYCLE_TEST_BIN."""
 import copy
 import importlib.util
-import json
 import os
 from pathlib import Path
 import subprocess

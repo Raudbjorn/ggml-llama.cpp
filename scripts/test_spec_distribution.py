@@ -13,7 +13,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.test_spec_cycle_log import row as p04_row, phase
+FIXTURE_SPEC = importlib.util.spec_from_file_location("test_spec_cycle_log", Path(__file__).parent / "test_spec_cycle_log.py")
+FIXTURE = importlib.util.module_from_spec(FIXTURE_SPEC)
+FIXTURE_SPEC.loader.exec_module(FIXTURE)
+p04_row, phase = FIXTURE.row, FIXTURE.phase
 
 SPEC = importlib.util.spec_from_file_location("verify_spec_distribution", Path(__file__).parent / "perf/verify-spec-distribution.py")
 VERIFY = importlib.util.module_from_spec(SPEC)
