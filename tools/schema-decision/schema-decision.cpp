@@ -1225,7 +1225,14 @@ outcome<compiled_schema> compile_schema(const common_json & schema, const std::s
             return out;
         }
         compiled_schema & cs = out.value;
-        const bool json_schema = schema.contains("properties");
+        // a compact field spec is an object that carries a string description, so a string "type"
+        // or a "properties" object of objects is JSON Schema; anything else is compact fields,
+        // which may then be named type or properties
+        const auto is_property_map = [](const common_json & p) {
+            return p.is_object() && std::all_of(p.begin(), p.end(), [](const common_json & v) { return v.is_object(); });
+        };
+        const bool json_schema = (schema.contains("type") && schema.at("type").is_string()) ||
+                                 (schema.contains("properties") && is_property_map(schema.at("properties")));
         if (json_schema) {
             for (const auto & e : schema.items()) {
                 if (!known_schema_key(e.key())) {
@@ -1235,6 +1242,10 @@ outcome<compiled_schema> compile_schema(const common_json & schema, const std::s
             }
             if (schema.contains("type") && !(schema.at("type").is_string() && schema.at("type").get<std::string>() == "object")) {
                 out.error = "a JSON Schema decision must be of type object";
+                return out;
+            }
+            if (!schema.contains("properties")) {
+                out.error = "a JSON Schema decision needs \"properties\"";
                 return out;
             }
         }

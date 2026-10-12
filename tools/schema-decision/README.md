@@ -91,6 +91,9 @@ Compact form: `{"name": {"type": ..., "description": ..., ...}}`, every field ne
 description. JSON Schema form: `{"type": "object", "properties": {...}}` (`additionalProperties`,
 `title`, `description`, `$schema` and `$comment` are accepted and have no effect; every field is
 always answered, so `required` must list properties of the schema, each at most once).
+A schema is read as JSON Schema when its `type` is a string or its `properties` is an object
+whose values are all objects; otherwise every top-level key is a compact field, so compact
+fields may be named `type` or `properties`.
 
 | type | keys | values |
 | --- | --- | --- |

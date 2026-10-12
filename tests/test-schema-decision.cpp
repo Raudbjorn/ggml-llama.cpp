@@ -170,6 +170,22 @@ static void test_schema() {
         return s + "}";
     }(), "1-32 fields");
 
+    // compact fields may be named properties or type: the two forms are told apart by structure
+    {
+        const auto one = compile_text(R"({"properties": {"type": "boolean", "description": "d"}})");
+        CHECK(one.ok() && one.value.specs.size() == 1 && one.value.specs[0].name == "properties",
+              "compact field named properties: '%s'", one.error.c_str());
+        const auto two = compile_text(R"({"type": {"type": "boolean", "description": "d"},
+                                          "properties": {"type": "integer", "minimum": 0, "maximum": 3, "description": "d"}})");
+        CHECK(two.ok() && two.value.specs.size() == 2, "compact fields named type and properties: '%s'", two.error.c_str());
+        const auto js = compile_text(R"({"properties": {"type": {"type": "boolean"}}})");
+        CHECK(js.ok() && js.value.specs.size() == 1 && js.value.specs[0].name == "type",
+              "JSON Schema property named type: '%s'", js.error.c_str());
+    }
+    expect_schema_error("JSON Schema property not an object", R"({"type": "object", "properties": {"a": "boolean"}})",
+                        "\"a\" must be an object");
+    expect_schema_error("JSON Schema without properties", R"({"type": "object"})", "needs \"properties\"");
+
     // the suffix fixes the values' common leading characters
     {
         const auto cs = compile_text(R"({"e": {"type": "enum", "choices": ["alpha", "alphabet"], "description": "d"}})");
