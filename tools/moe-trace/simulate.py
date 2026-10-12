@@ -234,27 +234,38 @@ def sim_lfu_decay(decode: dict[int, list[Step]], slots: int, alpha: float = 0.95
     return Result(hits / max(total, 1), inserts / max(n_decode_steps(decode), 1))
 
 
-def sim_reelect(decode: dict[int, list[Step]], prefill: dict[int, list[Step]], slots: int, interval: int,
-                alpha: float = 0.98) -> Result:
+def sim_reelect(trace: Trace, slots: int, interval: int, alpha: float = 0.98) -> Result:
+    """Per-layer decayed counts re-elected every `interval` decode steps. Sessions run in file
+    order: each session's prompt routing joins the counts, and re-elects, when it is reached."""
     hits = total = inserts = 0
-    for layer, steps in decode.items():
+    layers = sorted({layer for s in trace.sessions for layer in s.decode})
+    for layer in layers:
         score: dict[int, float] = defaultdict(float)
-        for ids in prefill.get(layer, []):
-            for e in ids:
-                score[e] += 1.0
-        cache = set(sorted(score, key=lambda k: (-score[k], k))[:slots])
-        for step, ids in enumerate(steps):
-            for e in ids:
-                hits += e in cache
-                total += 1
-                score[e] += 1.0
-            if step % interval == interval - 1:
-                for k in score:
-                    score[k] *= alpha
+        cache: set[int] = set()
+        step = 0
+        for i, s in enumerate(trace.sessions):
+            prompt = s.prefill.get(layer, [])
+            for _, ids in prompt:
+                for e in ids:
+                    score[e] += 1.0
+            if i == 0 or prompt:
                 new = set(sorted(score, key=lambda k: (-score[k], k))[:slots])
-                inserts += len(new - cache)
+                if i > 0:
+                    inserts += len(new - cache)
                 cache = new
-    return Result(hits / max(total, 1), inserts / max(n_decode_steps(decode), 1))
+            for _, ids in s.decode.get(layer, []):
+                for e in ids:
+                    hits += e in cache
+                    total += 1
+                    score[e] += 1.0
+                if step % interval == interval - 1:
+                    for k in score:
+                        score[k] *= alpha
+                    new = set(sorted(score, key=lambda k: (-score[k], k))[:slots])
+                    inserts += len(new - cache)
+                    cache = new
+                step += 1
+    return Result(hits / max(total, 1), inserts / max(n_decode_steps(decode_steps(trace)), 1))
 
 
 def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int) -> Result:
@@ -345,6 +356,9 @@ def main(argv: list[str] | None = None) -> int:
     if trace is None:
         print(f"error: {err}", file=sys.stderr)
         return 2
+    if args.n_expert is not None and trace.n_expert is not None and args.n_expert != trace.n_expert:
+        print(f"error: --n-expert {args.n_expert} conflicts with the trace's n_expert {trace.n_expert}", file=sys.stderr)
+        return 2
     n_expert = args.n_expert if args.n_expert is not None else trace.n_expert
     if n_expert is None or n_expert <= 0:
         print("error: the trace has no '# n_expert=' line; pass --n-expert", file=sys.stderr)
@@ -398,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         rows.append(("static-prefill", sim_static(decode, top_by_freq(prefill, slots)) if prefill else None))
         rows.append(("lru", sim_lru(decode, slots)))
         rows.append(("lfu-decay", sim_lfu_decay(decode, slots)))
-        rows.append((f"reelect-{args.reelect}", sim_reelect(decode, prefill, slots, args.reelect)))
+        rows.append((f"reelect-{args.reelect}", sim_reelect(trace, slots, args.reelect)))
         rows.append(("dynamic", sim_dynamic(events, slots * len(decode), args.hot_uses)))
         for name, res in rows:
             if res is None:

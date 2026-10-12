@@ -122,9 +122,11 @@ deployable), `static-prefill`, `lru`, `lfu-decay` and `reelect-K`. The
 `S x n_layers` units shared by all layers, LRU order, and units with more than
 `--hot-uses` uses evicted only when every unit is hot.
 
-Expert counts come from the trace's `# n_expert=` line or `--n-expert`, never
-from the largest observed id. Sessions are replayed in file order with cache
-state carried over. The cost columns appear only when `--slab-mb`,
+Expert counts come from the trace's `# n_expert=` line, or from `--n-expert`
+for a trace without one (a different value is an error), never from the
+largest observed id. Sessions are replayed in file order with cache state
+carried over; `reelect-K` adds each session's prompt routing to its counts when
+that session starts. The cost columns appear only when `--slab-mb`,
 `--ram-gbs` and `--link-gbs` are all given; they are an assumed model that
 excludes kernels, activation transfers, synchronization and compilation.
 

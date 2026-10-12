@@ -125,6 +125,20 @@ class PolicyTests(unittest.TestCase):
         res = simulate.sim_dynamic([[(0, [0]), (1, [0])]] * 3, units=1, hot_uses=4)
         self.assertEqual(res.hit, 0.0)
 
+    def test_reelect_applies_each_prompt_when_its_session_starts(self) -> None:
+        # a: prompt and decode on expert 0; b: a long prompt on expert 1, then expert 1.
+        # Seeding with both prompts up front would give a expert 1 and miss its 3 steps.
+        a = HEADER.format(sid="a") + "-1,0,0\n0,0,0\n1,0,0\n2,0,0\n"
+        b = HEADER.format(sid="b") + "".join(f"-{p},0,1\n" for p in range(1, 6)) + "0,0,1\n"
+        with tempfile.TemporaryDirectory() as d:
+            trace, err = simulate.parse_traces([write(d, "a.csv", a), write(d, "b.csv", b)])
+        self.assertIsNone(err)
+        assert trace is not None
+        res = simulate.sim_reelect(trace, slots=1, interval=100)
+        self.assertAlmostEqual(res.hit, 1.0)
+        # b's prompt re-elects expert 1: one insertion over 4 decode steps
+        self.assertAlmostEqual(res.inserts_per_step, 1 / 4)
+
     def test_dynamic_replays_sessions_in_file_order(self) -> None:
         # session a stops after layer 0 at pos 1; indexing the per-layer lists would pair
         # a's layer-1 row at pos 1 with b's layer-0 row at pos 0
@@ -171,6 +185,13 @@ class CliTests(unittest.TestCase):
             with self.subTest(argv=argv):
                 code, _, _ = run([self.trace, *argv])
                 self.assertEqual(code, 2)
+
+    def test_n_expert_override_must_match_the_trace(self) -> None:
+        code, _, err = run([self.trace, "--n-expert", "8"])
+        self.assertEqual(code, 2)
+        self.assertIn("conflicts with the trace's n_expert 4", err)
+        code, _, err = run([self.trace, "--n-expert", "4", "--budgets", "0.5"])
+        self.assertEqual(code, 0, err)
 
     def test_out_of_range_expert_is_rejected(self) -> None:
         bad = write(self.tmp.name, "bad.csv", HEADER.format(sid="b") + "0,0,0,7\n")
