@@ -967,6 +967,9 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
     // The scheduler's default copy path owns fork expert prefetch and provider caching.
     if (cparams.moe_cache_size > 0) {
         ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
+        if ((cparams.moe_cache_mode != LLAMA_MOE_CACHE_MODE_OFF && cparams.moe_cache_mode != LLAMA_MOE_CACHE_MODE_UNSPECIFIED) || cparams.prefetch_experts_slots > 0) {
+            LLAMA_LOG_WARN("%s: --moe-cache-mib disables the provider MoE cache and expert prefetch\n", __func__);
+        }
     }
     ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
 

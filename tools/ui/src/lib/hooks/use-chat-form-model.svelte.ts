@@ -17,13 +17,19 @@ export function useChatFormModel() {
 	const conversationModel = $derived(
 		getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
+	const activeConversationId = $derived(conversationsStore.activeConversation?.id ?? null);
 
 	let lastSyncedConversationModel: string | null = null;
+	let lastSyncedConversationId: string | null = null;
 
 	// the conversation's model wins while it names one: opening a history chat
 	// points the selection at the model that produced it
 	$effect(() => {
-		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
+		if (
+			conversationModel &&
+			(conversationModel !== lastSyncedConversationModel ||
+				activeConversationId !== lastSyncedConversationId)
+		) {
 			if (modelsStore.models.some((m) => m.model === conversationModel)) {
 				modelsStore.selectedModelName = conversationModel;
 				modelsStore.selectModelByName(conversationModel);
@@ -33,6 +39,7 @@ export function useChatFormModel() {
 			}
 
 			lastSyncedConversationModel = conversationModel;
+			lastSyncedConversationId = activeConversationId;
 		} else if (
 			isRouter &&
 			!modelsStore.selectedModelId &&
@@ -41,6 +48,7 @@ export function useChatFormModel() {
 			!conversationModel
 		) {
 			lastSyncedConversationModel = null;
+			lastSyncedConversationId = activeConversationId;
 			const first = modelsStore.models.find((m) => modelsStore.loadedModelIds.includes(m.model));
 
 			if (first) modelsStore.selectModelById(first.id);

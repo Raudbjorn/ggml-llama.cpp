@@ -3,8 +3,10 @@
 #include "../../src/llama-ext.h" // staging API: llama_decision_order
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <regex>
 #include <stdexcept>
 
@@ -68,6 +70,17 @@ void server_decision_context::init(const llama_model * model) {
 
     // "<n_levels>.<level>" -> offset
     const std::string prefix_bias = prefix + "score_bias.";
+    const auto parse_score_bias_index = [](const std::string & value, size_t & result) {
+        char * end = nullptr;
+        errno = 0;
+        const unsigned long parsed = std::strtoul(value.c_str(), &end, 10);
+        if (value.empty() || end == value.c_str() || *end != '\0' || errno == ERANGE ||
+            parsed > std::numeric_limits<size_t>::max()) {
+            return false;
+        }
+        result = parsed;
+        return true;
+    };
     for (int32_t i = 0; i < llama_model_meta_count(model); i++) {
         char key[256];
         char val[64];
@@ -78,9 +91,10 @@ void server_decision_context::init(const llama_model * model) {
             continue;
         }
         const auto parts = string_split<std::string>(key + prefix_bias.size(), '.');
-        const size_t n     = parts.size() == 2 ? std::strtoul(parts[0].c_str(), nullptr, 10) : 0;
-        const size_t level = parts.size() == 2 ? std::strtoul(parts[1].c_str(), nullptr, 10) : 0;
-        if (n < 2 || n > 255 || level >= n) {
+        size_t n = 0;
+        size_t level = 0;
+        if (parts.size() != 2 || !parse_score_bias_index(parts[0], n) ||
+            !parse_score_bias_index(parts[1], level) || n < 2 || n > 255 || level >= n) {
             throw std::runtime_error(string_format("invalid decision score bias: %s", key));
         }
         auto & bias = score_bias[n];

@@ -4514,6 +4514,8 @@ struct sycl_reorder_temp_buffer {
 
     explicit operator bool() const { return ptr != nullptr; }
 
+    bool is_host_fallback() const { return host_fallback; }
+
     sycl_reorder_temp_buffer(const sycl_reorder_temp_buffer &)            = delete;
     sycl_reorder_temp_buffer & operator=(const sycl_reorder_temp_buffer &) = delete;
 
@@ -4802,6 +4804,7 @@ static bool reorder_qw_mxfp4_moe(uint8_t * data_device, size_t expert_bytes, int
         return false;
     }
     uint8_t * tmp_buf = static_cast<uint8_t *>(tmp.ptr);
+    sycl::event reorder_event;
 
     // the queue is in-order: each chunk's copy into tmp_buf waits for the previous chunk's kernel
     for (int64_t e0 = 0; e0 < n_expert; e0 += chunk_experts) {
@@ -4815,7 +4818,7 @@ static bool reorder_qw_mxfp4_moe(uint8_t * data_device, size_t expert_bytes, int
         }
 
         const int total_blocks = blocks_per_expert * (int) n_chunk;
-        auto reorder_event = stream->parallel_for(total_blocks, [=](auto gb_) {
+        reorder_event = stream->parallel_for(total_blocks, [=](auto gb_) {
             const int           gb   = gb_;
             const int           e    = gb / blocks_per_expert;
             const int           ib   = gb % blocks_per_expert;
@@ -4833,6 +4836,9 @@ static bool reorder_qw_mxfp4_moe(uint8_t * data_device, size_t expert_bytes, int
         if (!g_ggml_sycl_use_async_mem_op) {
             reorder_event.wait_and_throw();
         }
+    }
+    if (tmp.is_host_fallback()) {
+        reorder_event.wait_and_throw();
     }
     return true;
 }
@@ -7176,7 +7182,7 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                 const bool id_reorder_needs_async_alloc =
                     g_ggml_sycl_enable_optimize &&
                     (mmid_src0->type == GGML_TYPE_Q4_K || mmid_src0->type == GGML_TYPE_Q5_K ||
-                     mmid_src0->type == GGML_TYPE_Q6_K);
+                     mmid_src0->type == GGML_TYPE_Q6_K || mmid_src0->type == GGML_TYPE_MXFP4);
                 if (!fused_dispatchable || (id_reorder_needs_async_alloc && !g_ggml_sycl_use_async_mem_op)) {
                     GGML_LOG_DEBUG("%s: disabling SYCL graphs due to unsupported node type %s\n", __func__,
                                    ggml_op_name(node_op));
@@ -7276,7 +7282,8 @@ static bool graph_needs_reorder(ggml_backend_sycl_context * ctx, const ggml_cgra
                                  ggml_sycl_supports_reorder_mmvq(src0->type) ||
                                  ggml_sycl_supports_reorder_mul_mat_sycl(src0->type));
         } else if (node->op == GGML_OP_MUL_MAT_ID &&
-                   (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K)) {
+                   (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K ||
+                    src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_MXFP4)) {
             // mirrors the id_reorder_needs_async_alloc gate in check_graph_compatibility()
             reorder_eligible = g_ggml_sycl_enable_optimize;
         }

@@ -849,7 +849,7 @@ llama_kv_cache::llama_kv_cache(
             // Resolve the fork's tile override once so shared caches and saved state use the same rotation.
             const char * value = getenv("LLAMA_ATTN_ROT_K_NROT");
             char * end = nullptr;
-            const long requested = value ? strtol(value, &end, 10) : 64;
+            const long requested = value ? strtol(value, &end, 10) : n_rot_k;
             if ((value && (end == value || *end != '\0')) || requested < 0 || requested > n_embd_head_k_all ||
                 (requested != 0 && (requested < 64 || (requested & (requested - 1)) != 0 || n_embd_head_k_all % requested != 0))) {
                 throw std::runtime_error("LLAMA_ATTN_ROT_K_NROT must be 0 or a power of two >= 64 that divides the key width");

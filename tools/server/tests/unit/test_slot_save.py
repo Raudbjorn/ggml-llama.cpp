@@ -665,7 +665,7 @@ def parse_ckpt_appendix(data):
 
 
 # a damaged appendix must be ignored, or its checkpoints dropped when they fail to load, without aborting the server
-@pytest.mark.parametrize("damage", ["oversized_blob", "empty_target", "corrupt_state", "many_checkpoints"])
+@pytest.mark.parametrize("damage", ["oversized_blob", "empty_target", "invalid_metadata", "corrupt_state", "many_checkpoints"])
 def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
     server = swa_server
     server.start()
@@ -715,6 +715,8 @@ def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
         for start, end, tgt in reversed(ckpts):
             size = struct.unpack_from("<Q", data, tgt - 8)[0]
             data = data[:tgt - 8] + struct.pack("<Q", 0) + data[tgt + size:]
+    elif damage == "invalid_metadata":
+        struct.pack_into("<q", data, ckpts[0][0], -1)
     elif damage == "corrupt_state":
         # the sizes are intact, but the target states do not load
         for _, _, tgt in ckpts:
@@ -732,7 +734,7 @@ def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
         "filename": "ckpt_damaged.bin",
     })
     assert res.status_code == 200
-    if damage in ("oversized_blob", "empty_target"):
+    if damage in ("oversized_blob", "empty_target", "invalid_metadata"):
         assert res.body["n_read"] == off
 
     res = server.make_request("POST", "/completion", data={

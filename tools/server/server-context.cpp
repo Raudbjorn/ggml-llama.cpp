@@ -3030,6 +3030,11 @@ private:
                 SLT_WRN(slot, "invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
                 return 0;
             }
+            if (cur.n_tokens < 0 || cur.n_tokens > (int64_t) slot.prompt.tokens.size() ||
+                cur.pos_min < 0 || cur.pos_max < cur.pos_min) {
+                SLT_WRN(slot, "invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
+                return 0;
+            }
             checkpoints.push_back(std::move(cur));
             if (checkpoints.size() > (size_t) params_base.n_ctx_checkpoints) {
                 checkpoints.pop_front();
@@ -3333,6 +3338,13 @@ private:
 
                     // nread is the end offset of the llama state payload within the file
                     const size_t nread_ckpt = load_slot_checkpoints(filepath, nread, *slot);
+                    if (params_base.n_ctx_checkpoints > 0 && slot->prompt.checkpoints.empty() && !slot->prompt.tokens.empty()) {
+                        const llama_pos p_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot->id);
+                        const llama_pos p_max = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot->id);
+                        if (p_min >= 0 && p_max >= p_min) {
+                            create_checkpoint(*slot, 0, p_min, p_max);
+                        }
+                    }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
