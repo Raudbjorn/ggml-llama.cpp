@@ -112,6 +112,7 @@ enum llama_example {
     LLAMA_EXAMPLE_DOWNLOAD,
     LLAMA_EXAMPLE_TOKENIZE,
     LLAMA_EXAMPLE_MOE_TRACE,
+    LLAMA_EXAMPLE_SCHEMA_DECISION,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -502,6 +503,7 @@ struct common_params {
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_parallel            =     1; // number of parallel sequences to decode
+    int32_t n_seq_decision        =     0; // sequences for schema decisions (0 = disabled)
     bool    n_parallel_explicit   = false; // true if -np/--parallel was passed on the command line
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t n_outputs_max         =     0; // max outputs in a batch (0 = n_batch)
@@ -807,6 +809,9 @@ struct common_params {
     bool tokenize_stdin      = false; // if true, read the prompt from stdin
     bool tokenize_no_bos     = false; // if true, do not add the BOS token
     bool tokenize_show_count = false; // if true, print the total token count
+
+    // schema decision params
+    std::string decision_request; // request JSON for llama-schema-decision, "-" = stdin
 
     // common params
     std::string out_file; // output filename for all example programs

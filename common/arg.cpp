@@ -55,6 +55,9 @@
 #endif
 #endif
 
+// a context holds at most 256 sequences (LLAMA_MAX_SEQ in src/llama-cparams.h)
+static constexpr int COMMON_MAX_SEQ_DECISION = 256;
+
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 using json = common_json;
@@ -1531,6 +1534,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     } else if (ex == LLAMA_EXAMPLE_MOE_TRACE) {
         params.out_file  = "moe-trace.csv";
         params.n_predict = 256;
+    } else if (ex == LLAMA_EXAMPLE_SCHEMA_DECISION) {
+        params.n_seq_decision = 16;
+        params.kv_unified     = true; // branches share the trunk's cells
     } else if (ex == LLAMA_EXAMPLE_TTS) {
         params.out_file = "output.wav";
         params.sampling.penalty_repeat = 1.05f;
@@ -2695,6 +2701,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         ).set_env("LLAMA_ARG_N_PARALLEL"));
     }
+    add_opt(common_arg(
+        {"--decision-seqs"}, "N",
+        string_format("sequences for schema decisions: one caches the instructions, one per context in flight, "
+                      "the rest score values (default: %d, minimum 3, maximum %d)", params.n_seq_decision, COMMON_MAX_SEQ_DECISION),
+        [](common_params & params, int value) {
+            if (value < 3 || value > COMMON_MAX_SEQ_DECISION) {
+                throw std::invalid_argument(string_format("--decision-seqs must be 3-%d", COMMON_MAX_SEQ_DECISION));
+            }
+            params.n_seq_decision = value;
+        }
+    ).set_env("LLAMA_ARG_DECISION_SEQS").set_examples({LLAMA_EXAMPLE_SCHEMA_DECISION}));
+    add_opt(common_arg(
+        {"--decision-request"}, "FNAME",
+        "decision request: a /v1/decision body as JSON, - reads stdin",
+        [](common_params & params, const std::string & value) {
+            params.decision_request = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SCHEMA_DECISION}));
     add_opt(common_arg(
         {"-ns", "--sequences"}, "N",
         string_format("number of sequences to decode (default: %d)", params.n_sequences),
@@ -3922,7 +3946,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, bool value) {
             params.use_jinja = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_SCHEMA_DECISION}).set_env("LLAMA_ARG_JINJA"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
@@ -4005,7 +4029,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_SCHEMA_DECISION}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
     add_opt(common_arg(
         {"--chat-template-file"}, "JINJA_TEMPLATE_FILE",
         string_format(
@@ -4017,7 +4041,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = read_file(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_SCHEMA_DECISION}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
     add_opt(common_arg(
         {"--skip-chat-parsing"},
         {"--no-skip-chat-parsing"},
