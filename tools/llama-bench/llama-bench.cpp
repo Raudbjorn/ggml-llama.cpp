@@ -309,6 +309,25 @@ static std::string parse_moe_cache_mode(const std::string & value) {
     return std::to_string(budget_mb);
 }
 
+// "off" or "PROFILE:SLOTS" (static expert pack, see docs/backend/MOE-PACK.md)
+static std::string parse_moe_pack(const std::string & value) {
+    if (value == "off") {
+        return value;
+    }
+    const size_t colon = value.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 == value.size()) {
+        throw std::invalid_argument("expected off or PROFILE:SLOTS");
+    }
+    const std::string slots = value.substr(colon + 1);
+    char * end = nullptr;
+    errno = 0;
+    const long long n = strtoll(slots.c_str(), &end, 10);
+    if (errno != 0 || *end != '\0' || n < 1 || n > 4096) {
+        throw std::invalid_argument("pack slots must be an integer in 1..4096");
+    }
+    return value;
+}
+
 static bool moe_cache_mode_forces_canonical_weights(const std::string & mode) {
     return mode == "on" || (mode != "auto" && mode != "off" && mode != "soft");
 }
@@ -435,6 +454,7 @@ struct cmd_params {
     std::vector<int>                 n_gpu_layers;
     std::vector<int>                 n_cpu_moe;
     std::vector<std::string>         moe_cache;
+    std::vector<std::string>         moe_pack;
     std::string                      repack;
     std::vector<llama_split_mode>    split_mode;
     std::vector<llama_load_mode>     load_mode;
@@ -486,6 +506,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_gpu_layers         */ { -1 },
     /* n_cpu_moe            */ { 0 },
     /* moe_cache            */ { "auto" },
+    /* moe_pack             */ { "off" },
     /* repack               */ "auto",
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* load_mode            */ { LLAMA_LOAD_MODE_AUTO },
@@ -566,6 +587,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ncmoe, --n-cpu-moe <n>                           (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     printf("  --moe-cache <auto|on|soft|off|0|MiB>                   (default: %s)\n", join(cmd_params_defaults.moe_cache, ",").c_str());
     printf("                                                    on and fixed budgets disable weight repacking\n");
+    printf("  --moe-pack <off|PROFILE:SLOTS>                    static expert pack (default: %s); disables --moe-cache\n", join(cmd_params_defaults.moe_pack, ",").c_str());
     printf("  --repack <auto|on|off>                            weight repacking policy (default: %s)\n", cmd_params_defaults.repack.c_str());
     printf("  -nr, --no-repack                                  equivalent to --repack off\n");
     printf("  -sm, --split-mode <none|layer|row|tensor>         (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
@@ -883,6 +905,20 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     params.moe_cache.push_back(parse_moe_cache_mode(value));
                 }
                 params.moe_cache_explicit = true;
+            } else if (arg == "--moe-pack") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                for (const auto & value : string_split<std::string>(argv[i], split_delim)) {
+                    try {
+                        params.moe_pack.push_back(parse_moe_pack(value));
+                    } catch (const std::invalid_argument & e) {
+                        fprintf(stderr, "error: --moe-pack %s: %s\n", value.c_str(), e.what());
+                        invalid_param = true;
+                        break;
+                    }
+                }
             } else if (arg == "--repack") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1336,6 +1372,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_cpu_moe.empty()) {
         params.n_cpu_moe = cmd_params_defaults.n_cpu_moe;
     }
+    if (params.moe_pack.empty()) {
+        params.moe_pack = cmd_params_defaults.moe_pack;
+    }
     if (params.moe_cache.empty()) {
         try {
             params.moe_cache = { get_moe_cache_mode_from_env() };
@@ -1433,6 +1472,7 @@ struct cmd_params_instance {
     int                n_gpu_layers;
     int                n_cpu_moe;
     std::string        moe_cache;
+    std::string        moe_pack;
     bool               repack;
     llama_split_mode   split_mode;
     llama_load_mode    load_mode;
@@ -1464,6 +1504,14 @@ struct cmd_params_instance {
         mparams.use_extra_bufts = repack;
         mparams.no_host       = no_host;
         mparams.use_extra_bufts = repack;
+
+        if (moe_pack != "off") {
+            static std::string pack_profile;
+            const size_t colon = moe_pack.rfind(':');
+            pack_profile           = moe_pack.substr(0, colon);
+            mparams.moe_pack_profile = pack_profile.c_str();
+            mparams.moe_pack_slots   = std::stoi(moe_pack.substr(colon + 1));
+        }
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
@@ -1506,7 +1554,7 @@ struct cmd_params_instance {
 
     bool equal_mparams(const cmd_params_instance & other) const {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
-               repack == other.repack &&
+               repack == other.repack && moe_pack == other.moe_pack &&
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
                load_mode == other.load_mode && lazy_mode == other.lazy_mode &&
@@ -1543,6 +1591,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & mc : params.moe_cache)
+    for (const auto & mpk : params.moe_pack)
     for (const auto & sm : params.split_mode)
     for (const auto & lm : params.load_mode)
     for (const auto & lzm : params.lazy_mode)
@@ -1564,6 +1613,10 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & cs : params.cpu_strict)
     for (const auto & nd : params.n_depth)
     for (const auto & pl : params.poll) {
+        // a pack turns the dynamic cache off: one instance per pack, not one per cache mode
+        if (mpk != "off" && &mc != &params.moe_cache.front()) {
+            continue;
+        }
         for (const auto & n_prompt : params.n_prompt) {
             if (n_prompt == 0) {
                 continue;
@@ -1584,8 +1637,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
-                /* .moe_cache             = */ mc,
-                /* .repack                = */ get_effective_repack(mc, params.repack),
+                /* .moe_cache             = */ mpk == "off" ? mc : std::string("off"),
+                /* .moe_pack              = */ mpk,
+                /* .repack                = */ get_effective_repack(mpk == "off" ? mc : std::string("off"), params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1624,8 +1678,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
-                /* .moe_cache             = */ mc,
-                /* .repack                = */ get_effective_repack(mc, params.repack),
+                /* .moe_cache             = */ mpk == "off" ? mc : std::string("off"),
+                /* .moe_pack              = */ mpk,
+                /* .repack                = */ get_effective_repack(mpk == "off" ? mc : std::string("off"), params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1664,8 +1719,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
-                /* .moe_cache             = */ mc,
-                /* .repack                = */ get_effective_repack(mc, params.repack),
+                /* .moe_cache             = */ mpk == "off" ? mc : std::string("off"),
+                /* .moe_pack              = */ mpk,
+                /* .repack                = */ get_effective_repack(mpk == "off" ? mc : std::string("off"), params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1709,6 +1765,7 @@ struct test {
     int                      n_gpu_layers;
     int                      n_cpu_moe;
     std::string              moe_cache;
+    std::string              moe_pack;
     bool                     moe_cache_fit;
     bool                     repack;
     llama_split_mode         split_mode;
@@ -1762,6 +1819,7 @@ struct test {
         n_gpu_layers   = mparams.n_gpu_layers;
         n_cpu_moe      = inst.n_cpu_moe;
         moe_cache      = inst.moe_cache;
+        moe_pack       = inst.moe_pack;
         moe_cache_fit  = cache_fit_selected;
         repack         = mparams.use_extra_bufts;
         split_mode     = mparams.split_mode;
@@ -1847,7 +1905,7 @@ struct test {
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "moe_cache",
-            "moe_cache_fit",  "repack",         "split_mode",
+            "moe_pack",       "moe_cache_fit",  "repack",         "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
@@ -1939,6 +1997,7 @@ struct test {
                                             std::to_string(n_gpu_layers),
                                             std::to_string(n_cpu_moe),
                                             moe_cache,
+                                            moe_pack,
                                             std::to_string(moe_cache_fit),
                                             std::to_string(repack),
                                             split_mode_str(split_mode),
@@ -2118,6 +2177,9 @@ struct markdown_printer : public printer {
         if (field == "moe_cache") {
             return -9;
         }
+        if (field == "moe_pack") {
+            return -12;
+        }
         if (field == "moe_cache_fit") {
             return 5;
         }
@@ -2178,6 +2240,9 @@ struct markdown_printer : public printer {
         }
         if (field == "moe_cache") {
             return "moe-cache";
+        }
+        if (field == "moe_pack") {
+            return "moe-pack";
         }
         if (field == "moe_cache_fit") {
             return "fit";
@@ -2245,6 +2310,9 @@ struct markdown_printer : public printer {
         if (params.moe_cache_explicit || params.moe_cache.size() > 1 ||
             params.moe_cache != cmd_params_defaults.moe_cache) {
             fields.emplace_back("moe_cache");
+        }
+        if (params.moe_pack.size() > 1 || params.moe_pack != cmd_params_defaults.moe_pack) {
+            fields.emplace_back("moe_pack");
         }
         const bool fitting =
             params.fit_params_target.size() > 1 ||

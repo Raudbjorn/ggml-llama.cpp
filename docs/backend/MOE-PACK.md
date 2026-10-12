@@ -125,6 +125,9 @@ with their expert scale tensors stripped:
   `GGML_SCHED_DEBUG=2` shows the CPU split holding only the cold chain and the
   hot chain and merge in the following Vulkan split.
 
+`llama-bench --moe-pack off,PROFILE:SLOTS` compares the arms in one run and
+reports a `moe-pack` column; an instance with a pack runs with `moe-cache off`.
+
 Not yet run: the SYCL backend on the Arc A770, and any throughput measurement.
 The same test covers a SYCL device unchanged (`ctest -R test-moe-pack` in a
 SYCL build). Before adopting packs, compare at equal VRAM: no cache, `--moe-cache`
