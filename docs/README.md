@@ -22,6 +22,7 @@ the fork's own; [development/upstream-merge.md](development/upstream-merge.md) l
 
 - [SYCL.md](backend/SYCL.md) - SYCL on Intel GPUs, the fork's primary backend
 - [OPENVINO.md](backend/OPENVINO.md) - OpenVINO backend
+- [AOCL.md](backend/AOCL.md) - AMD AOCL-BLAS through the generic BLAS backend
 - [MOE-CACHE.md](backend/MOE-CACHE.md) - MoE expert cache
 - [ops.md](ops.md) - op support per backend, generated from [ops/](ops/) by `scripts/create_ops_docs.py`.
   The tables come from `test-backend-ops support --output csv` per backend. The Vulkan, SYCL and

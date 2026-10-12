@@ -845,6 +845,19 @@ llama_kv_cache::llama_kv_cache(
                 n_rot_k *= 2;
             }
         }
+        if (n_rot_k) {
+            // Resolve the fork's tile override once so shared caches and saved state use the same rotation.
+            const char * value = getenv("LLAMA_ATTN_ROT_K_NROT");
+            char * end = nullptr;
+            const long requested = value ? strtol(value, &end, 10) : 64;
+            if ((value && (end == value || *end != '\0')) || requested < 0 || requested > n_embd_head_k_all ||
+                (requested != 0 && (requested < 64 || (requested & (requested - 1)) != 0 || n_embd_head_k_all % requested != 0))) {
+                throw std::runtime_error("LLAMA_ATTN_ROT_K_NROT must be 0 or a power of two >= 64 that divides the key width");
+            }
+            if (requested != 0) {
+                n_rot_k = requested;
+            }
+        }
     }
 
     LLAMA_LOG_INFO("%s: n_rot_k = %u, n_embd_head_k_all = %d\n", __func__, n_rot_k, n_embd_head_k_all);
@@ -2074,25 +2087,7 @@ ggml_tensor * llama_kv_cache::build_input_k_rot(ggml_context * ctx) const {
     ggml_tensor * res = nullptr;
 
     if (n_rot_k) {
-        // EXPERIMENT (master TODO): force smallest rotation matrix (nrot=64)
-        // for K, mirroring V's choice. Master defaults to the largest power-of-2
-        // that divides head_dim, but the upstream comment hypothesizes smaller
-        // tiles preserve more local structure -> less PPL hit on sensitive models
-        // (gemma-4 26B-A4B reportedly regresses with the largest tile).
-        // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
-        const char * LLAMA_ATTN_ROT_K_NROT = getenv("LLAMA_ATTN_ROT_K_NROT");
-        int nrot = LLAMA_ATTN_ROT_K_NROT ? atoi(LLAMA_ATTN_ROT_K_NROT) : 64;
-
-        // Original master behavior (largest power-of-2): set LLAMA_ATTN_ROT_K_NROT=0
-        if (nrot == 0) {
-            nrot = 64;
-            do {
-                nrot *= 2;
-            } while (n_embd_head_k_all % nrot == 0);
-            nrot /= 2;
-        }
-
-        res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nrot, nrot);
+        res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_rot_k, n_rot_k);
         ggml_set_input(res);
         ggml_set_name(res, "attn_inp_k_rot");
     }

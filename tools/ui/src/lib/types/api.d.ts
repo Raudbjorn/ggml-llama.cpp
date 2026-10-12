@@ -90,6 +90,8 @@ export interface ApiModelDataEntry {
 	created: number;
 	/** Whether model files are in HuggingFace cache */
 	in_cache: boolean;
+	/** Whether the server can remove the model from disk */
+	can_remove?: boolean;
 	/** Path to model manifest file */
 	path: string;
 	/** Current status of the model */
@@ -100,6 +102,8 @@ export interface ApiModelDataEntry {
 	tags?: string[];
 	/** Modality capabilities, reported by the router for every model regardless of load state */
 	architecture?: ApiModelArchitecture;
+	/** Trained context of the model, read from its GGUF metadata at registration */
+	context_length?: number;
 	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
 }

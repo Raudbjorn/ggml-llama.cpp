@@ -53,8 +53,8 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 - `Q4_K`
 - `Q4_K_M`
 - `Q5_1`
-- `Q5_K` (converted to `Q8_0_C` at runtime)
-- `Q6_K` (converted to `Q8_0_C` at runtime)
+- `Q5_K` (converted to `Q8_0_C` at runtime by default)
+- `Q6_K` (converted to `Q8_0_C` at runtime by default)
 - `MXFP4`
 
 Other types, including `Q5_0`, `Q2_K`, `Q3_K`, the `IQ*` types and this fork's TurboQuant
@@ -352,7 +352,7 @@ echo "  ./build/ReleaseOV/bin/llama-cli -m model.gguf"
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.4` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top -- edit them to track a different release.
+> The script pins OpenVINO `2026.4.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top -- edit them to track a different release.
 
 </details>
 
@@ -562,7 +562,7 @@ endlocal
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.4` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top -- edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction -- `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
+> The script pins OpenVINO `2026.4.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top -- edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction -- `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
 
 </details>
 
@@ -670,9 +670,10 @@ Boolean flags are parsed with `atoi`: any **non-zero integer** (e.g. `1`) enable
 
 | Variable                          | Type      | Default    | Description                                                                                                 |
 |-----------------------------------|-----------|------------|-------------------------------------------------------------------------------------------------------------|
-| `GGML_OPENVINO_DEVICE`            | String    | `CPU`      | Specify the target device (CPU, GPU, NPU). On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). When set to **NPU**, static compilation mode is enabled for optimal performance. An unavailable device falls back to CPU with a warning. GPU-specific paths (remote context, `GGML_OPENVINO_RELEASE_WEIGHTS`, the manual-GQA default, the MoE requant workaround) match the exact name `GPU`, so `GPU.0`/`GPU.1` do not take them (read from source, not observed). |
-| `GGML_OPENVINO_CACHE_DIR`         | String    | `not set`  | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. On NPU it is passed to NPUW as `NPUW_CACHE_DIR`. Not used for compiles served by `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR`. |
-| `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` | String | `not set` | Directory for the frontend compiled-model cache. When set, OpenVINO compiled models are exported as blobs and imported on later runs to skip weight requantization, graph conversion, and compilation for matching single-graph models on the dynamic-shape path (not NPU, not `GGML_OPENVINO_FORCE_STATIC`). Blobs are keyed on the graph topology (node count, each node's op and name), each weight's name, shape, type, size and a 4 KiB head/tail byte sample, the device, rope parameters, a few backend settings and the OpenVINO version; a manifest re-checks the per-weight entries on import. Blobs written by earlier builds with a different key or manifest format are never matched and can be deleted. |
+| `GGML_OPENVINO_DEVICE`            | String    | `CPU`      | Specify the target device (CPU, GPU, NPU). On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. A device that is not available is an error (no fallback to CPU), and the error message lists the available OpenVINO devices with their names. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). When set to **NPU**, static compilation mode is enabled for optimal performance. |
+| `GGML_OPENVINO_CACHE_DIR`         | String    | `not set`  | Directory for OpenVINO's separate plugin cache. On NPU, this sets `NPUW_CACHE_DIR`. |
+| `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` | String | `not set` | Directory for standalone compiled blobs with weights. Dynamic CPU/GPU graphs can import matching blobs on later runs. |
+| `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY` | Boolean | `0` | Require an existing compiled blob and skip weight uploads and compilation. Requires Linux or Windows mmap loading and a full dynamic CPU/GPU graph on OpenVINO. |
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for prefill on the static path (NPU, or `GGML_OPENVINO_FORCE_STATIC=1`); ignored otherwise. Must be a positive integer; otherwise the default is used. |
 | `GGML_OPENVINO_FORCE_STATIC`      | Boolean   | `0`        | Use the static (NPU-shape) compute path on any device, to test the static translation without NPU hardware. |
 | `GGML_OPENVINO_NPU_COMPILE_CONFIG` | String | `not set` | NPU-only compiler mode parameters forwarded to OpenVINO as `NPU_COMPILATION_MODE_PARAMS`, for example `optimization-level=3`. |
@@ -685,22 +686,22 @@ Boolean flags are parsed with `atoi`: any **non-zero integer** (e.g. `1`) enable
 | `GGML_OPENVINO_REDUCE_COMPILE_MEM`| Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` | Reduce compile-time host memory use by streaming weight requantization and avoiding extra weight-node materialization where possible. Set explicitly to override the umbrella switch. |
 | `GGML_OPENVINO_RELEASE_WEIGHTS`   | Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` on GPU | GPU-only. Release host weight buffers after the compiled model cache can reuse the device/plugin copy. Requires stable graph shapes; dynamic workloads that need recompilation should leave this disabled. |
 | `GGML_OPENVINO_SPILL_DIR`         | String    | `not set`  | Directory for a disk-backed weight buffer. When set, the repacked weight buffer is mapped from an unlinked file on this path instead of anonymous memory, so its pages are reclaimable under memory pressure instead of staying pinned, cutting the load-time host memory peak. Must point at real storage; a tmpfs mount (e.g. `/tmp` on many systems) backs it with RAM and makes the peak worse. Ignored with a warning on Windows. |
-| `GGML_OPENVINO_REQUANT_KQUANT`    | String    | `not set`  | Requantize Q6_K/Q5_K weights (and matching MoE expert weights) to a 4-bit target instead of the default Q8_0_C, trading accuracy for less memory traffic. One of `q4_sym128` (Q6_K/Q5_K only), `q4_sym128_all` (Q4_K too, drops its per-group zero point), `q4_asym64_all` (Q6_K/Q5_K/Q4_K, keeps a real zero point at group 64), or `native` (no requantization; also disables the GPU MoE `Q4_0_64` workaround). Unknown values are ignored. Not applied on NPU. |
-| `GGML_OPENVINO_PROFILING`         | Boolean   | `0`        | Enable execution-time profiling.                                                                            |
+| `GGML_OPENVINO_REQUANT_KQUANT`    | String    | `not set`  | Requantize Q6_K/Q5_K weights (and matching MoE expert weights) to a 4-bit target instead of the default Q8_0_C, trading accuracy for less memory traffic. One of `q4_asym64` (Q6_K/Q5_K only, keeps a real zero point at group 64), `q4_asym64_all` (also requantizes Q4_K), `q4_sym128` (Q6_K/Q5_K only), `q4_sym128_all` (Q4_K too, drops its per-group zero point), or `native` (no requantization). |
+| `GGML_OPENVINO_PROFILING`         | Integer   | `0`        | `1` logs execution timing; `2` or higher also enables OpenVINO and OpenCL profiling.                        |
+| `GGML_OPENVINO_DEBUG_NODE`       | String    | `not set`  | Add the named graph nodes as compiled outputs for debugging. Separate multiple names with commas.          |
+| `GGML_OPENVINO_MOE_OP`           | Boolean   | `1`        | On GPU, set to `0` to keep the unfused GatherMatmul path.                                                  |
 | `GGML_OPENVINO_DUMP_CGRAPH`       | Boolean   | `0`        | Dump the GGML compute graph to `cgraph_ov.txt`.                                                             |
 | `GGML_OPENVINO_DUMP_IR`           | Boolean   | `0`        | Serialize OpenVINO IR files with timestamps.                                                                |
 | `GGML_OPENVINO_DEBUG_INPUT`       | Boolean   | `0`        | Enable input debugging and print input tensor info.                                                         |
 | `GGML_OPENVINO_DEBUG_OUTPUT`      | Boolean   | `0`        | Enable output debugging and print output tensor info.                                                       |
 | `GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS` | Boolean | `0` | Print tensor address map once.                                                                           |
 | `GGML_OPENVINO_LOG_UNSUPPORTED_OPS`| Boolean   | `0`        | Log warning messages with tensor details and rejection reasons for any ops not supported by the OpenVINO backend. Emits at `WARN` level (requires `--log-verbosity >= 2`, enabled by default). |
-| `GGML_OPENVINO_DEBUG_NODE`        | String    | `not set`  | Comma-separated tensor names to add as extra debug outputs of the OpenVINO model. |
 | `GGML_OPENVINO_ENABLE_FALLBACK`   | Boolean   | `0`        | Enable split-graph detection; when off, graphs are never treated as split. |
 | `GGML_OPENVINO_LOG_SWA_LAYERS`    | Boolean   | `0`        | Log per-layer sliding-window extents at `WARN` level. |
 | `GGML_OPENVINO_NATIVE_SOFTPLUS`   | Boolean   | `0`        | Use OpenVINO's SoftPlus op instead of the decomposed form. |
-| `GGML_OPENVINO_MOE_OP`            | String    | `not set`  | GPU only, experimental: register the fused MoE (`FuseMoeCompressed`) pass. Presence enables it: any value, including `0`. |
 
 > [!NOTE]
-> - `GGML_OPENVINO_STATEFUL_EXECUTION` is an **Experimental** feature to allow stateful execution for managing the KV cache internally inside the OpenVINO model, improving performance on CPUs and GPUs. Stateful execution is not effective on NPUs, and not all models currently support this feature. This feature is experimental and has been validated only with the llama-simple, llama-cli, and llama-bench applications and is recommended to enable for the best performance. Other applications, such as llama-server and llama-perplexity, are not yet supported.
+> - `GGML_OPENVINO_STATEFUL_EXECUTION` is an **Experimental** feature for managing caches internally inside the OpenVINO model on CPUs and GPUs. Use a single slot (`-np 1`). KV caches retain the append-based state layout and sequence-axis optimization. Qwen3.5 adds recurrent cache states in their GGML layouts. Qwen3.5 requires an unsplit graph with model caching enabled and no recurrent rollback. A prompt starting at position 0 resets all states. State save/restore, sequence rewind, context shift, and mid-sequence graph replacement are unsupported. Stateful execution is not effective on NPUs.
 > - `GGML_OPENVINO_LOG_UNSUPPORTED_OPS` emits logs at `WARN` level (`GGML_LOG_WARN`), which requires application log verbosity `--log-verbosity >= 2` (or `-lv 2`).
 > - With `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY=1`, use the same compilation settings as the export run. One directory can hold blobs for different models and settings; `GGML_OPENVINO_SPILL_DIR` does not affect the cache key and is ignored in cache-only mode. See [Compiled model cache](../../ggml/src/ggml-openvino/README.md) for the workflow and restrictions.
 

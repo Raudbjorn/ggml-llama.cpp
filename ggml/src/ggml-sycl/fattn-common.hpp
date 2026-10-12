@@ -10,7 +10,6 @@
 
 #include "convert.hpp"
 #include "vecdotq.hpp"
-#include "fattn-buffers.hpp"
 #include "fattn.hpp"
 
 #include "ggml.h"
@@ -1039,9 +1038,7 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
-// large_grf is a template parameter so the two instantiations get distinct kernel names;
-// a runtime branch over one lambda would define the same mangled kernel twice.
-template <fattn_kernel_t fattn_kernel, int warp_size, bool large_grf>
+template <fattn_kernel_t fattn_kernel, int warp_size, bool use_large_grf = false, bool force_large_grf = false>
 static void lauch_kernel(
     dpct::dim3 group_range,
     dpct::dim3 local_range,
@@ -1086,31 +1083,38 @@ static void lauch_kernel(
     const int64_t nb33) {
     GGML_UNUSED(local_mem_size);
 
+    const auto rng = sycl::nd_range<3>(
+        static_cast<sycl::range<3>>(group_range * local_range),
+        static_cast<sycl::range<3>>(local_range));
+
+    const auto kernel = [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
+        GGML_UNUSED(item_ct1);
+        fattn_kernel(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
+                     max_bias, m0, m1, n_head_log2, logit_softcap, ne00,
+                     ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11,
+                     ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23,
+                     ne31, ne32, ne33, nb31, nb32, nb33);
+    };
+
     q->submit([&](sycl::handler &cgh) {
-        auto kernel = [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
-            GGML_UNUSED(item_ct1);
-            fattn_kernel(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
-                         max_bias, m0, m1, n_head_log2, logit_softcap, ne00,
-                         ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11,
-                         ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23,
-                         ne31, ne32, ne33, nb31, nb32, nb33);
-        };
-        const sycl::nd_range<3> range(
-            static_cast<sycl::range<3>>(group_range * local_range),
-            static_cast<sycl::range<3>>(local_range));
-        if constexpr (large_grf) {
-            cgh.parallel_for(range,
-                             sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size<256> },
-                             kernel);
+        // grf_size_automatic lets the compiler use the large register file when the kernel needs it. grf_size<256> would say the same but is undefined on devices that do not have it.
+        if constexpr (force_large_grf) {
+            cgh.parallel_for(rng,
+                sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size<256> },
+                kernel);
+        } else if constexpr (use_large_grf) {
+            cgh.parallel_for(
+                rng,
+                sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size_automatic },
+                kernel);
         } else {
-            cgh.parallel_for(range, kernel);
+            cgh.parallel_for(rng, kernel);
         }
     });
 }
 
-// tile_route is a template parameter so the 256-GRF instantiation exists for the tile
-// kernels only (the vec kernels never run at 256 GRF).
-template <int DV, int ncols1, int ncols2, fattn_kernel_t fattn_kernel, int warp_size, bool tile_route>
+// use_large_grf lets the compiler choose the large register file. Opt in where spilling limits the kernel, not thread occupancy.
+template <int DV, int ncols1, int ncols2, fattn_kernel_t fattn_kernel, int warp_size, bool tile_route, bool use_large_grf = false>
 void launch_fattn(
     ggml_backend_sycl_context & ctx, ggml_tensor * dst, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k) {
@@ -1138,7 +1142,6 @@ void launch_fattn(
     GGML_ASSERT(!mask || mask->type == GGML_TYPE_F16);
 
     ggml_sycl_pool & pool = ctx.pool();
-    ggml_sycl_fattn_kv_buffers & fbuf = ctx.fattn_buffers();
     dpct::queue_ptr  main_stream = ctx.stream();
     const int id  = ggml_sycl_get_device();
     const int nsm = ggml_sycl_info().devices[id].nsm;
@@ -1170,8 +1173,6 @@ void launch_fattn(
         }
     }
 
-    ggml_sycl_fattn_alloc        K_f16(fbuf.K);
-    ggml_sycl_fattn_alloc        V_f16(fbuf.V);
     const ggml_sycl_fattn_extra  extra = ggml_sycl_fattn_get_extra(dst);
     ggml_sycl_pool_alloc<int>    KV_max(pool);
     ggml_sycl_pool_alloc<float>  dst_tmp(pool);
@@ -1191,8 +1192,8 @@ void launch_fattn(
         const size_t bs = ggml_blck_size(K->type);
         const size_t ts = ggml_type_size(K->type);
 
-        sycl::half * K_f16_ptr = extra.K_buffer_ptr ? (sycl::half *) extra.K_buffer_ptr
-                                                    : K_f16.alloc(ggml_nelements(K));
+        GGML_ASSERT(extra.K_buffer_ptr);
+        sycl::half * K_f16_ptr = (sycl::half *) extra.K_buffer_ptr;
         if (ggml_is_contiguously_allocated(K)) {
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, K);
             to_fp16(K_data, K_f16_ptr, ggml_nelements(K), main_stream);
@@ -1225,8 +1226,8 @@ void launch_fattn(
             const size_t bs = ggml_blck_size(V->type);
             const size_t ts = ggml_type_size(V->type);
 
-            sycl::half * V_f16_ptr = extra.V_buffer_ptr ? (sycl::half *) extra.V_buffer_ptr
-                                                        : V_f16.alloc(ggml_nelements(V));
+            GGML_ASSERT(extra.V_buffer_ptr);
+            sycl::half * V_f16_ptr = (sycl::half *) extra.V_buffer_ptr;
             if (ggml_is_contiguously_allocated(V)) {
                 to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, V);
                 to_fp16(V_data, V_f16_ptr, ggml_nelements(V), main_stream);
@@ -1419,14 +1420,12 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
-    auto launch = lauch_kernel<fattn_kernel, warp_size, false>;
+    auto launch = lauch_kernel<fattn_kernel, warp_size, use_large_grf>;
 #if GGML_SYCL_FA_LARGE_GRF_VARIANTS
     if constexpr (tile_route) {
         if (large_grf) {
-            launch = lauch_kernel<fattn_kernel, warp_size, true>;
+            launch = lauch_kernel<fattn_kernel, warp_size, false, true>;
         }
-    } else {
-        GGML_ASSERT(!large_grf);
     }
 #else
     GGML_ASSERT(!large_grf);

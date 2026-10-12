@@ -6,6 +6,8 @@ The default procedure is a sanitized snapshot merge, not a direct merge or rebas
 
 This procedure preserves the fork's first-parent history. It imports upstream content as one synthetic delta; it does **not** make every upstream commit an ancestor of the result. Do not describe it as a commit-by-commit history sync.
 
+When the user explicitly requests merging fork master into the current branch, use the direct-merge mode in [llama-fork-sync](../../.claude/skills/llama-fork-sync/SKILL.md). Preserve the real parent order: current HEAD first, fetched fork master second. The invariants, preservation audit, and verification ladder below still apply; the snapshot construction steps and snapshot-specific completion assertions do not.
+
 ## Outcome and non-goals
 
 A completed merge has all of the following properties:

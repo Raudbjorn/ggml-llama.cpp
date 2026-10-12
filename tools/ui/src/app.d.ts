@@ -48,7 +48,6 @@ import type {
 	DatabaseMessageExtraVideoFile,
 	ExportedConversation,
 	ExportedConversations,
-	ModelLoadProgress,
 	// Model types
 	ModelLoadProgress,
 	ModelModalities,

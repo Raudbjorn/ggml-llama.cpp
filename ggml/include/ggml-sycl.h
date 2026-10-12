@@ -52,14 +52,6 @@ GGML_BACKEND_API void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, s
 GGML_BACKEND_API void   ggml_backend_sycl_comm_free(void * comm_ctx);
 GGML_BACKEND_API bool   ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx, struct ggml_tensor ** tensors);
 
-// Tensor parallelism (--split-mode tensor): comm_init/free/allreduce_tensor
-// trio queried by the meta-backend via ggml_backend_reg_get_proc_address.
-// See typedefs in ggml/include/ggml-backend.h. Mirrors the CUDA backend's
-// pattern (ggml_backend_cuda_comm_*).
-GGML_BACKEND_API void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends);
-GGML_BACKEND_API void   ggml_backend_sycl_comm_free(void * comm_ctx);
-GGML_BACKEND_API bool   ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx, struct ggml_tensor ** tensors);
-
 // pinned host buffer for use with the CPU backend for faster copies between CPU and GPU
 // pins on device 0 - a copy between another device and this memory can fail,
 // use ggml_backend_dev_host_buffer_type to pin on the device that does the copy
