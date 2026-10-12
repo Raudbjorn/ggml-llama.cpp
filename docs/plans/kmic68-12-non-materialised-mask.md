@@ -45,9 +45,10 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 
 ## Approach
 
-1. Add `causal_prefix_mask=false` to common/context parameters with positive/
+1. Add `causal_prefix_mask=false` to common/internal context parameters with positive/
    negative CLI aliases and `LLAMA_ARG_CAUSAL_PREFIX_MASK`; propagate through
-   target and P08-capped draft contexts without changing the default.
+   target and P08-capped draft contexts without changing the default. Preserve
+   public `llama_context_params` layout through additive staging initialization.
 2. Add a read-only prospective-layout query to `llama_kv_cache_context`, using
    `sinfos[i_cur]` and `ubatches[i_cur]` over the current cache metadata without
    calling `apply()` or `apply_ubatch()`. It must expose post-apply row order,
@@ -59,15 +60,17 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    queries, causal full attention, no ALiBi/M-RoPE/SWA/cross/recurrent/special
    mask, and a supported route. Build candidate tensor descriptors and require
    `ggml_nbytes(prefix_i32) < ggml_nbytes(materialized_f16_mask_shape)`;
-   equality or larger size is fallback.
+   equality or larger size is fallback. P09 padded microbatches always use
+   materialized masks; reject padding before interpreting slot sentinels.
 3. Add `build_attn_inp_kq_prefix`, I32
    `llm_graph_input_attn_kv::self_kq_prefix`, and
    `llama_kv_cache::set_input_kq_prefix`. Keep existing mask builders and population unchanged for fallback and all excluded call sites.
 4. Extend the existing `GGML_OP_FLASH_ATTN_EXT` contract without moving source
    slots: `src[0]=Q`, `src[1]=K`, `src[2]=V`, `src[3]=mask-or-prefix`,
    and `src[4]=sinks`. Add an op-param enum `MATERIALIZED`/
-   `PREFIX_LENGTHS`. Materialized FA requires src3 F16 with the existing mask
-   shape; prefix requires src3 I32 with `ne[0]=n_queries` and other dimensions
+   `PREFIX_LENGTHS`. Materialized FA preserves the existing nullable src3
+   contract; a present mask is F16 with existing shape and ALiBi rules.
+   Prefix requires src3 I32 with `ne[0]=n_queries` and other dimensions
    1. Sinks semantics remain unchanged. The representation tag, not source-slot
    position alone, determines interpretation.
 5. Update `ggml.c` assignment/validation/op params, graph duplication,
@@ -142,10 +145,15 @@ Then stop the service, verify A770 sole tenancy, name build/model/driver, and ru
 materialized/prefix modes plus representation transitions at P08 cap 64:
 
 ```bash
-timeout 2400 python3 scripts/perf/verify-causal-prefix-mask.py --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl --depths 4096,16384 --draft-ubatch 64 --seed 123 --modes materialized,prefix --transitions prefix,full,prefix --fallbacks multi-sequence,non-contiguous,out-of-order-cache,wrapped-cache,cross-attention,sliding-window,alibi,mrope,non-fa,xmx,mkl,onednn,openvino,unsupported-kernel --report /tmp/p12-prefix-mask.json
+timeout 2400 python3 scripts/perf/verify-causal-prefix-mask.py --server ./build-sycl/bin/llama-server --model /mnt/mrgr/models/Qwen3-1.7B-Q8_0.gguf --draft-model /mnt/mrgr/models/Qwen3-1.7B-Q8_0.gguf --prompts scripts/perf/prompts.jsonl --depths 4096,16384 --draft-ubatch 64 --seed 123 --modes materialized,prefix --transitions prefix,full,prefix --fallbacks multi-sequence,non-contiguous,out-of-order-cache,wrapped-cache,cross-attention,sliding-window,alibi,mrope,non-fa,xmx,mkl,onednn,openvino,unsupported-kernel --report /tmp/p12-prefix-mask.json
 ```
 
 Expected evidence:
+
+- positive ordinary-transformer fixtures prove actual prefix dispatch; classify
+  exact Qwen4Exp target and draft eligibility separately, retaining fallback
+  checks instead of treating fallback parity as positive feature evidence;
+- existing null-mask and sinks operator cases continue to pass;
 
 - CPU and SYCL VEC/TILE outputs are byte-identical between the I32 prefix and
   materialized F16 FA representations;

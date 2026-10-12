@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "speculative.h"
+#include "sampling.h"
 #include "../src/llama-ext.h"
 #include "../src/llama-model-saver.h"
 #include "../src/llama-context.h"
@@ -28,6 +29,7 @@ static constexpr int n_vocab = 32;
 static constexpr int n_rank = 4;
 static ggml_backend_dev_t test_device = nullptr;
 static bool q8_kv = false;
+static bool release_sampling_fixtures = false;
 
 static void require(bool ok, const char * message) {
     if (!ok) {
@@ -39,7 +41,7 @@ static void require(bool ok, const char * message) {
 // Small canonical files exercise the real GGUF loader, including missing required tensors.
 static void write_fixture(const std::string & path, bool mtp_only, int omit_head = -1, float trunk_scale = 1.0f,
                           bool shared_embd = true, float output_scale = 1.0f, int vocab_size = n_vocab,
-                          const char * omit_tensor = nullptr) {
+                          const char * omit_tensor = nullptr, bool consumer_vocab = false) {
     gguf_context_ptr meta(gguf_init_empty());
     llama_model_saver ms(LLM_ARCH_QWEN4EXP, meta.get());
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE, "qwen4exp");
@@ -74,6 +76,15 @@ static void write_fixture(const std::string & path, bool mtp_only, int omit_head
     }
     ms.add_kv(LLM_KV_TOKENIZER_LIST, vocab);
     ms.add_kv(LLM_KV_TOKENIZER_SCORES, std::vector<float>(vocab_size, 0.0f));
+    if (consumer_vocab) {
+        // The TEST tokenizer already accepts text; executable fixtures also need EOG.
+        ms.add_kv(LLM_KV_TOKENIZER_EOS_ID, uint32_t(31));
+        ms.add_kv(LLM_KV_TOKENIZER_BOS_ID, uint32_t(1));
+        ms.add_kv(LLM_KV_TOKENIZER_ADD_BOS, false);
+        std::vector<int32_t> types(vocab_size, LLAMA_TOKEN_TYPE_NORMAL);
+        types[31] = LLAMA_TOKEN_TYPE_CONTROL;
+        gguf_set_arr_data(meta.get(), "tokenizer.ggml.token_type", GGUF_TYPE_INT32, types.data(), types.size());
+    }
 
     ggml_context_ptr tensors(ggml_init({8 * 1024 * 1024, nullptr, false}));
     auto add = [&](const std::string & name, std::initializer_list<int64_t> dims, float scale = 1.0f) {
@@ -1105,11 +1116,21 @@ int main(int argc, char ** argv) {
     llama_log_set([](ggml_log_level level, const char * text, void *) {
         if (level == GGML_LOG_LEVEL_ERROR) { fputs(text, stderr); }
     }, nullptr);
+    if (argc == 3 && std::string(argv[1]) == "--write-consumer-fixture") {
+        const std::filesystem::path dir(argv[2]);
+        require(std::filesystem::is_directory(dir), "consumer fixture output directory exists");
+        write_fixture((dir / "target.gguf").string(), false, -1, 1, true, 1, n_vocab, nullptr, true);
+        write_fixture((dir / "head.gguf").string(), true, -1, 1, true, 1, n_vocab, nullptr, true);
+        fprintf(stderr, "wrote synthetic consumer fixtures (not trained-model evidence)\n");
+        return 0;
+    }
     llama_backend_init();
     std::string real_head_path;
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--q8-kv") {
             q8_kv = true;
+        } else if (std::string(argv[i]) == "--release-sampling-fixtures") {
+            release_sampling_fixtures = true;
         } else if (std::string(argv[i]) == "--backend" && i + 1 < argc) {
             ggml_backend_load_all();
             test_device = ggml_backend_dev_by_name(argv[++i]);
@@ -1263,6 +1284,7 @@ int main(int argc, char ** argv) {
         test_chain(head.get(), flash, 32, 0, true);
         test_chain_export_is_output(head.get(), flash);
     }
+    test_distribution_driver(target.get(), head.get());
     test_driver(target.get(), head.get());
     test_driver_failed_draft(target.get(), head.get());
     test_ordinary_draft_driver(target.get(), head.get());

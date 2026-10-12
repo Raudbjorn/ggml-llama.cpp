@@ -6,6 +6,7 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 
 // common_sampler extends llama_sampler with additional functionality:
 //
@@ -47,6 +48,7 @@ void common_sampler_free(struct common_sampler * gsmpl);
 void                    common_sampler_accept(struct common_sampler * gsmpl, llama_token token, bool is_generated);
 void                    common_sampler_reset (struct common_sampler * gsmpl);
 struct common_sampler * common_sampler_clone (struct common_sampler * gsmpl);
+// Requires matching sampler configurations, as llama_sampler_copy does.
 void                    common_sampler_copy  (const struct common_sampler * src, struct common_sampler * dst);
 
 // arguments can be nullptr to skip printing
@@ -85,8 +87,34 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 //
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first = false);
 
-// as above, but verifies by rejection sampling; draft_q holds the draft's candidates per token
+// Legacy compatibility entry point: exact-match fallback without P04 proposal ownership.
 std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first = false);
+
+// fork: internal row adapter keeps the production transaction testable without a model.
+struct common_sampler_dist_source {
+    int32_t n_vocab;
+    std::function<bool(int)> backend_selected;
+    std::function<bool(common_sampler *, int, bool, std::vector<llama_token_data> &)> distribution;
+    std::function<llama_tokens(common_sampler *, bool)> exact;
+};
+
+// The low-level dist overloads require a snapshot consumed by common_speculative_sample_and_accept.
+bool common_sampler_dist_supported(const common_sampler * gsmpl);
+bool common_sampler_dist_valid(const std::vector<llama_token_data> & row, int32_t n_vocab,
+        llama_token emitted = LLAMA_TOKEN_NULL);
+// Draw from the recorded float weights normalized by their double sum; unit is in [0, 1).
+llama_token common_sampler_dist_draw(const std::vector<llama_token_data> & row, double unit);
+llama_tokens common_sampler_sample_and_accept_n_dist(common_sampler * gsmpl,
+        const common_sampler_dist_source & source, const std::vector<int> & idxs,
+        const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & q,
+        std::string & reason, bool grammar_first = false);
+llama_tokens common_sampler_sample_and_accept_n_dist(common_sampler * gsmpl, llama_context * ctx,
+        const std::vector<int> & idxs, const llama_tokens & draft,
+        const std::vector<std::vector<llama_token_data>> & q, std::string & reason, bool grammar_first = false);
+
+// Consumers retain the acceptor's G+1 result until replay decisions are complete.
+size_t common_sampler_eog_prefix(const llama_tokens & tokens, bool ignore_eog,
+        const std::function<bool(llama_token)> & is_eog);
 
 // assume idxs == [ 0, 1, 2, ..., draft.size() ]
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft, bool grammar_first = false);

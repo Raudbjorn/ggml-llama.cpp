@@ -2452,3 +2452,32 @@ You can specify default preferences for the web UI using `--ui-config <JSON conf
 > **Note:** The old flags `--webui-config` and `--webui-config-file` are deprecated but still work as aliases.
 
 You may find available preferences in [settings-keys.ts](../ui/src/lib/constants/settings-keys.ts).
+
+### Benchmark memory telemetry
+
+`LLAMA_BENCH_MEM_LOG=<path>` enables process-lifetime SYCL memory sampling for a
+single configured SYCL device. Set `ZES_ENABLE_SYSMAN=1` before launch.
+`LLAMA_BENCH_MEM_INTERVAL_MS` is an unsigned decimal interval in `[10,1000]`,
+default 50. Invalid values fail initialization. With the log variable absent,
+no sampler thread or memory queries are added.
+
+Sampling begins after backend initialization and before model allocation. It
+continues across sleep and reload, then takes its final sample after the request
+loop and before cleanup. One terminal JSONL row records `launch_id`, `device`,
+`interval_ms`, `sample_count`, `min_free_bytes`, `final_free_bytes`, `total_bytes`,
+`providers`, `query_failure_count`, `completed`, and `valid`. Exact Level Zero or
+SYCL provenance is required. Any query failure, total-as-free fallback, or
+impossible size permanently invalidates the process record. Early startup
+failure emits an invalid record when the file can be opened; missing records
+are failures too.
+
+`scripts/perf/bench_spec.py` assigns a unique path suffix and launch ID per
+process, validates the terminal row after shutdown, and preserves memory-only
+launch results in `*.launch.json`. Memory fixtures must provide positive
+`expected_prompt_tokens` for each prompt. The harness checks each measured
+response against that count, requires positive decoded tokens and successful
+response verification, and distinguishes `telemetry_valid` from `memory_valid`
+workload evidence. Cancellation and forced termination invalidate
+headroom evidence. Instrumented throughput fields are discarded and these runs
+cannot enter paired performance comparisons. Use separate unsampled launches
+for timing. Polling cannot detect a peak shorter than its interval.

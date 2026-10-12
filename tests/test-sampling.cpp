@@ -335,7 +335,10 @@ static void test_perf() {
     BENCH(llama_sampler_init_xtc    (1.0f, 0.1f, 1, 1),       data, 32);
 }
 
+void test_speculative_sampling();
+
 int main(void) {
+    test_speculative_sampling();
     ggml_time_init();
 
     test_dist_singleton_rng();

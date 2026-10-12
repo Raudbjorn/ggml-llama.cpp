@@ -80,6 +80,11 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 9. The verifier reads matching before/after metric deltas. This makes draft-side
    host microseconds per speculative cycle executable without P04.
 
+Existing draft call sites pass `grammar_first=true`. Pass false only for
+private draft samplers proven constructed without grammar; retain R05.3 for
+general/constrained callers. Positive campaigns must report nonzero optimized
+calls, and guarded negative cases must report zero.
+
 ## Critical files & anchors
 
 - `common/sampling.cpp:130-153` - `common_sampler::set_logits` materialization.

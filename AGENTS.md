@@ -217,11 +217,11 @@ sudo systemctl start llama-sycl.cpp.service
 ```bash
 # Product bench
 ./build-sycl/bin/llama-bench -m model.gguf -ngl 99 -fa 1 \
-  -ctk turbo3 -ctv turbo3 -p 512 -n 128 -r 3
+  -ctk turbo3 -ctv turbo3 -p 512 -n 512 -r 3
 
 # Depth sweep
 ./build-sycl/bin/llama-bench -m model.gguf -ngl 99 -fa 1 \
-  -ctk turbo3 -ctv turbo3 -p 0 -n 128 -d 0,4096,16384
+  -ctk turbo3 -ctv turbo3 -p 0 -n 512 -d 0,4096,16384
 
 # Perplexity
 ./build-sycl/bin/llama-perplexity -m model.gguf -ngl 99 -fa 1 \

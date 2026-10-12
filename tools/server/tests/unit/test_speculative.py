@@ -239,3 +239,52 @@ def test_draft_token_probs():
         assert abs(tok_draft["logprob"] - tok_no_draft["logprob"]) < 0.25
     # real logprobs are not all exactly 0.0 (prob 1.0)
     assert any(tok["logprob"] < -1e-4 for tok in probs_draft)
+
+
+@pytest.mark.parametrize("ignore_eos", [False, True])
+def test_speculative_eog_release(ignore_eos):
+    # A one-piece grammar reaches EOG during verification after the initial token.
+    # The ignore-EOG arm retains the existing budget-limited generation policy.
+    global server
+    server.spec_draft_n_min = 0
+    server.spec_draft_n_max = 3
+    server.start()
+    request = {
+        "prompt": "Answer with a",
+        "temperature": 0.0,
+        "seed": 1201,
+        "n_predict": 16,
+        "ignore_eos": ignore_eos,
+        "return_tokens": True,
+        "cache_prompt": False,
+    }
+    if not ignore_eos:
+        request["grammar"] = 'root ::= "a"'
+    response = server.make_request("POST", "/completion", data=request)
+    assert response.status_code == 200, response.body
+    assert response.body["timings"]["draft_n"] > 0, response.body
+    if ignore_eos:
+        assert response.body["stop_type"] == "limit", response.body
+        assert response.body["tokens_predicted"] == 16, response.body
+    else:
+        assert response.body["stop_type"] == "eos", response.body
+        assert response.body["content"] == "a", response.body
+        props = server.make_request("GET", "/props")
+        assert props.status_code == 200, props.body
+        eos = server.make_request("POST", "/tokenize", data={
+            "content": props.body["eos_token"], "parse_special": True, "add_special": False,
+        })
+        assert eos.status_code == 200 and len(eos.body["tokens"]) == 1, eos.body
+        # process_token includes EOG in return_tokens; the bonus must not follow it.
+        eos_id = eos.body["tokens"][0]
+        assert response.body["tokens"][-1] == eos_id, response.body
+        assert eos_id not in response.body["tokens"][:-1], response.body
+        decoded = server.make_request("POST", "/detokenize", data={"tokens": response.body["tokens"][:-1]})
+        assert decoded.status_code == 200, decoded.body
+        assert decoded.body["content"] == "a", decoded.body
+    # A second request exercises release rather than leaving a replay/decode queued.
+    second = server.make_request("POST", "/completion", data={
+        "prompt": "A new story", "temperature": 0.0, "n_predict": 4,
+        "ignore_eos": True, "cache_prompt": False,
+    })
+    assert second.status_code == 200 and second.body["tokens_predicted"] == 4, second.body

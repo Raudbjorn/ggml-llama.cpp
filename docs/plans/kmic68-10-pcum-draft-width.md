@@ -57,6 +57,7 @@ stop. P100 threshold values are not defaults for the A770.
    paired measurements qualify. Store `schema_version`, `drafter=draft-mtp`,
    target/draft model SHA-256 identities, backend device identities and their
    target/draft assignments, route, build identity, driver identity,
+   acceptance mode and effective target/draft sampling settings,
    and exactly three ordered `(position,threshold)` knots at 0, 4096, and 16384.
    Build identity includes hashes of the server and loaded backend libraries;
    driver identity includes kernel driver and compute-runtime versions. GPU

@@ -547,3 +547,85 @@ statistics ngram_map_k: #calls(b,g,a) = 6 1690 26, #gen drafts = 26, #acc drafts
 
 To measure the end-to-end effect of speculative decoding (throughput, latency, and draft acceptance) across diverse prompts, see the SPEED-Bench client in [tools/server/bench/speed-bench](../../tools/server/bench/speed-bench/README.md).
 It runs against a running `llama-server` and can compare a baseline run against a speculative-decoding run.
+
+## MTP distribution acceptance
+
+`LLAMA_SPEC_SAMPLE_TEMP` is disabled when unset or zero. A finite positive value
+samples eligible non-chained host MTP drafts and records their sparse proposal
+distributions for target rejection sampling. `LLAMA_SPEC_DRAFT_TOPP` defaults to
+1 and must be finite in `(0, 1]`. Use `--no-spec-draft-backend-sampling` for the
+host drafting path. Unsupported constrained/stateful or backend-selected target
+samplers, chained drafting and unavailable/consumed proposal distributions retain
+whole-block exact-match fallback. Positive target temperature and a supported
+stateless sampler chain are required for distribution acceptance.
+
+With cycle logging enabled, proposal-bound `q_records` distinguish the sampled
+token/probability from top-1 diagnostics. Proposal state is single-use even when
+logging is disabled; checkpoint repair never samples an already completed
+decision again. See the [P06 evidence and compatibility limits](../research/speculative/kmic68-distribution-acceptance-2026-10-11.md).
+
+## MTP cycle logging and phase profiling
+
+Set `LLAMA_SPEC_LOG=/absolute/path/cycles.jsonl` to append one JSON object per
+completed MTP proposal. Set `LLAMA_SPEC_PROFILE=1` to add context synchronization
+at draft and target verification boundaries. Both settings are read during
+speculative initialization. Logging alone adds no synchronization and reports
+`timing_mode=host_unsynchronized`; profiling reports `synchronized`. With neither
+setting, MTP selects a compile-time non-recording token loop. Log open, write,
+flush, and close failures abort the instrumented process.
+
+Schema version 1 identifies the process launch, server request/task, proposal,
+sequence, and sequence-local cycle. `attempts` and `top1_probabilities` include
+the probability-stop candidate and all candidates later removed by `n_min` or
+`n_max`. `proposal_tokens` is an immutable snapshot taken after selection and
+clamping. `drafted_count` counts that snapshot; `accepted_count` is the server's
+final replay-adjusted count. Unselected or cancelled proposals retain attempts
+but contribute zero drafted and accepted tokens. `outcome` distinguishes
+`completed` and `cancelled` cycles. Cancelled cycles retain every verification
+invocation that ran, including phases shared with completed participants; an
+open phase delays the row until that invocation ends. A `spec_cycle_start` diagnostic
+allows the verifier to detect missing and duplicate completion rows.
+
+`draft_phase` and `verify_phases` contain independent invocation IDs, proposal
+and sequence participants, participant counts, start/end times, wall time, and
+synchronization overhead. Participants with proposal ID zero are other target
+sequences sharing the invocation. Each shared phase has the same metadata in
+all referencing rows. A replay can span multiple verification invocations, so
+`verify_phases` is an array; it is empty for an unselected proposal that never
+entered verification. Shared
+phase times are not exclusive sequence costs and must be deduplicated by
+`(launch_id, phase_id)` before averaging. `verify_sample_wall_us` is null for
+zero or multiple verify phases, and `additive_residual_us` is available only
+for completed cycles with one-to-one single-sequence phases.
+
+`cycle_wall_us` covers the sequence's elapsed cycle, including scheduling waits.
+`inter_phase_wait_us` measures draft end to the first verification start. For a
+single-sequence verify, completion includes the phase's trailing synchronization;
+shared cycles finish individually. `spec_profile` reports cumulative draft,
+verify, and sequence-cycle means with separate sample counts after each group
+of at least 64 samples in every scope. These counts include cancelled cycles
+and their actual phases; cancellation does not erase incurred work. The real-model
+success verifier rejects cancelled cycles in a successful response. The profiler
+does not add differently scoped means.
+
+The real-model verifier warms a separate uninstrumented process, rotates the
+JSONL file, asserts MTP initialization before sending requests, reconciles six
+requests against response `draft_n` and `draft_n_accepted`, then collects enough
+cycles for the profile report. Use the repository's sole-tenancy and fault-gate
+protocol and a Qwen4Exp target/head pair:
+
+```bash
+flock -w 900 /tmp/a770.lock timeout 2400 python3 scripts/perf/verify-spec-cycle-log.py \
+    --server ./build-sycl/bin/llama-server --model target-qwen4exp.gguf \
+    --draft-model qwen4exp-mtp.gguf --prompts scripts/perf/prompts.jsonl \
+    --log /tmp/p04-spec-cycles.jsonl --profile
+```
+
+Use `--server-args` for the campaign's explicit model placement. The verifier
+records command/build/model provenance, response mappings, both server logs,
+and before/after kernel logs alongside the cycle log. It never changes services
+or downloads models. Synthetic lifecycle tests are `test-speculative-cycle` and
+`python3 -m unittest scripts.test_spec_cycle_log`; setting `SPEC_CYCLE_TEST_BIN`
+to the compiled test enables writer-failure, identity-mismatch, and 64-sample
+recorder checks. Synthetic checks do not establish real-model reconciliation,
+A770 timing validity, or performance gains.

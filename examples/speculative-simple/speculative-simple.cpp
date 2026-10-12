@@ -4,6 +4,9 @@
 #include "speculative.h"
 #include "log.h"
 #include "llama.h"
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+#include "../../tests/test-speculative-consumer.h"
+#endif
 
 #include <algorithm>
 #include <clocale>
@@ -152,6 +155,14 @@ int main(int argc, char ** argv) {
     common_batch batch_tgt(ctx_tgt);
 
     llama_tokens draft;
+    uint64_t proposal_id = 0;
+    bool replay = false;
+    common_speculative_repair repair;
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+    test_spec_consumer fixture;
+    GGML_ASSERT(use_ckpt_tgt);
+    fixture.event("capability", {{"full", use_ckpt_tgt}});
+#endif
 
     common_prompt_checkpoint ckpt;
 
@@ -167,6 +178,7 @@ int main(int argc, char ** argv) {
         // offloaded to a remote device. it doesn't even have to be based on an LLM. instead, it can provide tokens
         // from a cache or lookup tables.
         //
+        GGML_ASSERT(!repair.pending || !draft.empty());
         if (draft.empty()) {
             ckpt.update_pos(
                     prompt_tgt.size(),
@@ -193,7 +205,14 @@ int main(int argc, char ** argv) {
                 /* .prompt     = */ &prompt_tgt,
                 /* .result     = */ &draft, // output
             };
+            auto & dp = common_speculative_get_draft_params(spec, seq_id);
+            dp.seed = params.sampling.seed;
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+            fixture.fresh_draft();
+#endif
             common_speculative_draft(spec);
+            proposal_id = common_speculative_get_proposal_id(spec, seq_id);
+            replay = false;
 
             // save a checkpoint of the target context before evaluating the draft
             // this allows us to restore the state if partial draft acceptance occurs
@@ -218,17 +237,26 @@ int main(int argc, char ** argv) {
             }
         }
 
+        const bool repairing = repair.pending;
+        const size_t n_decode = repair.n_decode(draft);
+        const size_t n_original_draft = repairing ? repair.n_draft : draft.size();
+
         // always have a token to evaluate from before - id_last
         batch_tgt.clear();
         batch_tgt.add(id_last, n_past++, seq_id, true);
 
-        // evaluate the target model on [id_last, draft0, draft1, ..., draftN-1]
+        auto verify_phase = common_speculative_verify_begin(spec, {{proposal_id, seq_id}});
+        // Repair excludes the selected correction: it remains the next unprocessed token.
+        // Ordinary verification evaluates [id_last, draft0, ..., draftN-1].
         {
-            for (size_t i = 0; i < draft.size(); ++i) {
+            for (size_t i = 0; i < n_decode; ++i) {
                 batch_tgt.add(draft[i], n_past + i, seq_id, true);
             }
 
 
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+            fixture.decode(batch_tgt.get(), seq_id, repairing);
+#endif
             llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch_tgt.get());
         }
 
@@ -244,7 +272,7 @@ int main(int argc, char ** argv) {
 
         // only save the sampler sampler state if we use checkpoints
         common_sampler_ptr smpl_save;
-        if (use_ckpt_tgt) {
+        if (use_ckpt_tgt && !repairing) {
             smpl_save.reset(common_sampler_clone(smpl.get()));
         }
 
@@ -258,19 +286,51 @@ int main(int argc, char ** argv) {
         // available logits from the batch and sample the next token until we run out of logits or the sampler
         // disagrees with the draft
         //
-        auto ids = common_sampler_sample_and_accept_n(smpl.get(), ctx_tgt, draft);
+        std::vector<int> idxs(n_decode + 1);
+        for (size_t i = 0; i < idxs.size(); ++i) { idxs[i] = i; }
+        bool used_distribution = false;
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+        if (!repairing) { fixture.attempt(); }
+#endif
+        auto ids = repairing ? repair.finish(draft) :
+                common_speculative_sample_and_accept(spec, seq_id, smpl.get(), ctx_tgt,
+                        idxs, draft, proposal_id, replay, false, &used_distribution);
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+        if (!repairing) {
+            fixture.decision(ids, smpl.get(), smpl_save.get(), draft, id_last, proposal_id,
+                    used_distribution, ctx_tgt, vocab, params.sampling.ignore_eos);
+        } else {
+            fixture.repaired(ids, smpl.get(), n_original_draft, common_speculative_cycle_get(spec, seq_id));
+        }
+#endif
 
         //LOG_DBG("ids: %s\n", string_from(ctx_tgt, ids).c_str());
 
         GGML_ASSERT(ids.size() > 0); // there will always be at least one accepted token
+        common_speculative_verify_end(spec, verify_phase);
+
+        const size_t effective_size = common_sampler_eog_prefix(ids, params.sampling.ignore_eos,
+                [vocab](llama_token token) { return llama_vocab_is_eog(vocab, token); });
+        const bool stops_at_eog = !params.sampling.ignore_eos && llama_vocab_is_eog(vocab, ids[effective_size - 1]);
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+        fixture.policy(stops_at_eog, effective_size, params.sampling.ignore_eos);
+#endif
+        size_t accepted_drafts = std::min(ids.size() - 1, effective_size);
 
         // check for partial draft acceptance:
         // if the context doesn't support partial sequence removal, restore the checkpoint
         // and make the accepted tokens the new partial draft for the next iteration
-        if (use_ckpt_tgt && ids.size() - 1 < n_draft) {
+        if (use_ckpt_tgt && ids.size() - 1 < n_decode && !stops_at_eog) {
             LOG_DBG("partial acceptance: %zu < %zu, restoring checkpoint\n", ids.size() - 1, n_draft);
 
-            draft = std::move(ids);
+            common_speculative_invalidate(spec, seq_id);
+            replay = true;
+            if (used_distribution) {
+                const bool prepared = repair.prepare(draft, ids, stops_at_eog);
+                GGML_ASSERT(prepared);
+            } else {
+                draft = std::move(ids);
+            }
 
             {
                 ckpt.load_tgt(ctx_tgt, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -285,19 +345,26 @@ int main(int argc, char ** argv) {
             }
 
             prompt_tgt.resize(ckpt.n_tokens);
-            smpl = std::move(smpl_save);
+            if (!used_distribution) { smpl = std::move(smpl_save); }
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+            fixture.prepared(repair, draft, smpl.get());
+#endif
 
             n_past = (int) prompt_tgt.size();
 
             continue;
         }
 
-        common_speculative_accept(spec, seq_id, ids.size() - 1);
+        common_speculative_accept(spec, seq_id, accepted_drafts);
+        if (replay && accepted_drafts >= n_draft) { --accepted_drafts; }
+        common_speculative_cycle_finish(spec, seq_id, proposal_id, accepted_drafts);
+        proposal_id = 0;
+        ids.resize(effective_size);
 
         // full acceptance: consume the draft and commit accepted tokens
         n_past    += ids.size() - 1;
-        n_drafted += n_draft; // note: we ignore the discarded small drafts
-        n_accept  += ids.size() - 1;
+        n_drafted += n_original_draft; // repair retains the original proposal denominator
+        n_accept  += accepted_drafts;
         n_predict += ids.size();
 
         // process the accepted tokens and update contexts
@@ -309,8 +376,11 @@ int main(int argc, char ** argv) {
             prompt_tgt.push_back(id_last);
 
             id_last = ids[i];
+#ifdef LLAMA_TEST_SPEC_CONSUMER
+            fixture.visit(id_last);
+#endif
 
-            if (llama_vocab_is_eog(vocab, id_last)) {
+            if (!params.sampling.ignore_eos && llama_vocab_is_eog(vocab, id_last)) {
                 has_eos = true;
                 break;
             }
@@ -329,7 +399,7 @@ int main(int argc, char ** argv) {
         // clear the draft since it has been consumed
         draft.clear();
 
-        {
+        if (!has_eos) {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
             llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, n_past, -1);

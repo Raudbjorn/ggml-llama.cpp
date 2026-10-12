@@ -4,6 +4,7 @@
 #include "server-cors-proxy.h"
 #include "server-stream.h"
 #include "server-tools.h"
+#include "server-memory.h"
 
 #include "arg.h"
 #include "build-info.h"
@@ -157,6 +158,11 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
     if (!is_router_server) {
         llama_backend_init();
         llama_numa_init(params.numa);
+    }
+
+    server_memory_sampler memory_sampler;
+    if (!is_router_server && !memory_sampler.start(params.devices)) {
+        return 1;
     }
 
     // skip device enumeration so the CUDA primary context stays uncreated
@@ -487,7 +493,8 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
 
     } else {
         // setup clean up function, to be called before exit
-        clean_up = [&ctx_http, &ctx_server, &mcp_mgr]() {
+        clean_up = [&ctx_http, &ctx_server, &mcp_mgr, &memory_sampler]() {
+            memory_sampler.finish(false);
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             // stop the session GC first, it finalizes live sessions and wakes pending readers
             server_stream_session_manager_stop();
@@ -579,9 +586,14 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
 
         // this call blocks the main thread until queue_tasks.terminate() is called
         ctx_server.start_loop();
+        const bool memory_log_ok = memory_sampler.finish(true);
 
         clean_up();
         ctx_http.join();
+        if (!memory_log_ok) {
+            if (monitor_thread.joinable()) { monitor_thread.join(); }
+            return 1;
+        }
         if (monitor_thread.joinable()) {
             monitor_thread.join();
         }

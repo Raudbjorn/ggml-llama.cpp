@@ -7668,6 +7668,24 @@ static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t *
     ggml_sycl_memtrace_report_device("device memory query (dev)", ctx->device, *free, *total);
 }
 
+static ggml_backend_memory_status ggml_backend_sycl_device_memory_status(
+        ggml_backend_dev_t dev, size_t * free, size_t * total) {
+    auto * ctx = static_cast<ggml_backend_sycl_device_context *>(dev->context);
+    *free = *total = 0;
+    try {
+        auto api = MEMORY_API_TYPE_SYCL;
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+        if (get_zes_init_res() == ZE_RESULT_SUCCESS) {
+            api = static_cast<MemoryAPIType>(g_ggml_sycl_get_mem_api);
+        }
+#endif
+        return get_memory_size_status(dpct::dev_mgr::instance().get_device(ctx->device), *free, *total, api);
+    } catch (const std::exception & e) {
+        GGML_LOG_ERROR("%s: device %d: %s\n", __func__, ctx->device, e.what());
+        return GGML_BACKEND_MEMORY_FAILURE;
+    }
+}
+
 static enum ggml_backend_dev_type ggml_backend_sycl_device_get_type(ggml_backend_dev_t dev) {
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *)dev->context;
     const sycl_device_info & info = ggml_sycl_info().devices[ctx->device];
@@ -8652,6 +8670,9 @@ static bool ggml_backend_sycl_async_is_stream_ordered(ggml_backend_dev_t dev) {
 static void *ggml_backend_sycl_reg_get_proc_address(ggml_backend_reg_t reg, const char *name) {
     GGML_UNUSED(reg);
 
+    if (strcmp(name, "ggml_backend_dev_memory_status") == 0) {
+        return reinterpret_cast<void *>(ggml_backend_sycl_device_memory_status);
+    }
     if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
         return (void *)ggml_backend_sycl_split_buffer_type;
     }

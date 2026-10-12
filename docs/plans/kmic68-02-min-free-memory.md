@@ -42,7 +42,8 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
    but return provider provenance and exact/fallback/failure status to P02. In the
    SYCL provider, propagate success from Level Zero or
    `ext_intel_free_memory`; identify the line 145-150 total-as-free path as
-   fallback, never exact telemetry.
+   fallback, never exact telemetry. Use existing backend procedure lookup for
+   the status provider; preserve backend vtable layouts and the old void API.
 2. Add a small `server_memory_sampler` owned by `llama_server` in
    `tools/server/server.cpp`, not by `server_context_impl`. For non-router
    servers, resolve the configured SYCL device and start after
@@ -97,7 +98,10 @@ Source provenance: `Kmic-68/llama.cpp` branch `p100-optimizations`,
 Create two one-prompt JSONL fixtures for `CTX=16384`: one whose server-reported
 prompt-token count is 8% of the usable context and one that fills the usable
 context while leaving room for the requested decode. Record those token counts
-with the fixtures. Use the same model, binary, build, polling interval, kernel
+with the fixtures in each prompt's `expected_prompt_tokens` field. The harness
+must match every observed prompt count and require positive verified decode
+work before treating terminal telemetry as headroom evidence. Use the same
+model, binary, build, polling interval, kernel
 driver, and boot for both launches.
 
 Prerequisites: stop `llama-sycl.cpp.service`, verify sole tenancy on

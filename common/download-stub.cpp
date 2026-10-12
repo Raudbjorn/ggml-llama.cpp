@@ -47,6 +47,10 @@ std::vector<common_cached_model_info> common_list_cached_models() {
     return {};
 }
 
+std::string common_download_resolve_path(const std::string & /*hf_repo_with_tag*/, const std::string & /*hf_file*/) {
+    return {};
+}
+
 int common_download_file_single(const std::string & /*url*/,
                                 const std::string & /*path*/,
                                 const common_download_opts & /*opts*/,

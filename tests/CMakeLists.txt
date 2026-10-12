@@ -187,7 +187,11 @@ target_include_directories(test-upstream-api-shims PRIVATE ${PROJECT_SOURCE_DIR}
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
     llama_build_and_test(test-unicode.cpp)
-    llama_build_and_test(test-sampling.cpp)
+    llama_build_and_test(test-sampling.cpp test-sampling-dist.cpp)
+    if (BUILD_SHARED_LIBS)
+        llama_build_and_test(test-cpp-abi-client.cpp)
+        target_link_libraries(test-cpp-abi-client PRIVATE ${CMAKE_DL_LIBS})
+    endif()
     llama_build_and_test(test-reasoning-budget.cpp)
     llama_build_and_test(test-grammar-parser.cpp)
     llama_build_and_test(test-grammar-integration.cpp)
@@ -232,6 +236,9 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build(test-llama-archs.cpp)
     llama_build_and_test(test-qwen4exp-mtp.cpp)
     llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-q8 ARGS --q8-kv)
+    if (CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+        llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-release-sampling ARGS --release-sampling-fixtures)
+    endif()
     if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
         llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-sycl-f16 LABEL sycl ARGS --backend SYCL0)
         llama_test(test-qwen4exp-mtp NAME test-qwen4exp-mtp-sycl-q8 LABEL sycl ARGS --backend SYCL0 --q8-kv)
@@ -385,6 +392,15 @@ if (TARGET cpp-httplib)
 endif()
 
 llama_build_and_test(test-speculative-adaptive.cpp)
+llama_build_and_test(test-server-memory.cpp)
+llama_build_and_test(test-speculative-cycle.cpp)
+llama_build_and_test(test-speculative-logits.cpp ARGS --self-test)
+
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+    llama_test_cmd(${Python3_EXECUTABLE} NAME test-spec-distribution-oracle LABEL python
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} ARGS -m unittest scripts.test_spec_distribution_oracle)
+endif()
 
 # Synthetic checks always run; absent GPU traces are explicitly skipped.
 llama_build_and_test(test-spec-adaptive-curve.cpp)
@@ -676,4 +692,27 @@ endif()
 if (TARGET test-sycl-xmx-gather-images)
     add_test(NAME test-sycl-xmx-gather-images COMMAND test-sycl-xmx-gather-images)
     set_tests_properties(test-sycl-xmx-gather-images PROPERTIES LABELS "sycl-build" TIMEOUT 30)
+endif()
+
+# Deliberately separate build: synthetic consumer hooks are absent by default.
+option(LLAMA_TEST_SPEC_CONSUMER "Build synthetic P06 executable consumer fixtures" OFF)
+if (LLAMA_TEST_SPEC_CONSUMER)
+    if (NOT UNIX OR NOT TARGET test-qwen4exp-mtp)
+        message(FATAL_ERROR "P06 consumer fixtures require POSIX and the existing Qwen4Exp generator")
+    endif()
+    if (NOT LLAMA_BUILD_SERVER OR NOT LLAMA_BUILD_EXAMPLES OR NOT LLAMA_BUILD_TOOLS)
+        message(FATAL_ERROR "P06 consumer fixtures require server, tools and examples")
+    endif()
+    if (GGML_SYCL OR GGML_VULKAN OR GGML_OPENVINO)
+        message(FATAL_ERROR "P06 synthetic consumer fixtures require a CPU-only build")
+    endif()
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    target_compile_definitions(llama-common PUBLIC LLAMA_TEST_SPEC_CONSUMER)
+    add_test(NAME test-speculative-consumers
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-speculative-consumers.py
+            --generator $<TARGET_FILE:test-qwen4exp-mtp>
+            --server $<TARGET_FILE:llama-server>
+            --simple $<TARGET_FILE:llama-speculative-simple>
+            --output ${CMAKE_CURRENT_BINARY_DIR}/p06-consumer-evidence)
+    set_tests_properties(test-speculative-consumers PROPERTIES TIMEOUT 600 LABELS "main;synthetic")
 endif()
