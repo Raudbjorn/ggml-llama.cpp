@@ -18,7 +18,7 @@
 
 // the request text, bounded so that a wrong file cannot exhaust memory; false on failure
 static bool read_request(const std::string & path, std::string & text, std::string & error) {
-    constexpr size_t max_bytes = schema_decision::max_request_bytes + (4u << 20); // contexts plus schema
+    constexpr size_t max_bytes = schema_decision::max_request_text_bytes;
     std::ifstream file;
     std::istream * in = &std::cin;
     if (path != "-") {

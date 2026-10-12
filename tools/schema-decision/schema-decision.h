@@ -45,6 +45,11 @@ constexpr size_t max_request_bytes      = 16 << 20; // all contexts together
 constexpr size_t max_path_tokens        = 64;      // one value with its terminator
 constexpr size_t max_rows_per_context   = 65536;   // token rows of one context, before recurrent padding
 constexpr int    max_tree_max           = 255;
+// a request text that holds every decoded limit above at worst-case JSON escaping (6 bytes for a
+// \u00XX escape), so the parser's checks bound the contents and not their encoding
+constexpr size_t max_schema_bytes       = max_fields * (max_name_bytes + max_description_bytes + max_values * max_value_bytes) +
+                                          max_instructions_bytes;
+constexpr size_t max_request_text_bytes = 6 * (max_request_bytes + max_schema_bytes) + (1u << 20); // + JSON syntax
 
 // what an error is about; llama-server maps it to an HTTP status
 enum class error_code {

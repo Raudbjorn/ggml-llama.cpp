@@ -193,6 +193,20 @@ static void test_schema() {
               cs.value.inputs[0].candidates[1] == "bet\"", "suffix holds the common prefix");
     }
 
+    // the largest valid contexts at worst-case JSON escaping still fit the CLI's read limit
+    {
+        common_json body = common_json::object();
+        body["schema"]   = common_json::parse(R"({"b": {"type": "boolean", "description": "d"}})");
+        body["contexts"] = common_json::array();
+        for (size_t i = 0; i < max_request_bytes / max_context_bytes; ++i) {
+            body["contexts"].push_back(std::string(max_context_bytes, '\x01')); // dumped as \u0001
+        }
+        const std::string text = body.dump();
+        CHECK(text.size() > 5 * max_request_bytes && text.size() <= max_request_text_bytes,
+              "a %zu-byte request of valid contexts against the %zu-byte read limit", text.size(), max_request_text_bytes);
+        CHECK(parse_request(common_json::parse(text)).ok(), "the largest valid contexts parse");
+    }
+
     // request parsing
     const auto req = [](const std::string & extra, const std::string & contexts = R"(["c"])") {
         return parse_request(common_json::parse(R"({"schema": {"b": {"type": "boolean", "description": "d"}}, "contexts": )" +
