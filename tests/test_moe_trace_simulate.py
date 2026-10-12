@@ -220,6 +220,7 @@ class CliTests(unittest.TestCase):
         for policy in ("static ", "static-oracle", "static-prefill", "lru", "lfu-decay", "reelect-32", "dynamic"):
             self.assertIn(policy, out)
         self.assertNotIn("miss-ms", out)
+        self.assertIn("dynamic assumes the --moe-cache provider takes every MoE layer", out)
 
     def test_cost_columns_need_all_three_values(self) -> None:
         code, _, err = run([self.trace, "--slab-mb", "2"])

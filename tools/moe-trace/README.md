@@ -135,6 +135,12 @@ layer of each step fills at most `--inserts-per-plan` misses (default 8, as
 other misses run on the CPU and are not inserted. The provider also caps fills
 at `GGML_CUDA_MOE_CACHE_QUEUE_MB / expert size`, which the simulator does not
 model (with the 512 MiB default it binds only above 64 MiB per expert tensor).
+The replay assumes the provider takes every MoE layer. It does not: expert tensors
+below its minimum (`GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB`; the provider logs the value
+in use as `min-expert=`), unsupported weight types and batches above
+`GGML_CUDA_MOE_CACHE_MAX_BATCH` stay on the CPU. A trace records neither tensor
+sizes nor types, so check a small-expert model against that log line before
+reading its `dynamic` row.
 
 Expert counts come from the trace's `# n_expert=` line, or from `--n-expert`
 for a trace without one (a different value is an error), never from the

@@ -492,6 +492,9 @@ def main(argv: list[str] | None = None) -> int:
         print("* assumed cost model from --slab-mb/--ram-gbs/--link-gbs; excludes kernels, "
               "activation transfers, synchronization and compilation")
     print("static-oracle selects residents from the scored trace itself and is optimistic")
+    print("dynamic assumes the --moe-cache provider takes every MoE layer; it leaves on the CPU expert tensors below its "
+          "minimum (logged as min-expert=, GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB) and unsupported weight types, which a trace "
+          "does not record")
     return 0
 
 
