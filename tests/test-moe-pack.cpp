@@ -123,6 +123,28 @@ static bool fold_expert_hadamard(const std::string & src, const std::string & ds
     return ok;
 }
 
+// whether DEV runs MUL_MAT_ID on experts of TYPE, probed like the loader probes a pack tensor
+static bool device_runs_mul_mat_id(ggml_backend_dev_t dev, ggml_type type) {
+    ggml_init_params params = { 4*ggml_tensor_overhead(), nullptr, true };
+    ggml_context * ctx = ggml_init(params);
+    ggml_tensor * w   = ggml_new_tensor_3d(ctx, type, 256, 256, 8);
+    ggml_tensor * b   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 256, 1, 1);
+    ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, 1);
+    const bool ok = ggml_backend_dev_supports_op(dev, ggml_mul_mat_id(ctx, w, b, ids));
+    ggml_free(ctx);
+    return ok;
+}
+
+// Q4_0, with the down experts in DOWN_TYPE
+static bool quantize_q4_0(const std::string & src, const std::string & dst, ggml_type down_type) {
+    const llama_model_tensor_override down[2] = { { "ffn_down_exps", down_type }, { nullptr, GGML_TYPE_COUNT } };
+    llama_model_quantize_params qp = llama_model_quantize_default_params();
+    qp.ftype        = LLAMA_FTYPE_MOSTLY_Q4_0;
+    qp.nthread      = 2;
+    qp.tt_overrides = down;
+    return llama_model_quantize(src.c_str(), dst.c_str(), &qp) == 0;
+}
+
 struct run_result {
     bool ok = false;
     int  abort_rc = 0;         // llama_decode result of the aborted first decode
@@ -580,6 +602,20 @@ int main(int argc, char ** argv) {
         if (dqbase.ok) {
             expect_equivalent("device q4_0 mixed hot/cold, 2 slots", dqbase, run_model(q40, p_mixed.c_str(), 2, PLACE_DEVICE),
                     placed.c_str(), false, qbase.ok ? &qbase : nullptr);
+        }
+        // every pack tensor must run on the device: here the gate and up experts can, the down ones cannot
+        const std::string q45 = work + "/q4_0-down-q5_0.gguf";
+        if (device_runs_mul_mat_id(gpu, GGML_TYPE_Q4_0) && !device_runs_mul_mat_id(gpu, GGML_TYPE_Q5_0)) {
+            CHECK(quantize_q4_0(f32, q45, GGML_TYPE_Q5_0), "quantizing %s failed", q45.c_str());
+            const run_result mbase = run_model(q45, nullptr, 0, PLACE_DEVICE);
+            CHECK(mbase.ok, "q4_0/q5_0 device baseline run failed");
+            if (mbase.ok) {
+                expect_disabled("device without MUL_MAT_ID for the down experts", mbase,
+                        run_model(q45, p_mixed.c_str(), 2, PLACE_DEVICE), "cannot run MUL_MAT_ID on q5_0 experts");
+            }
+        } else {
+            printf("skip: device without MUL_MAT_ID for the down experts (needs q4_0 but not q5_0 experts on %s)\n",
+                    ggml_backend_dev_name(gpu));
         }
         // the MoE cache leaves a packed layer to its pack
         const size_t cache_bytes = 64u << 20;

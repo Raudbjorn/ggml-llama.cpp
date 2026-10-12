@@ -81,6 +81,9 @@ counts it under a reason (`-lv 4`):
 - the expert tensors are CPU-resident (host buffers, including the CPU repack
   buffer);
 - the layer itself runs on a GPU or iGPU device, which is where its pack goes;
+- the device runs `MUL_MAT_ID` on every pack tensor of its layers, probed with
+  each tensor's type and shape (OpenVINO, for one, takes no `q5_0` experts);
+  otherwise none of that device's layers gets a pack;
 - the split mode is not `tensor`.
 
 The device MoE cache (`--moe-cache-mib`) skips a layer that has a pack; the

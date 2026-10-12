@@ -2532,16 +2532,28 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
         ggml_backend_buffer_set_usage(maps_ptr.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
         if (!ml.no_alloc) {
-            // the hot matmuls must run on the pack device, or every evaluation copies the pack
-            ggml_init_params op_params = { 4*ggml_tensor_overhead(), nullptr, true };
-            ggml_context_ptr op_ctx(ggml_init(op_params));
-            ggml_tensor * g0  = packs[0].gate ? packs[0].gate : packs[0].gate_up;
-            ggml_tensor * b   = ggml_new_tensor_3d(op_ctx.get(), GGML_TYPE_F32, g0->ne[0], 1, 1);
-            ggml_tensor * ids = ggml_new_tensor_2d(op_ctx.get(), GGML_TYPE_I32, 1, 1);
-            ggml_tensor * op  = ggml_mul_mat_id(op_ctx.get(), g0, b, ids);
-            if (!ggml_backend_dev_supports_op(dev, op)) {
-                LLAMA_LOG_WARN("%s: %s cannot run MUL_MAT_ID on %s experts - %zu layer(s) without a pack\n",
-                        __func__, ggml_backend_dev_name(dev), ggml_type_name(g0->type), entries.size());
+            // the hot matmuls must run on the pack device, or every evaluation copies the pack;
+            // support depends on the type and shape of each pack tensor
+            const ggml_tensor * unsupported = nullptr;
+            for (size_t i = 0; i < packs.size() && !unsupported; i++) {
+                for (ggml_tensor * w : { packs[i].gate, packs[i].up, packs[i].gate_up, packs[i].down }) {
+                    if (!w) {
+                        continue;
+                    }
+                    ggml_init_params op_params = { 3*ggml_tensor_overhead(), nullptr, true };
+                    ggml_context_ptr op_ctx(ggml_init(op_params));
+                    ggml_tensor * b   = ggml_new_tensor_3d(op_ctx.get(), GGML_TYPE_F32, w->ne[0], 1, 1);
+                    ggml_tensor * ids = ggml_new_tensor_2d(op_ctx.get(), GGML_TYPE_I32, 1, 1);
+                    if (!ggml_backend_dev_supports_op(dev, ggml_mul_mat_id(op_ctx.get(), w, b, ids))) {
+                        unsupported = w;
+                        break;
+                    }
+                }
+            }
+            if (unsupported) {
+                LLAMA_LOG_WARN("%s: %s cannot run MUL_MAT_ID on %s experts (%s) - %zu layer(s) without a pack\n",
+                        __func__, ggml_backend_dev_name(dev), ggml_type_name(unsupported->type), unsupported->name,
+                        entries.size());
                 continue;
             }
 
