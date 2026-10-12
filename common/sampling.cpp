@@ -15,7 +15,6 @@
 #include <cstring>
 #include <random>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
@@ -766,11 +765,13 @@ bool common_sampler_dist_valid(const std::vector<llama_token_data> & row, int32_
     // Float softmax accumulation is allowed 1e-5 absolute normalization error.
     constexpr double mass_tolerance = 1e-5;
     double sum = 0;
-    std::unordered_set<llama_token> ids;
+    if (n_vocab <= 0 || row.empty() || row.size() > size_t(n_vocab)) { return false; }
+    std::vector<bool> seen(n_vocab, false);
     bool found = emitted == LLAMA_TOKEN_NULL;
     for (const auto & entry : row) {
         if (entry.id < 0 || entry.id >= n_vocab || !std::isfinite(entry.p) || entry.p < 0 ||
-                !ids.insert(entry.id).second) { return false; }
+                seen[entry.id]) { return false; }
+        seen[entry.id] = true;
         sum += entry.p;
         found = found || (entry.id == emitted && entry.p > 0);
     }

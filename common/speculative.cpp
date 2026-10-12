@@ -20,7 +20,7 @@
 #include <iomanip>
 #include <map>
 #include <cinttypes>
-#include <cerrno>
+#include <charconv>
 #include <cstdlib>
 #include <limits>
 #include <random>
@@ -67,10 +67,13 @@ bool common_speculative_sampling_parse(const char * temperature, const char * to
     config = {};
     auto parse = [&](const char * name, const char * text, bool nucleus, float & value) {
         if (!text) { return true; }
-        char * end = nullptr;
-        errno = 0;
-        const double number = std::strtod(text, &end);
-        if (text == end || *end || errno == ERANGE || !std::isfinite(number) ||
+        const char * begin = text + std::strspn(text, " \t\n\r\f\v");
+        const bool plus = *begin == '+';
+        if (plus) { ++begin; }
+        const char * end = text + std::strlen(text);
+        double number = 0;
+        const auto parsed = std::from_chars(begin, end, number);
+        if ((plus && *begin == '-') || parsed.ec != std::errc{} || parsed.ptr != end || !std::isfinite(number) ||
                 number < 0 || number > std::numeric_limits<float>::max() ||
                 (number > 0 && float(number) == 0) || (nucleus && (number <= 0 || number > 1))) {
             error = std::string(name) + " rejected value '" + text + "'";
@@ -4098,9 +4101,12 @@ std::shared_ptr<common_speculative_cycle_phase> common_speculative_verify_begin(
         if (!participant.proposal_id) {
             continue;
         }
-        const auto * record = spec->cycles->get(participant.sequence_id);
+        const auto * record = participant.sequence_id >= 0 && size_t(participant.sequence_id) < spec->dparams.size()
+                ? spec->cycles->get(participant.sequence_id) : nullptr;
         if (!record || record->proposal_id != participant.proposal_id) {
-            GGML_ABORT("spec verify: proposal identity mismatch");
+            LOG_ERR("spec verify: proposal identity mismatch for sequence %d, proposal %llu; skipping telemetry\n",
+                    participant.sequence_id, (unsigned long long) participant.proposal_id);
+            return {};
         }
     }
     auto phase = spec->cycles->phase_begin(spec->ctx_tgt, participants);

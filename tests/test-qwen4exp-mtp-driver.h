@@ -331,9 +331,9 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
     distribution_test_env temperature("LLAMA_SPEC_SAMPLE_TEMP", "0.8");
     distribution_test_env top_p("LLAMA_SPEC_DRAFT_TOPP", "0.7");
     distribution_test_env logging("LLAMA_SPEC_LOG", nullptr);
-    distribution_test_env profiling("LLAMA_SPEC_PROFILE", "0");
     distribution_test_env chain_env("LLAMA_SPEC_CHAIN", "0");
-    for (int mode : {0, 1, 2, 3}) {
+    for (int mode : {0, 1, 2, 3, 4}) {
+        distribution_test_env profiling("LLAMA_SPEC_PROFILE", mode == 4 ? "1" : "0");
         const bool chained = mode == 1;
         const bool minimum_fallback = mode == 2;
         const bool adaptive = mode == 3;
@@ -376,9 +376,22 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
         const auto * record = common_speculative_cycle_get(spec.get(), 0);
         const uint64_t proposal_id = common_speculative_get_proposal_id(spec.get(), 0);
         require(record && record->request_id == 17 && record->proposal_id == proposal_id && record->proposal == tokens && tokens.size() == 2,
-                "P06 has finalized P04 identity without logging and honors the final cap");
-        require(!record->draft_phase && record->attempts.empty() && record->verify_phases.empty(),
-                "identity-only mode records no timing/attempt instrumentation");
+                "P06 has finalized P04 identity and honors the final cap");
+        if (mode == 4) {
+            require(record->draft_phase && record->verify_phases.empty(), "profiling fixture records draft timing");
+            const auto rejected = common_speculative_verify_begin(spec.get(), {{proposal_id, 0}, {proposal_id + 1, 0}});
+            require(!rejected && record->verify_phases.empty(), "identity mismatch skips the entire telemetry phase");
+            common_speculative_verify_end(spec.get(), rejected);
+            require(!common_speculative_verify_begin(spec.get(), {{proposal_id, -1}}) &&
+                    !common_speculative_verify_begin(spec.get(), {{proposal_id, 1}}), "invalid telemetry sequence is skipped");
+            const auto verified = common_speculative_verify_begin(spec.get(), {{proposal_id, 0}});
+            require(verified && record->verify_phases.size() == 1, "valid telemetry recovers after mismatch");
+            common_speculative_verify_end(spec.get(), verified);
+            require(!record->sampling_consumed, "telemetry mismatch does not consume proposal sampling state");
+        } else {
+            require(!record->draft_phase && record->attempts.empty() && record->verify_phases.empty(),
+                    "identity-only mode records no timing/attempt instrumentation");
+        }
         if (!eligible) {
             require(record->dists.empty() && compatibility_q.empty() && record->sampling_reason ==
                     (chained ? "chained_draft" : "minimum_length_selection"), "eligibility is fixed before proposal draws");
@@ -456,7 +469,11 @@ static void test_distribution_driver(llama_model * target_model, llama_model * d
             fprintf(stderr, "PASS P06 release finite-logit overflow and whole-block invalid-suffix fallback\n");
         }
         common_speculative_cycle_finish(spec.get(), 0, proposal_id, 0);
-        require(!common_speculative_cycle_get(spec.get(), 0), "identity-only completion releases proposal");
+        require(!common_speculative_cycle_get(spec.get(), 0), "completion releases proposal");
+        if (mode == 4) {
+            require(!common_speculative_verify_begin(spec.get(), {{proposal_id, 0}}), "missing telemetry proposal is skipped");
+            fprintf(stderr, "PASS P04 telemetry mismatch, invalid sequence, missing record and recovery\n");
+        }
     }
     test_distribution_minimum(target_model, draft_model);
     fprintf(stderr, "PASS P06 synthetic production MTP sampling, chained/minimum fallback, ownership and replay\n");

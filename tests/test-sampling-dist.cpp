@@ -7,6 +7,7 @@
 #include <cassert>
 #include <algorithm>
 #include <cmath>
+#include <clocale>
 #include <cstdio>
 #include <limits>
 #include <numeric>
@@ -95,6 +96,18 @@ static void canonical_proposal_draw() {
     assert(common_sampler_dist_draw(rounded, std::nextafter(boundary, 0.0)) == 0);
     assert(common_sampler_dist_draw(rounded, std::nextafter(boundary, 1.0)) == 1);
     std::puts("PASS: canonical recorded-q draw normalizes float mass and skips zero CDF boundaries");
+}
+
+static void distribution_validation() {
+    const distribution sparse{{99999, 0, .75f}, {0, 0, .25f}};
+    assert(common_sampler_dist_valid(sparse, 100000, 99999));
+    assert(!common_sampler_dist_valid(sparse, 99999));
+    assert(!common_sampler_dist_valid(sparse, 100000, 1));
+    assert(!common_sampler_dist_valid(sparse, 0));
+    assert(!common_sampler_dist_valid(sparse, -1));
+    assert(!common_sampler_dist_valid({}, 100000));
+    assert(!common_sampler_dist_valid({{0, 0, .5f}, {0, 0, .5f}}, 100000));
+    assert(!common_sampler_dist_valid({{-1, 0, 1}}, 100000));
 }
 
 static void transactions(llama_model & model) {
@@ -382,7 +395,8 @@ static void environment() {
     assert(common_speculative_sampling_parse(nullptr, nullptr, config, error) && config.temperature == 0 && config.top_p == 1);
     assert(common_speculative_sampling_parse("0", "1", config, error) && config.temperature == 0);
     assert(common_speculative_sampling_parse("0.8", ".7", config, error) && config.temperature > 0 && config.top_p == .7f);
-    for (const char * bad : {"", "nan", "inf", "-1", "0.8x", "1e999", "1e-999"}) {
+    assert(common_speculative_sampling_parse(" \t+8e-1", "+.7", config, error) && config.temperature == .8f && config.top_p == .7f);
+    for (const char * bad : {"", "nan", "inf", "-1", "0.8x", "1e999", "1e-999", "1e-50", "0,8", "0x1p-1", "+", "+-0", "++0", "0.8 "}) {
         assert(!common_speculative_sampling_parse(bad, nullptr, config, error));
         assert(error.find("LLAMA_SPEC_SAMPLE_TEMP") != std::string::npos && error.find(bad) != std::string::npos);
     }
@@ -623,6 +637,16 @@ void test_speculative_sampling() {
     assert(model_owner);
     llama_model & model = *model_owner;
     environment();
+    const std::string original_locale = std::setlocale(LC_NUMERIC, nullptr);
+    for (const char * locale : {"en_DK.UTF-8", "de_DE.UTF-8", "fr_FR.UTF-8"}) {
+        if (std::setlocale(LC_NUMERIC, locale)) {
+            environment();
+            std::printf("PASS: sampling parser under LC_NUMERIC=%s decimal_point=%s\n", locale, std::localeconv()->decimal_point);
+            break;
+        }
+    }
+    assert(std::setlocale(LC_NUMERIC, original_locale.c_str()));
+    distribution_validation();
     lifecycle();
     canonical_proposal_draw();
     transactions(model);
