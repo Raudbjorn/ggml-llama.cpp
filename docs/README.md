@@ -6,6 +6,7 @@ the fork's own; [development/upstream-merge.md](development/upstream-merge.md) l
 ## Start here
 
 - [GUIDE.md](GUIDE.md) - condensed repository field guide, task routes, source map and evidence boundaries
+- [MoE integration context](development/moe-offload-integration-context.md) - LLM onboarding for source-fork ports, existing target capabilities, priorities and integration constraints
 - [benchmarks/README.md](benchmarks/README.md) - separate inventory and guide to the local benchmark campaign collection
 
 ## build/ - building and installing
