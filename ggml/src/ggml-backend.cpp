@@ -122,6 +122,8 @@ ggml_moe_cache_api ggml_moe_cache_active(void) {
 
 // Makes a scheduler's cache session the current one on this thread for the scope's lifetime:
 // the CPU backend reads t_moe_cache_active, and providers keep thread-local session stacks.
+// The CPU worker enters it too, so that both threads see the same provider table (the worker
+// is not used while a session exists, see ggml_backend_sched_compute_splits).
 struct ggml_sched_moe_cache_scope {
     void * session;
     void (*leave)(void *);
@@ -2548,10 +2550,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     ggml_sched_moe_cache_scope cache_scope(sched->moe_cache_session, sched->moe_cache_api);
 
     // CPU splits on the worker thread; the eval callback needs every split computed in order.
+    // A MoE cache session keeps them serial too: its provider submits to the device's own queue
+    // from inside the CPU split (Vulkan: vkQueueSubmit without the backend's submit lock; SYCL:
+    // the backend's in-order stream), which must not race the main thread's launches.
     // The job never outlives this function: every return joins it first. The worker takes
     // the splits of every CPU-device backend without events (the CPU device has none), so
     // that the event record below cannot race it.
-    ggml_sched_cpu_async * cpu_async = sched->callback_eval ? nullptr : sched->cpu_async;
+    ggml_sched_cpu_async * cpu_async = sched->callback_eval || sched->moe_cache_session ? nullptr : sched->cpu_async;
     bool on_worker[GGML_SCHED_MAX_BACKENDS] = {};
     for (int b = 0; cpu_async && b < sched->n_backends; b++) {
         ggml_backend_dev_t dev = ggml_backend_get_device(sched->backends[b]);
@@ -2913,8 +2918,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!sched->callback_eval) {
-            // every CPU split goes to the worker, so that one thread (and one OpenMP team) does
-            // all CPU compute; the previous job was joined above
+            // every CPU-device split goes to the worker, so that one thread (and one OpenMP team)
+            // computes all of them; the previous job was joined above
             if (on_worker[split_backend_id] && split_prefetch_slot == -1) {
                 cpu_async->launch(split_backend, &split->graph, sched->moe_cache_session, sched->moe_cache_api);
                 async_backend_id = split_backend_id;

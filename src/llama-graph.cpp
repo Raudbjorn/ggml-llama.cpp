@@ -2307,7 +2307,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         // result. The merge costs two activation copies per layer, so only small batches use
         // it; the bound of 8 tokens is the source's CUDA measurement (prefill regressed), not
         // one measured on SYCL or Vulkan.
-        const bool overlap = cparams.sched_async_cpu && backend_cpu && pack->map_hot_dev && n_tokens <= 8;
+        // an eval callback makes the scheduler run every split in order, so nothing would overlap
+        const bool overlap = cparams.sched_async_cpu && !cparams.cb_eval && backend_cpu && pack->map_hot_dev && n_tokens <= 8;
         ggml_tensor * map_hot = overlap ? pack->map_hot_dev : pack->map_hot;
 
         ggml_tensor * ids_flat  = ggml_cont_1d(ctx0, selected_experts, n_expert_used*n_tokens); // topk is a strided view

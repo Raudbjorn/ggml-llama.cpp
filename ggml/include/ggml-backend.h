@@ -379,8 +379,9 @@ extern "C" {
     // EXPERIMENTAL, default off. Computes the splits of CPU-device backends on a worker thread
     // owned by the scheduler, so that a following split on another backend that neither reads
     // what the CPU split writes nor writes what it uses is launched while the CPU split runs.
-    // Splits on host-buffer backends wait for it, graphs with an eval callback run without the
-    // worker, and every graph compute joins the worker before it returns. The CPU backend's
+    // Splits on host-buffer backends wait for it; graphs with an eval callback, and schedulers
+    // with a MoE cache session, run without the worker; every graph compute joins the worker
+    // before it returns. The CPU backend's
     // abort callback then runs on the worker thread. Not thread-safe: call it while no graph
     // compute runs. Returns false if the thread could not be started (the scheduler then stays
     // synchronous).
