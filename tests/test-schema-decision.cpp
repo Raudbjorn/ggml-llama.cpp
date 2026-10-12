@@ -103,6 +103,7 @@ static void test_schema() {
           "0.2,0.4,0.6,0.8,1.0", "multipleOf grid aligned to the step");
     CHECK(join(encoded(R"({"x": {"type": "number", "minimum": -1, "maximum": 1, "step": 0.5, "description": "d"}})")) ==
           "-1.0,-0.5,0.0,0.5,1.0", "no negative zero");
+    expect_schema_error("step grid just short of maximum", R"({"x": {"type": "number", "minimum": 0, "maximum": 1.00000001, "step": 0.5, "description": "d"}})", "both ends");
     expect_schema_error("step grid misses maximum", R"({"x": {"type": "number", "minimum": 0, "maximum": 1, "step": 0.3, "description": "d"}})", "both ends");
     {
         // JSON text cannot carry infinity, a caller-built object can

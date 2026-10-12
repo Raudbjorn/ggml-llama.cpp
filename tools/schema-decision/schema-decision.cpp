@@ -1113,6 +1113,11 @@ outcome<field_spec> make_field(const std::string & name, const std::string & typ
                 }
                 return bad(std::string("grid value ") + buf + " falls outside the bounds");
             }
+            // the count check tolerates 1e-7 steps of division noise, which also passes a
+            // maximum a little past the last step (0..1.00000001 by 0.5): the last value must be it
+            if (!json_schema && i == n && back != hi) {
+                return bad(std::string("the number grid must include both ends; its last value is ") + buf);
+            }
             f.values.push_back(common_json(back));
             f.encoded.push_back(buf); // fixed decimals: every value has the same shape
             f.numbers.push_back(back);
