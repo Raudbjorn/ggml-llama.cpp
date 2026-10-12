@@ -36,6 +36,8 @@
 		favorites?: ModelItem[];
 		/** Loaded models of every llama-compat backend, leading the list. */
 		loaded?: ModelItem[];
+		/** Selectable row ids after windows and collapsed sections are applied. */
+		onRenderedOrder?: (order: string[]) => void;
 		/** Show the organization name in every model id of the list. */
 		showOrgName?: boolean;
 	}
@@ -46,6 +48,7 @@
 		favorites = [],
 		groups,
 		loaded = [],
+		onRenderedOrder,
 		onSelect,
 		renderOption,
 		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none',
@@ -61,6 +64,38 @@
 		groups.available.reduce((count, group) => count + group.items.length, 0)
 	);
 	const hasMoreLocal = $derived(localGroups.shown < localRowCount);
+	const localItems = $derived(localGroups.available.flatMap((group) => group.items));
+	const renderedOrder = $derived.by(() => {
+		const order: string[] = [];
+
+		if (modelsStore.isGroupOpen('loaded', true)) {
+			order.push(...loaded.map((item) => item.option.id));
+		}
+
+		if (modelsStore.isGroupOpen('favorites', true)) {
+			order.push(...favorites.map((item) => item.option.id));
+		}
+
+		if (modelsStore.isGroupOpen(LOCAL_BACKEND_ID, true)) {
+			if (settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]) {
+				const collapsed = new Set(modelsStore.collapsedGroupsUnder('local'));
+
+				for (const family of groupModelFamilies(localItems, (row) => row.option.model)) {
+					if (!collapsed.has(family.key)) {
+						order.push(...family.entries.map((item) => item.option.id));
+					}
+				}
+			} else {
+				order.push(...localItems.map((item) => item.option.id));
+			}
+		}
+
+		return order;
+	});
+
+	$effect(() => {
+		onRenderedOrder?.(renderedOrder);
+	});
 
 	$effect(() => {
 		const sentinel = sentinelEl;
@@ -207,10 +242,7 @@
 {/if}
 
 {#snippet localRows()}
-	{@render listRows(
-		localGroups.available.flatMap((group) => group.items),
-		'local'
-	)}
+	{@render listRows(localItems, 'local')}
 
 	{#if hasMoreLocal}
 		<div bind:this={sentinelEl} aria-hidden="true" class="h-px"></div>

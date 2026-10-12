@@ -43,6 +43,7 @@
 
 	let isOpen = $state(false);
 	let highlightedId = $state<string | null>(null);
+	let visualOrder = $state<string[]>([]);
 
 	const formModel = useChatFormModel();
 
@@ -94,19 +95,6 @@
 	$effect(() => {
 		void ms.searchTerm;
 		highlightedId = null;
-	});
-
-	// Keyboard navigation follows the on-screen row order, not the flat option list order.
-	let visualOrder = $derived.by(() => {
-		const order: string[] = [];
-
-		for (const item of ms.loadedItems) order.push(item.option.id);
-		for (const item of ms.favoriteItems) order.push(item.option.id);
-		for (const group of ms.groupedFilteredOptions.available) {
-			for (const item of group.items) order.push(item.option.id);
-		}
-
-		return order;
 	});
 
 	let highlightedIndex = $derived(highlightedId ? visualOrder.indexOf(highlightedId) : -1);
@@ -278,6 +266,7 @@
 			favorites={ms.favoriteItems}
 			groups={ms.groupedFilteredOptions}
 			loaded={ms.loadedItems}
+			onRenderedOrder={(order) => (visualOrder = order)}
 			onSelect={ms.handleSelect}
 			renderOption={modelOption}
 			sectionHeaderClass="[&:not(:first-child)]:mt-2 mb-1 px-2 py-2.5 text-sm font-semibold text-foreground/80 select-none"
@@ -335,6 +324,7 @@
 			{ms}
 			onHighlight={(id) => (highlightedId = id)}
 			onModelKeyAction={(id, unload) => void handleModelKeyAction(id, unload)}
+			onRenderedOrder={(order) => (visualOrder = order)}
 			onSearchKeyDown={handleSearchKeyDown}
 			{showOrgName}
 		/>

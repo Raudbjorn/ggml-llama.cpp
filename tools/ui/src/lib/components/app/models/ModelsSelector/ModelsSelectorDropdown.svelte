@@ -32,6 +32,7 @@
 		onHighlight?: (id: string | null) => void;
 		onManageModels?: () => void;
 		onModelKeyAction?: (modelId: string, unload: boolean) => void;
+		onRenderedOrder?: (order: string[]) => void;
 		onSearchKeyDown?: (event: KeyboardEvent) => void;
 	}
 
@@ -43,6 +44,7 @@
 		onHighlight,
 		onManageModels,
 		onModelKeyAction,
+		onRenderedOrder,
 		onSearchKeyDown,
 		open = $bindable(false),
 		showOrgName = true
@@ -239,6 +241,7 @@
 			favorites={ms.favoriteItems}
 			groups={ms.groupedFilteredOptions}
 			loaded={ms.loadedItems}
+			{onRenderedOrder}
 			onSelect={ms.handleSelect}
 			renderOption={modelOption}
 			sectionHeaderClass="[&:not(:first-child)]:mt-1 mb-1 px-2 py-2 text-[13px] font-semibold text-foreground/80 select-none"
