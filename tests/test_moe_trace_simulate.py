@@ -95,6 +95,24 @@ class ParseTests(unittest.TestCase):
                     self.assertIsNone(trace)
                     self.assertIsNotNone(err)
 
+    def test_routing_width_may_differ_between_layers(self) -> None:
+        # a per-layer expert_used_count: layer 0 routes 2 experts, layer 1 routes 3
+        text = HEADER.format(sid="w") + "0,0,0,1\n0,1,0,1,2\n1,0,2,3\n1,1,1,2,3\n"
+        with tempfile.TemporaryDirectory() as d:
+            path = write(d, "w.csv", text)
+            trace, err = simulate.parse_traces([path])
+            self.assertIsNone(err)
+            assert trace is not None
+            self.assertEqual(trace.widths, {0: 2, 1: 3})
+            code, out, err = run([path, "--budgets", "0.5"])
+            self.assertEqual(code, 0, err)
+            self.assertIn("2-3 active/token", out)
+            # within one layer the width stays fixed
+            trace, err = simulate.parse_traces([write(d, "x.csv", text + "2,1,0,1\n")])
+            self.assertIsNone(trace)
+            assert err is not None
+            self.assertIn("layer 1", err)
+
     def test_missing_file_is_an_error(self) -> None:
         trace, err = simulate.parse_traces(["/nonexistent/trace.csv"])
         self.assertIsNone(trace)

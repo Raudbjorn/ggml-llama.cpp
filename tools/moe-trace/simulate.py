@@ -50,7 +50,7 @@ class Session:
 class Trace:
     sessions: list[Session]
     n_expert: int | None
-    n_used: int
+    widths: dict[int, int]  # routed experts per row, per layer (expert_used_count may vary by layer)
     arch: str | None = None
     n_layer: int | None = None
 
@@ -65,7 +65,7 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
     """Parse one or more trace files; returns (trace, None) or (None, error)."""
     sessions: list[Session] = []
     n_expert: int | None = None
-    n_used = 0
+    widths: dict[int, int] = {}
     arch: str | None = None
     n_layer: int | None = None
     for path in paths:
@@ -127,9 +127,8 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
                 return None, f"{path}:{lineno}: non-integer field in '{line}'"
             if layer < 0:
                 return None, f"{path}:{lineno}: negative layer {layer}"
-            if n_used and len(ids) != n_used:
-                return None, f"{path}:{lineno}: {len(ids)} ids, earlier rows have {n_used}"
-            n_used = len(ids)
+            if widths.setdefault(layer, len(ids)) != len(ids):
+                return None, f"{path}:{lineno}: layer {layer}: {len(ids)} ids, earlier rows of the layer have {widths[layer]}"
             (current.prefill if pos < 0 else current.decode)[layer].append((pos, ids))
     if not sessions:
         return None, "no trace rows found"
@@ -138,7 +137,7 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
             rows.sort(key=lambda r: -r[0])  # pos = -(p + 1): prompt order
         for rows in s.decode.values():
             rows.sort(key=lambda r: r[0])
-    return Trace(sessions=sessions, n_expert=n_expert, n_used=n_used, arch=arch, n_layer=n_layer), None
+    return Trace(sessions=sessions, n_expert=n_expert, widths=widths, arch=arch, n_layer=n_layer), None
 
 
 def validate_ids(trace: Trace, n_expert: int) -> str | None:
@@ -435,8 +434,10 @@ def main(argv: list[str] | None = None) -> int:
         print("error: no decode rows (pos >= 0) in the evaluated trace", file=sys.stderr)
         return 2
 
+    lo, hi = min(trace.widths.values()), max(trace.widths.values())
+    active = str(lo) if lo == hi else f"{lo}-{hi}"
     print(f"trace: {len(trace.sessions)} session(s), {len(decode)} MoE layers, {n_expert} experts, "
-          f"{trace.n_used} active/token, {n_decode_steps(decode)} decode steps")
+          f"{active} active/token, {n_decode_steps(decode)} decode steps")
     for line in skew_lines(decode):
         print(line)
     print()
