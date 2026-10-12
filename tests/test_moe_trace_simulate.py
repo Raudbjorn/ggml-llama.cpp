@@ -176,6 +176,18 @@ class PolicyTests(unittest.TestCase):
         # b's prompt re-elects expert 1: one insertion over 4 decode steps
         self.assertAlmostEqual(res.inserts_per_step, 1 / 4)
 
+    def test_reelect_clock_counts_every_decode_event(self) -> None:
+        # layer 0 routes at pos 0 and 2, layer 1 at pos 1: with reelect-2 the election after
+        # event 1 makes expert 1 resident in layer 0 before pos 2, a hit; a clock that counts
+        # only layer 0's own rows elects after pos 2 and misses
+        text = HEADER.format(sid="c") + "0,0,1\n1,1,3\n2,0,1\n"
+        with tempfile.TemporaryDirectory() as d:
+            trace, err = simulate.parse_traces([write(d, "c.csv", text)])
+        self.assertIsNone(err)
+        assert trace is not None
+        res = simulate.sim_reelect(trace, slots=1, interval=2, n_steps=len(simulate.decode_events(trace)))
+        self.assertAlmostEqual(res.hit, 1 / 3)
+
     def test_dynamic_replays_sessions_in_file_order(self) -> None:
         # session a stops after layer 0 at pos 1; indexing the per-layer lists would pair
         # a's layer-1 row at pos 1 with b's layer-0 row at pos 0

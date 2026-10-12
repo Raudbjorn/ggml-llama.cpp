@@ -256,36 +256,48 @@ def sim_lfu_decay(decode: dict[int, list[Step]], slots: int, n_steps: int, alpha
 
 
 def sim_reelect(trace: Trace, slots: int, interval: int, n_steps: int, alpha: float = 0.98) -> Result:
-    """Per-layer decayed counts re-elected every `interval` decode steps. Sessions run in file
-    order: each session's prompt routing joins the counts, and re-elects, when it is reached."""
+    """Per-layer decayed counts re-elected every `interval` decode events. Sessions run in file
+    order: each session's prompt routing joins the counts, and re-elects, when it is reached.
+    The clock counts every decode event of the model, also those where a layer has no row."""
     hits = total = inserts = 0
     layers = sorted({layer for s in trace.sessions for layer in s.decode})
-    for layer in layers:
-        score: dict[int, float] = defaultdict(float)
-        cache: set[int] = set()
-        step = 0
-        for i, s in enumerate(trace.sessions):
+    score: dict[int, dict[int, float]] = {layer: defaultdict(float) for layer in layers}
+    cache: dict[int, set[int]] = {layer: set() for layer in layers}
+
+    def elect(layer: int) -> set[int]:
+        sc = score[layer]
+        return set(sorted(sc, key=lambda k: (-sc[k], k))[:slots])
+
+    step = 0
+    for i, s in enumerate(trace.sessions):
+        for layer in layers:
             prompt = s.prefill.get(layer, [])
             for _, ids in prompt:
                 for e in ids:
-                    score[e] += 1.0
+                    score[layer][e] += 1.0
             if i == 0 or prompt:
-                new = set(sorted(score, key=lambda k: (-score[k], k))[:slots])
+                new = elect(layer)
                 if i > 0:
-                    inserts += len(new - cache)
-                cache = new
-            for _, ids in s.decode.get(layer, []):
+                    inserts += len(new - cache[layer])
+                cache[layer] = new
+        by_pos: dict[int, list[tuple[int, Step]]] = defaultdict(list)
+        for layer in layers:
+            for pos, ids in s.decode.get(layer, []):
+                by_pos[pos].append((layer, ids))
+        for pos in sorted(by_pos):
+            for layer, ids in by_pos[pos]:
                 for e in ids:
-                    hits += e in cache
+                    hits += e in cache[layer]
                     total += 1
-                    score[e] += 1.0
-                if step % interval == interval - 1:
-                    for k in score:
-                        score[k] *= alpha
-                    new = set(sorted(score, key=lambda k: (-score[k], k))[:slots])
-                    inserts += len(new - cache)
-                    cache = new
-                step += 1
+                    score[layer][e] += 1.0
+            if step % interval == interval - 1:
+                for layer in layers:
+                    for k in score[layer]:
+                        score[layer][k] *= alpha
+                    new = elect(layer)
+                    inserts += len(new - cache[layer])
+                    cache[layer] = new
+            step += 1
     return Result(hits / max(total, 1), inserts / max(n_steps, 1))
 
 
