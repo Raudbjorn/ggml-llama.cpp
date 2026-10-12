@@ -797,6 +797,10 @@ struct llama_moe_pack_layer {
 
     ggml_tensor * map_hot  = nullptr; // I32 [1, n_expert]: slot of a packed expert, else -1
     ggml_tensor * map_cold = nullptr; // I32 [1, n_expert]: the expert id if not packed, else -1
+
+    // map_hot on the pack's device, when it runs GET_ROWS on I32 weights; used only with
+    // sched_async_cpu, so that the pack's split does not wait for the CPU remap
+    ggml_tensor * map_hot_dev = nullptr;
 };
 
 struct llm_graph_params {

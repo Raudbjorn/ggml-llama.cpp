@@ -9,6 +9,11 @@
 // offloaded and the routed experts pinned to the CPU. Those logits must match
 // either the device without a pack or the CPU: a device's own deviation from the
 // CPU can change with the graph splits (OpenVINO), and a pack adds splits.
+// The scheduler's CPU worker (sched_async_cpu) must not change any logit: the
+// worker computes the same splits, and in decode the hot chain overlaps the
+// cold one with the merge moved to the CPU, an exact f32 add either way. An
+// abort raised by the CPU split on the worker fails the decode, and the context
+// decodes the same logits afterwards.
 //
 // usage: test-moe-pack MODEL.gguf WORK_DIR
 //   MODEL is a MoE fixture with separate gate/up/down experts and at least
@@ -86,9 +91,16 @@ static bool strip_expert_scales(const std::string & src, const std::string & dst
 
 struct run_result {
     bool ok = false;
+    int  abort_rc = 0;         // llama_decode result of the aborted first decode
     std::vector<float> logits; // [n_tokens, n_vocab]
     std::string log;
 };
+
+static bool g_abort = false;
+
+static bool abort_requested(void * /*data*/) {
+    return g_abort;
+}
 
 // CPU: every layer on the CPU, packs through LLAMA_MOE_PACK_TEST_CPU.
 // DEVICE: every layer on the first GPU, routed experts pinned to the CPU, so the
@@ -127,8 +139,10 @@ static llama_model_params model_params(const char * profile, int32_t slots, plac
     return mp;
 }
 
-// a prompt of 12 tokens in one batch, then 4 single-token steps; logits for every token
-static run_result run_model(const std::string & path, const char * profile, int32_t slots, placement place = PLACE_CPU) {
+// a prompt of 12 tokens in one batch, then 4 single-token steps; logits for every token.
+// abort_first: an aborted decode of the prompt and a cleared memory come first
+static run_result run_model(const std::string & path, const char * profile, int32_t slots, placement place = PLACE_CPU,
+                            bool async = false, bool abort_first = false) {
     run_result r;
     {
         std::lock_guard<std::mutex> lock(g_log_mutex);
@@ -145,6 +159,7 @@ static run_result run_model(const std::string & path, const char * profile, int3
     cp.n_ubatch        = 16;
     cp.n_threads       = 2;
     cp.n_threads_batch = 2;
+    cp.sched_async_cpu = async;
     llama_context * ctx = llama_init_from_model(model, cp);
     if (!ctx) {
         llama_model_free(model);
@@ -164,6 +179,13 @@ static run_result run_model(const std::string & path, const char * profile, int3
         batch.n_seq_id[i]  = 1;
         batch.seq_id[i][0] = 0;
         batch.logits[i]    = 1;
+    }
+    if (abort_first) {
+        g_abort = true;
+        llama_set_abort_callback(ctx, abort_requested, nullptr);
+        r.abort_rc = llama_decode(ctx, batch);
+        g_abort = false;
+        llama_memory_clear(llama_get_memory(ctx), true);
     }
     ok = llama_decode(ctx, batch) == 0;
     for (size_t i = 0; ok && i < prompt.size(); i++) {
@@ -232,6 +254,60 @@ static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
 
 static bool contains(const std::string & s, const char * needle) {
     return s.find(needle) != std::string::npos;
+}
+
+// the scheduler's counters, logged when an async scheduler is freed (summed over schedulers)
+static bool async_counts(const std::string & log, unsigned long long & splits, unsigned long long & overlaps) {
+    static const char key[] = "async CPU splits: ";
+    splits = overlaps = 0;
+    bool found = false;
+    for (size_t at = log.find(key); at != std::string::npos; at = log.find(key, at + 1)) {
+        unsigned long long s = 0, o = 0;
+        if (sscanf(log.c_str() + at + sizeof(key) - 1, "%llu, splits launched beside one: %llu", &s, &o) == 2) {
+            splits += s;
+            overlaps += o;
+            found = true;
+        }
+    }
+    return found;
+}
+
+static size_t bitwise_diff(const std::vector<float> & a, const std::vector<float> & b) {
+    size_t n = 0;
+    for (size_t i = 0; i < a.size() && i < b.size(); i++) {
+        n += memcmp(&a[i], &b[i], sizeof(float)) != 0;
+    }
+    return n + (a.size() > b.size() ? a.size() - b.size() : b.size() - a.size());
+}
+
+// the worker must give the synchronous logits bit for bit; need_overlap: a split was
+// launched while a CPU split ran
+static void expect_async_same(const char * name, const run_result & sync, const run_result & async, bool need_overlap) {
+    const int failures_before = g_failures;
+    CHECK(async.ok, "%s: async run failed", name);
+    if (!async.ok) {
+        return;
+    }
+    unsigned long long splits = 0, overlaps = 0;
+    CHECK(async_counts(async.log, splits, overlaps), "%s: no async scheduler counters in the log", name);
+    CHECK(splits > 0, "%s: the worker computed no CPU split", name);
+    CHECK(!need_overlap || overlaps > 0, "%s: no split was launched beside a CPU split", name);
+    const size_t n_diff = bitwise_diff(sync.logits, async.logits);
+    CHECK(n_diff == 0, "%s: %zu of %zu logits differ bitwise", name, n_diff, sync.logits.size());
+    if (g_failures == failures_before) {
+        printf("ok: %s (%llu CPU splits on the worker, %llu splits beside them)\n", name, splits, overlaps);
+    }
+}
+
+static void expect_abort_recovers(const char * name, const run_result & ref, const run_result & r) {
+    const int failures_before = g_failures;
+    CHECK(r.abort_rc == 2, "%s: the aborted decode returned %d, expected 2", name, r.abort_rc);
+    CHECK(r.ok, "%s: decoding after the abort failed", name);
+    const size_t n_diff = bitwise_diff(ref.logits, r.logits);
+    CHECK(n_diff == 0, "%s: %zu of %zu logits differ bitwise after the abort", name, n_diff, ref.logits.size());
+    if (g_failures == failures_before) {
+        printf("ok: %s\n", name);
+    }
 }
 
 // oracle: the CPU result, for device runs whose own deviation from it can change with the
@@ -352,6 +428,11 @@ int main(int argc, char ** argv) {
     expect_equivalent("f32 pack on layer 1 only", base, run_model(f32, p_layer1.c_str(), 1),
             "static expert packs on CPU: 1 layer(s), up to 1 slot(s)", true);
 
+    expect_async_same("async CPU splits, no pack", base, run_model(f32, nullptr, 0, PLACE_CPU, true), false);
+    expect_async_same("async CPU splits, f32 mixed hot/cold", base, run_model(f32, p_mixed.c_str(), 2, PLACE_CPU, true), false);
+    expect_abort_recovers("abort on the CPU worker", base, run_model(f32, p_mixed.c_str(), 2, PLACE_CPU, true, true));
+    expect_abort_recovers("abort without the worker", base, run_model(f32, p_mixed.c_str(), 2, PLACE_CPU, false, true));
+
     expect_disabled("malformed profile", base, run_model(f32, p_bad.c_str(), 2), "malformed row");
     expect_disabled("profile from another arch", base, run_model(f32, p_arch.c_str(), 2), "was traced on arch 'llama'");
     expect_disabled("expert id out of range", base, run_model(f32, p_range.c_str(), 2), "routes expert 99");
@@ -403,8 +484,20 @@ int main(int argc, char ** argv) {
         }
         if (dbase.ok) {
             // the hot experts now run on the GPU and the cold ones on the CPU
-            expect_equivalent("device f32 mixed hot/cold, 2 slots", dbase, run_model(f32, p_mixed.c_str(), 2, PLACE_DEVICE),
-                    placed.c_str(), false, &base);
+            const run_result dpack = run_model(f32, p_mixed.c_str(), 2, PLACE_DEVICE);
+            expect_equivalent("device f32 mixed hot/cold, 2 slots", dbase, dpack, placed.c_str(), false, &base);
+            // OpenVINO keeps the hot remap on the CPU, so its pack split waits for the CPU split
+            const bool dev_map = strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(gpu)), "OPENVINO") != 0;
+            expect_async_same("device async CPU splits, f32 mixed hot/cold", dpack,
+                    run_model(f32, p_mixed.c_str(), 2, PLACE_DEVICE, true), dev_map);
+            expect_async_same("device async CPU splits, no pack", dbase, run_model(f32, nullptr, 0, PLACE_DEVICE, true), false);
+            if (dev_map) {
+                expect_abort_recovers("device abort on the CPU worker", dpack, run_model(f32, p_mixed.c_str(), 2, PLACE_DEVICE, true, true));
+            } else {
+                // the OpenVINO splits before the aborted CPU split have run; the next decode then
+                // fails in OpenVINO's ScatterUpdate, with or without the worker
+                printf("skip: device abort recovery (fails on OpenVINO without the worker too)\n");
+            }
             const std::string all = std::string("static expert packs on ") + ggml_backend_dev_name(gpu) + ": 1 layer(s), up to 8 slot(s)";
             expect_equivalent("device f32 every expert hot in layer 0", dbase, run_model(f32, p_all.c_str(), 8, PLACE_DEVICE),
                     all.c_str(), false, &base);

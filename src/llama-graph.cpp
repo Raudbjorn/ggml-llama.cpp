@@ -2288,14 +2288,25 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
 
     if (pack) {
+        // With the scheduler's CPU worker, the cold chain's CPU split runs while the pack's
+        // split is launched. That needs the hot remap on the pack's device and the merge on the
+        // CPU: a merge on the device would join the hot chain's split and wait for the cold
+        // result. The merge costs two activation copies per layer, so only small batches use
+        // it; the bound of 8 tokens is the source's CUDA measurement (prefill regressed), not
+        // one measured on SYCL or Vulkan.
+        const bool overlap = cparams.sched_async_cpu && backend_cpu && pack->map_hot_dev && n_tokens <= 8;
+        ggml_tensor * map_hot = overlap ? pack->map_hot_dev : pack->map_hot;
+
         ggml_tensor * ids_flat  = ggml_cont_1d(ctx0, selected_experts, n_expert_used*n_tokens); // topk is a strided view
-        ggml_tensor * rows_hot  = ggml_get_rows(ctx0, pack->map_hot,  ids_flat);
+        ggml_tensor * rows_hot  = ggml_get_rows(ctx0, map_hot,        ids_flat);
         ggml_tensor * rows_cold = ggml_get_rows(ctx0, pack->map_cold, ids_flat);
         if (backend_cpu) {
             // the maps live in host memory; keep the remap on the CPU even when another
             // backend accepts host buffers. ids_flat stays with the router, so only a
             // contiguous id tensor crosses to the CPU
-            ggml_backend_sched_set_tensor_backend(sched, rows_hot,  backend_cpu);
+            if (map_hot == pack->map_hot) {
+                ggml_backend_sched_set_tensor_backend(sched, rows_hot, backend_cpu);
+            }
             ggml_backend_sched_set_tensor_backend(sched, rows_cold, backend_cpu);
         }
         ggml_tensor * ids_hot  = ggml_reshape_2d(ctx0, rows_hot,  n_expert_used, n_tokens);
@@ -2332,6 +2343,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(hot, "ffn_moe_down_hot", il);
 
         experts = ggml_add(ctx0, cold, hot);
+        if (overlap) {
+            ggml_backend_sched_set_tensor_backend(sched, experts, backend_cpu);
+        }
         cb(experts, "ffn_moe_down", il);
     } else if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views

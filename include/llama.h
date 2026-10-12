@@ -434,6 +434,8 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool sched_async_cpu; // [EXPERIMENTAL] compute CPU graph splits on a worker thread so that independent
+                              // GPU splits (static expert packs) overlap them; see ggml_backend_sched_set_async_cpu
 
         // mindcontrol-port of --prefetch-experts-slots: MoE expert H2D staging slots.
         // 0 = off (no memory overhead); >=2 enables full-tensor lookahead prefetch of

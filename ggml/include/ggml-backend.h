@@ -376,6 +376,16 @@ extern "C" {
     //                  memory when the weights are mmap-backed. Capped at GGML_SCHED_MAX_PREFETCH_SLOTS.
     GGML_API void                 ggml_backend_sched_set_prefetch_experts_slots(ggml_backend_sched_t sched, int slots);
 
+    // EXPERIMENTAL, default off. Computes the splits of CPU-device backends on a worker thread
+    // owned by the scheduler, so that a following split on another backend that neither reads
+    // what the CPU split writes nor writes what it uses is launched while the CPU split runs.
+    // Splits on host-buffer backends wait for it, graphs with an eval callback run without the
+    // worker, and every graph compute joins the worker before it returns. The CPU backend's
+    // abort callback then runs on the worker thread. Not thread-safe: call it while no graph
+    // compute runs. Returns false if the thread could not be started (the scheduler then stays
+    // synchronous).
+    GGML_API bool                 ggml_backend_sched_set_async_cpu(ggml_backend_sched_t sched, bool enable);
+
     //
     // Meta backend
     //

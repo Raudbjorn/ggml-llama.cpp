@@ -430,6 +430,7 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.prefetch_experts_slots = params.prefetch_experts_slots;
     cparams.kv_unified = params.kv_unified;
+    cparams.sched_async_cpu = params.sched_async_cpu;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -917,6 +918,12 @@ void llama_context::sched_reserve() {
                                        cparams.pipeline_parallel, cparams.op_offload));
     ggml_backend_sched_set_moe_cache(sched.get(), moe_cache_mode, cparams.moe_cache_budget_mib);
     ggml_backend_sched_set_prefetch_experts_slots(sched.get(), cparams.prefetch_experts_slots);
+    if (cparams.sched_async_cpu && !ggml_backend_sched_set_async_cpu(sched.get(), true)) {
+        cparams.sched_async_cpu = false; // the graph pins the expert merge only for the worker
+    }
+    if (cparams.sched_async_cpu) {
+        LLAMA_LOG_INFO("%s: CPU graph splits run on a scheduler worker thread (experimental)\n", __func__);
+    }
 
     llama_memory_context_ptr mctx;
     if (memory) {
@@ -1014,6 +1021,9 @@ void llama_context::sched_reserve() {
                                                    max_nodes, false, cparams.op_offload));
                 ggml_backend_sched_set_moe_cache(sched.get(), moe_cache_mode, cparams.moe_cache_budget_mib);
                 ggml_backend_sched_set_prefetch_experts_slots(sched.get(), cparams.prefetch_experts_slots);
+                if (cparams.sched_async_cpu && !ggml_backend_sched_set_async_cpu(sched.get(), true)) {
+                    cparams.sched_async_cpu = false;
+                }
                 gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
             }
             if (!gf) {
@@ -4496,6 +4506,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.sched_async_cpu             =*/ false,
         /*.prefetch_experts_slots      =*/ 0,
         /*.samplers                    =*/ nullptr,
         /*.n_samplers                  =*/ 0,

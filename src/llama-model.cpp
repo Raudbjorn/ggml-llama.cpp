@@ -2357,8 +2357,22 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
             continue;
         }
 
+        // a copy of the hot map on the device, for sched_async_cpu (see build_moe_ffn); OpenVINO
+        // turns whole weight writes into OpenVINO constants and takes no I32 weights
+        bool dev_map = strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev)), "OPENVINO") != 0;
+        if (dev_map) {
+            ggml_init_params probe_params = { 3*ggml_tensor_overhead(), nullptr, true };
+            ggml_context_ptr probe(ggml_init(probe_params));
+            dev_map = probe != nullptr;
+            if (dev_map) {
+                ggml_tensor * m = ggml_new_tensor_2d(probe.get(), GGML_TYPE_I32, 1, 8);
+                ggml_tensor * i = ggml_new_tensor_1d(probe.get(), GGML_TYPE_I32, 8);
+                dev_map = ggml_backend_dev_supports_op(dev, ggml_get_rows(probe.get(), m, i));
+            }
+        }
+
         ggml_init_params ctx_params = {
-            /*.mem_size   =*/ (4*entries.size() + 8)*ggml_tensor_overhead(),
+            /*.mem_size   =*/ (5*entries.size() + 8)*ggml_tensor_overhead(),
             /*.mem_buffer =*/ nullptr,
             /*.no_alloc   =*/ true,
         };
@@ -2402,6 +2416,10 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
             pk.map_cold    = ggml_new_tensor_2d(ctx_maps.get(), GGML_TYPE_I32, 1, n_exp);
             ggml_format_name(pk.map_hot,  "blk.%d.moe_pack_map_hot",  il);
             ggml_format_name(pk.map_cold, "blk.%d.moe_pack_map_cold", il);
+            if (dev_map) {
+                pk.map_hot_dev = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 1, n_exp);
+                ggml_format_name(pk.map_hot_dev, "blk.%d.moe_pack_map_hot_dev", il);
+            }
             packs.push_back(pk);
         }
 
@@ -2500,6 +2518,9 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
                 if (ok) {
                     ggml_backend_tensor_set(pk.map_hot,  map_hot.data(),  0, n_exp*sizeof(int32_t));
                     ggml_backend_tensor_set(pk.map_cold, map_cold.data(), 0, n_exp*sizeof(int32_t));
+                    if (pk.map_hot_dev) {
+                        ggml_backend_tensor_set(pk.map_hot_dev, map_hot.data(), 0, n_exp*sizeof(int32_t));
+                    }
                 }
             }
             if (!ok) {

@@ -3206,6 +3206,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--sched-async-cpu"},
+        {"--no-sched-async-cpu"},
+        string_format("[EXPERIMENTAL] compute CPU graph splits on a worker thread, so that GPU splits that do not "
+                      "depend on them (the hot experts of --moe-pack-profile) run at the same time (default: %s)",
+                      params.sched_async_cpu ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.sched_async_cpu = value;
+        }
+    ).set_env("LLAMA_ARG_SCHED_ASYNC_CPU"));
+    add_opt(common_arg(
         {"--op-offload"},
         {"--no-op-offload"},
         string_format("whether to offload host tensor operations to device (default: %s)", params.no_op_offload ? "false" : "true"),

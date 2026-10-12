@@ -95,6 +95,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-fitc, --fit-ctx N` | minimum ctx size that can be set by --fit option, default: 4096<br/>(env: LLAMA_ARG_FIT_CTX) |
 | `--check-tensors` | check model tensor data for invalid values (default: false) |
 | `--override-kv KEY=TYPE:VALUE,...` | advanced option to override model metadata by key. to specify multiple overrides, either use comma-separated values.<br/>types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false,tokenizer.ggml.add_eos_token=bool:false |
+| `--sched-async-cpu, --no-sched-async-cpu` | [EXPERIMENTAL] compute CPU graph splits on a worker thread, so that GPU splits that do not depend<br/>on them (the hot experts of --moe-pack-profile) run at the same time (default: disabled)<br/>(env: LLAMA_ARG_SCHED_ASYNC_CPU) |
 | `--op-offload, --no-op-offload` | whether to offload host tensor operations to device (default: true) |
 | `--lora FNAME` | path to LoRA adapter (use comma-separated values to load multiple adapters) |
 | `--lora-scaled FNAME:SCALE,...` | path to LoRA adapter with user defined scaling (format: FNAME:SCALE,...)<br/>note: use comma-separated values |
