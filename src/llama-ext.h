@@ -86,6 +86,20 @@ using llama_memory_breakdown = std::map<ggml_backend_buffer_type_t, llama_memory
 LLAMA_API int32_t llama_model_n_expert (const struct llama_model * model);
 LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 
+// layers that got a static expert pack at load: 0 when none was requested or built
+LLAMA_API int32_t llama_model_n_moe_pack_layers(const struct llama_model * model);
+
+// identifies the expert routers (ffn_gate_inp, every byte) of a loaded MoE model: traces and pack
+// profiles of models with other routers number the experts differently. Quantizations of one
+// checkpoint share it; 0 for a model without routers or without loaded weights. Reads every
+// router tensor, so callers compute it once
+LLAMA_API uint64_t llama_model_router_fingerprint(const struct llama_model * model);
+
+// the fewest static expert packs that a graph computed by ctx since the previous call used (a
+// graph leaves a pack out where its device refuses the batch, or the arch's graph does not
+// qualify), or -1 if no graph was computed; each call starts a new count
+LLAMA_API int32_t llama_take_n_moe_pack_used(struct llama_context * ctx);
+
 struct llama_moe_tensor_info {
     enum ggml_type type;
     size_t expert_size;
@@ -95,6 +109,8 @@ struct llama_moe_tensor_info {
     // Transformer block index parsed from the tensor name ("blk.<N>..."),
     // or -1 when the layer cannot be determined.
     int64_t layer;
+    // the tensor's name, valid while the model lives
+    const char * name = nullptr;
 };
 
 LLAMA_API size_t llama_model_get_moe_tensor_info(

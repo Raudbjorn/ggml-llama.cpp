@@ -27,6 +27,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // llama_model_n_moe_pack_layers
 #include "log.h"
 
 #ifdef _WIN32
@@ -287,6 +288,25 @@ static std::string parse_moe_cache_mode(const std::string & value) {
     return std::to_string(budget_mb);
 }
 
+// "off" or "PROFILE:SLOTS" (static expert pack, see docs/backend/MOE-PACK.md)
+static std::string parse_moe_pack(const std::string & value) {
+    if (value == "off") {
+        return value;
+    }
+    const size_t colon = value.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 == value.size()) {
+        throw std::invalid_argument("expected off or PROFILE:SLOTS");
+    }
+    const std::string slots = value.substr(colon + 1);
+    char * end = nullptr;
+    errno = 0;
+    const long long n = strtoll(slots.c_str(), &end, 10);
+    if (errno != 0 || *end != '\0' || n < 1 || n > 4096) {
+        throw std::invalid_argument("pack slots must be an integer in 1..4096");
+    }
+    return value;
+}
+
 static bool moe_cache_mode_forces_canonical_weights(const std::string & mode) {
     return mode == "on" || (mode != "auto" && mode != "off" && mode != "soft");
 }
@@ -413,6 +433,7 @@ struct cmd_params {
     std::vector<int>                 n_gpu_layers;
     std::vector<int>                 n_cpu_moe;
     std::vector<std::string>         moe_cache;
+    std::vector<std::string>         moe_pack;
     std::string                      repack;
     std::vector<llama_split_mode>    split_mode;
     std::vector<llama_load_mode>     load_mode;
@@ -425,6 +446,7 @@ struct cmd_params {
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
+    std::vector<bool>                sched_async_cpu;
     std::vector<bool>                no_host;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
@@ -464,6 +486,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_gpu_layers         */ { -1 },
     /* n_cpu_moe            */ { 0 },
     /* moe_cache            */ { "auto" },
+    /* moe_pack             */ { "off" },
     /* repack               */ "auto",
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* load_mode            */ { LLAMA_LOAD_MODE_AUTO },
@@ -476,6 +499,7 @@ static const cmd_params cmd_params_defaults = {
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
+    /* sched_async_cpu      */ { false },
     /* no_host              */ { false },
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
@@ -541,6 +565,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ncmoe, --n-cpu-moe <n>                           (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
     printf("  --moe-cache <auto|on|soft|off|0|MiB>                   (default: %s)\n", join(cmd_params_defaults.moe_cache, ",").c_str());
     printf("                                                    on and fixed budgets disable weight repacking\n");
+    printf("  --moe-pack <off|PROFILE:SLOTS>                    static expert pack (default: %s); disables --moe-cache\n", join(cmd_params_defaults.moe_pack, ",").c_str());
     printf("  --repack <auto|on|off>                            weight repacking policy (default: %s)\n", cmd_params_defaults.repack.c_str());
     printf("  -nr, --no-repack                                  equivalent to --repack off\n");
     printf("  -sm, --split-mode <none|layer|row|tensor>         (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
@@ -557,6 +582,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                                    (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                      (default: 0)\n");
+    printf("  -sac, --sched-async-cpu <0|1>                     CPU splits on a worker thread, experimental (default: 0)\n");
     printf("  --no-host <0|1>                                   (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("\n");
     printf(
@@ -858,6 +884,20 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     params.moe_cache.push_back(parse_moe_cache_mode(value));
                 }
                 params.moe_cache_explicit = true;
+            } else if (arg == "--moe-pack") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                for (const auto & value : string_split<std::string>(argv[i], split_delim)) {
+                    try {
+                        params.moe_pack.push_back(parse_moe_pack(value));
+                    } catch (const std::invalid_argument & e) {
+                        fprintf(stderr, "error: --moe-pack %s: %s\n", value.c_str(), e.what());
+                        invalid_param = true;
+                        break;
+                    }
+                }
             } else if (arg == "--repack") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1061,6 +1101,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
+            } else if (arg == "-sac" || arg == "--sched-async-cpu") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.sched_async_cpu.insert(params.sched_async_cpu.end(), p.begin(), p.end());
             } else if (arg == "--no-host") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1299,6 +1346,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_cpu_moe.empty()) {
         params.n_cpu_moe = cmd_params_defaults.n_cpu_moe;
     }
+    if (params.moe_pack.empty()) {
+        params.moe_pack = cmd_params_defaults.moe_pack;
+    }
     if (params.moe_cache.empty()) {
         try {
             params.moe_cache = { get_moe_cache_mode_from_env() };
@@ -1339,6 +1389,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     }
     if (params.no_op_offload.empty()) {
         params.no_op_offload = cmd_params_defaults.no_op_offload;
+    }
+    if (params.sched_async_cpu.empty()) {
+        params.sched_async_cpu = cmd_params_defaults.sched_async_cpu;
     }
     if (params.no_host.empty()) {
         params.no_host = cmd_params_defaults.no_host;
@@ -1396,6 +1449,7 @@ struct cmd_params_instance {
     int                n_gpu_layers;
     int                n_cpu_moe;
     std::string        moe_cache;
+    std::string        moe_pack;
     bool               repack;
     llama_split_mode   split_mode;
     llama_load_mode    load_mode;
@@ -1408,6 +1462,7 @@ struct cmd_params_instance {
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool               embeddings;
     bool               no_op_offload;
+    bool               sched_async_cpu;
     bool               no_host;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
@@ -1427,6 +1482,14 @@ struct cmd_params_instance {
         mparams.use_extra_bufts = repack;
         mparams.no_host       = no_host;
         mparams.use_extra_bufts = repack;
+
+        if (moe_pack != "off") {
+            static std::string pack_profile;
+            const size_t colon = moe_pack.rfind(':');
+            pack_profile           = moe_pack.substr(0, colon);
+            mparams.moe_pack_profile = pack_profile.c_str();
+            mparams.moe_pack_slots   = std::stoi(moe_pack.substr(colon + 1));
+        }
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
@@ -1469,7 +1532,7 @@ struct cmd_params_instance {
 
     bool equal_mparams(const cmd_params_instance & other) const {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
-               repack == other.repack &&
+               repack == other.repack && moe_pack == other.moe_pack &&
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
                load_mode == other.load_mode && lazy_mode == other.lazy_mode &&
@@ -1489,6 +1552,7 @@ struct cmd_params_instance {
         cparams.flash_attn_type = flash_attn;
         cparams.embeddings      = embeddings;
         cparams.op_offload      = !no_op_offload;
+        cparams.sched_async_cpu = sched_async_cpu;
         cparams.swa_full        = false;
 
         return cparams;
@@ -1506,6 +1570,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & mc : params.moe_cache)
+    for (const auto & mpk : params.moe_pack)
     for (const auto & sm : params.split_mode)
     for (const auto & lm : params.load_mode)
     for (const auto & lzm : params.lazy_mode)
@@ -1516,6 +1581,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & noh : params.no_host)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
+    for (const auto & sac : params.sched_async_cpu)
     for (const auto & nb : params.n_batch)
     for (const auto & nub : params.n_ubatch)
     for (const auto & tk : params.type_k)
@@ -1527,6 +1593,10 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & cs : params.cpu_strict)
     for (const auto & nd : params.n_depth)
     for (const auto & pl : params.poll) {
+        // a pack turns the dynamic cache off: one instance per pack, not one per cache mode
+        if (mpk != "off" && &mc != &params.moe_cache.front()) {
+            continue;
+        }
         for (const auto & n_prompt : params.n_prompt) {
             if (n_prompt == 0) {
                 continue;
@@ -1547,8 +1617,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
-                /* .moe_cache             = */ mc,
-                /* .repack                = */ get_effective_repack(mc, params.repack),
+                /* .moe_cache             = */ mpk == "off" ? mc : std::string("off"),
+                /* .moe_pack              = */ mpk,
+                /* .repack                = */ get_effective_repack(mpk == "off" ? mc : std::string("off"), params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1560,6 +1631,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
+                /* .sched_async_cpu       = */ sac,
                 /* .no_host               = */ noh,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
@@ -1587,8 +1659,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
-                /* .moe_cache             = */ mc,
-                /* .repack                = */ get_effective_repack(mc, params.repack),
+                /* .moe_cache             = */ mpk == "off" ? mc : std::string("off"),
+                /* .moe_pack              = */ mpk,
+                /* .repack                = */ get_effective_repack(mpk == "off" ? mc : std::string("off"), params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1600,6 +1673,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
+                /* .sched_async_cpu       = */ sac,
                 /* .no_host               = */ noh,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
@@ -1627,8 +1701,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
-                /* .moe_cache             = */ mc,
-                /* .repack                = */ get_effective_repack(mc, params.repack),
+                /* .moe_cache             = */ mpk == "off" ? mc : std::string("off"),
+                /* .moe_pack              = */ mpk,
+                /* .repack                = */ get_effective_repack(mpk == "off" ? mc : std::string("off"), params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1640,6 +1715,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
+                /* .sched_async_cpu       = */ sac,
                 /* .no_host               = */ noh,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
@@ -1672,6 +1748,7 @@ struct test {
     int                      n_gpu_layers;
     int                      n_cpu_moe;
     std::string              moe_cache;
+    std::string              moe_pack;
     bool                     moe_cache_fit;
     bool                     repack;
     llama_split_mode         split_mode;
@@ -1685,6 +1762,7 @@ struct test {
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool                     embeddings;
     bool                     no_op_offload;
+    bool                     sched_async_cpu;
     bool                     no_host;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
@@ -1725,6 +1803,13 @@ struct test {
         n_gpu_layers   = mparams.n_gpu_layers;
         n_cpu_moe      = inst.n_cpu_moe;
         moe_cache      = inst.moe_cache;
+        // report the pack that was built: a profile that selects no layer, or a failed
+        // allocation, leaves the model unpacked
+        moe_pack       = inst.moe_pack;
+        if (moe_pack != "off" && llama_model_n_moe_pack_layers(lmodel) == 0) {
+            fprintf(stderr, "warning: --moe-pack %s built no pack (see the load log), reported as off\n", moe_pack.c_str());
+            moe_pack = "off";
+        }
         moe_cache_fit  = cache_fit_selected;
         repack         = mparams.use_extra_bufts;
         split_mode     = mparams.split_mode;
@@ -1751,6 +1836,7 @@ struct test {
         }
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
+        sched_async_cpu = llama_get_sched_async_cpu(ctx); // effective: off beside a MoE cache session
         no_host        = inst.no_host;
         fit_target     = inst.fit_target;
         fit_min_ctx    = inst.fit_min_ctx;
@@ -1799,11 +1885,11 @@ struct test {
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "moe_cache",
-            "moe_cache_fit",  "repack",         "split_mode",
+            "moe_pack",       "moe_cache_fit",  "repack",         "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
-            "no_op_offload",  "no_host",        "fit_target",    "fit_min_ctx",
+            "no_op_offload",  "sched_async_cpu", "no_host",      "fit_target",    "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_gen_warmup",  "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
@@ -1817,7 +1903,7 @@ struct test {
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_gen_warmup" ||
             field == "n_depth" || field == "avg_ns" ||
-            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
+            field == "stddev_ns" || field == "no_op_offload" || field == "sched_async_cpu" || field == "n_cpu_moe" ||
             field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn") {
             return INT;
         }
@@ -1891,6 +1977,7 @@ struct test {
                                             std::to_string(n_gpu_layers),
                                             std::to_string(n_cpu_moe),
                                             moe_cache,
+                                            moe_pack,
                                             std::to_string(moe_cache_fit),
                                             std::to_string(repack),
                                             split_mode_str(split_mode),
@@ -1904,6 +1991,7 @@ struct test {
                                             lazy_mode_str(lazy_mode),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
+                                            std::to_string(sched_async_cpu),
                                             std::to_string(no_host),
                                             std::to_string(fit_target),
                                             std::to_string(fit_min_ctx),
@@ -2070,6 +2158,9 @@ struct markdown_printer : public printer {
         if (field == "moe_cache") {
             return -9;
         }
+        if (field == "moe_pack") {
+            return -12;
+        }
         if (field == "moe_cache_fit") {
             return 5;
         }
@@ -2109,6 +2200,9 @@ struct markdown_printer : public printer {
         if (field == "no_op_offload") {
             return 4;
         }
+        if (field == "sched_async_cpu") {
+            return 3;
+        }
         if (field == "no_host") {
             return 4;
         }
@@ -2130,6 +2224,9 @@ struct markdown_printer : public printer {
         }
         if (field == "moe_cache") {
             return "moe-cache";
+        }
+        if (field == "moe_pack") {
+            return "moe-pack";
         }
         if (field == "moe_cache_fit") {
             return "fit";
@@ -2154,6 +2251,9 @@ struct markdown_printer : public printer {
         }
         if (field == "no_op_offload") {
             return "nopo";
+        }
+        if (field == "sched_async_cpu") {
+            return "sac";
         }
         if (field == "no_host") {
             return "noh";
@@ -2197,6 +2297,9 @@ struct markdown_printer : public printer {
         if (params.moe_cache_explicit || params.moe_cache.size() > 1 ||
             params.moe_cache != cmd_params_defaults.moe_cache) {
             fields.emplace_back("moe_cache");
+        }
+        if (params.moe_pack.size() > 1 || params.moe_pack != cmd_params_defaults.moe_pack) {
+            fields.emplace_back("moe_pack");
         }
         const bool fitting =
             params.fit_params_target.size() > 1 ||
@@ -2271,6 +2374,9 @@ struct markdown_printer : public printer {
         }
         if (params.no_op_offload.size() > 1 || params.no_op_offload != cmd_params_defaults.no_op_offload) {
             fields.emplace_back("no_op_offload");
+        }
+        if (params.sched_async_cpu.size() > 1 || params.sched_async_cpu != cmd_params_defaults.sched_async_cpu) {
+            fields.emplace_back("sched_async_cpu");
         }
         if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
             fields.emplace_back("no_host");
@@ -2715,6 +2821,7 @@ int llama_bench(int argc, char ** argv) {
             }
         }
 
+        int32_t n_pack_used = -1; // the fewest packs a timed graph used
         for (int i = 0; i < params.reps; i++) {
             llama_memory_clear(llama_get_memory(ctx), false);
 
@@ -2762,6 +2869,7 @@ int llama_bench(int argc, char ** argv) {
                 }
             }
 
+            llama_take_n_moe_pack_used(ctx); // the warmup and depth graphs are not the workload
             uint64_t t_start = get_time_ns();
 
             if (t.n_prompt > 0) {
@@ -2795,6 +2903,18 @@ int llama_bench(int argc, char ** argv) {
 
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
+            const int32_t n_used = llama_take_n_moe_pack_used(ctx);
+            if (n_used >= 0) {
+                n_pack_used = n_pack_used < 0 ? n_used : std::min(n_pack_used, n_used);
+            }
+        }
+
+        // a graph leaves a built pack out where its device refuses the batch: report what ran
+        const int32_t n_pack_built = llama_model_n_moe_pack_layers(lmodel);
+        if (t.moe_pack != "off" && n_pack_used >= 0 && n_pack_used < n_pack_built) {
+            fprintf(stderr, "warning: --moe-pack %s: the test's graphs used %d of %d packs (-v logs why)\n",
+                    t.moe_pack.c_str(), n_pack_used, n_pack_built);
+            t.moe_pack += " (" + std::to_string(n_pack_used) + "/" + std::to_string(n_pack_built) + " layers)";
         }
 
         if (p) {

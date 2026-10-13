@@ -633,7 +633,8 @@ static bool run_scenario(
         log_capture & capture,
         const char * max_batch = "1",
         const char * required_field = nullptr,
-        const char * dedicated_mmv = "1") {
+        const char * dedicated_mmv = "1",
+        bool async_cpu = false) {
     configure_cache(fail_stage, max_batch, dedicated_mmv);
     capture.clear();
 
@@ -643,6 +644,25 @@ static bool run_scenario(
     if (!scheduler) {
         fprintf(stderr, "%s: failed to create scheduler\n", name);
         return false;
+    }
+    if (async_cpu) {
+        // the provider submits to the device queue from the CPU split: the scheduler refuses the
+        // worker beside a session, and keeps a worker started before the session idle
+        bool bad = ggml_backend_sched_set_async_cpu(scheduler, true);
+        if (bad) {
+            fprintf(stderr, "%s: the CPU split worker started beside a cache session\n", name);
+        } else {
+            ggml_backend_sched_set_moe_cache(scheduler, GGML_MOE_CACHE_MODE_OFF, 0);
+            bad = !ggml_backend_sched_set_async_cpu(scheduler, true);
+            if (bad) {
+                fprintf(stderr, "%s: the CPU split worker did not start without a session\n", name);
+            }
+            ggml_backend_sched_set_moe_cache(scheduler, GGML_MOE_CACHE_MODE_ON, 4);
+        }
+        if (bad) {
+            ggml_backend_sched_free(scheduler);
+            return false;
+        }
     }
     ggml_backend_sched_set_tensor_backend(scheduler, graph.out, cpu);
     if (!ggml_backend_sched_alloc_graph(scheduler, graph.graph) ||
@@ -699,6 +719,11 @@ static bool run_scenario(
     }
     if (required_field) {
         stage_ok &= has_positive_field(log, required_field);
+    }
+    if (async_cpu && log.find("async CPU splits: 0,") == std::string::npos) {
+        // the provider submits to the device queue from the CPU split: no split may run on the worker
+        fprintf(stderr, "%s: a CPU split ran on the worker beside a cache session\n", name);
+        stage_ok = false;
     }
     if (!stage_ok) {
         fprintf(stderr, "%s: cache stage was not observed\n%s", name, log.c_str());
@@ -3259,6 +3284,8 @@ int main() {
     bool ok = run_capability_queries(provider_device, cpu);
     ok &= run_invalidation_hook_coverage(cpu);
     ok &= run_scenario("cache-hit", nullptr, gpu, cpu, graph, reference, capture);
+    ok &= run_scenario("cache-hit-async-cpu", nullptr, gpu, cpu, graph, reference, capture,
+            "1", nullptr, "1", true);
     ok &= run_scenario(
             "cache-generic-mmv", nullptr, gpu, cpu, graph, reference,
             capture, "1", nullptr, "0");

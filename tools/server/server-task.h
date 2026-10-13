@@ -3,13 +3,19 @@
 #include "common.h"
 #include "llama.h"
 
+#include <atomic>
 #include <string>
 #include <unordered_set>
 #include <list>
 #include <map>
+#include <memory>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
+
+namespace schema_decision {
+struct request;
+}
 
 
 enum server_task_type {
@@ -28,6 +34,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_SCHEMA_DECISION, // POST /v1/decision, see tools/schema-decision
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -206,6 +213,11 @@ struct server_task {
         int32_t              n_scores = 0;
     };
     decision decision;
+
+    // used by SERVER_TASK_TYPE_SCHEMA_DECISION: the parsed request, and a flag the HTTP thread
+    // sets when the client goes away (the engine polls it before every decode)
+    std::shared_ptr<schema_decision::request>       schema_decision;
+    std::shared_ptr<std::atomic<bool>>              schema_decision_cancel;
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
@@ -525,6 +537,15 @@ struct server_task_result_decision : server_task_result {
     int32_t n_tokens;
 
     virtual json to_json() override;
+};
+
+// used by /v1/decision: the response object built by schema_decision::run
+struct server_task_result_schema_decision : server_task_result {
+    json data;
+
+    virtual json to_json() override {
+        return data;
+    }
 };
 
 struct server_task_result_error : server_task_result {

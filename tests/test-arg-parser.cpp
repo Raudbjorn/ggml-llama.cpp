@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <limits>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -180,13 +181,48 @@ static void test(void) {
     }
 
     {
+        // --cpu-tp-margin sizes the split from the tensor bytes of every shard, named by the first
+        ggml_init_params ip = { 16 * 1024, nullptr, false };
+        ggml_context * tctx = ggml_init(ip);
+        size_t want = 0;
+        for (int i = 0; i < 3; ++i) {
+            ggml_tensor * t = ggml_new_tensor_1d(tctx, GGML_TYPE_F32, 8 << i);
+            ggml_set_name(t, ("t" + std::to_string(i)).c_str());
+            memset(t->data, 0, ggml_nbytes(t));
+            gguf_context * ctx = gguf_init_empty();
+            gguf_set_val_u16(ctx, "split.no", (uint16_t) i);
+            gguf_set_val_u16(ctx, "split.count", 3);
+            gguf_add_tensor(ctx, t);
+            char path[64];
+            llama_split_path(path, sizeof(path), "test-cpu-tp-split", i, 3);
+            assert(gguf_write_to_file(ctx, path, false));
+            gguf_free(ctx);
+            want += ggml_nbytes(t);
+        }
+        ggml_free(tctx);
+        std::string error;
+        assert(common_model_tensor_bytes("test-cpu-tp-split-00001-of-00003.gguf", error) == want && error.empty());
+        // a later shard does not name the split
+        assert(common_model_tensor_bytes("test-cpu-tp-split-00002-of-00003.gguf", error) == 0 && !error.empty());
+        for (int i = 0; i < 3; ++i) {
+            char path[64];
+            llama_split_path(path, sizeof(path), "test-cpu-tp-split", i, 3);
+            std::remove(path);
+        }
+    }
+
+    {
         common_params base;
         base.n_parallel = 4;
         base.n_outputs_max_per_seq = 8;
+        base.n_seq_decision = 6;
 
         const auto draft = common_base_params_to_speculative(base);
         assert(draft.n_outputs_max == 4);
         assert(draft.n_outputs_max_per_seq == 1);
+        // decisions run on the target context only: the draft reserves no decision sequences
+        assert(draft.n_seq_decision == 0);
+        assert(common_context_params_to_llama(draft).n_seq_max == 4);
     }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
@@ -316,6 +352,78 @@ static void test(void) {
 
     argv = {"binary_name", "-lm", "hello"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+
+    // static expert pack flags: both or neither, strict slot count, exclusive with --moe-cache
+    {
+        const std::vector<std::vector<std::string>> invalid = {
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-slots", "4"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "0"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4x"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "-1"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4097"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4", "--moe-cache", "on"},
+            {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4", "--moe-cache", "2048"},
+        };
+        for (auto argv_case : invalid) {
+            common_params pack_params;
+            assert(false == common_params_parse(argv_case.size(), list_str_to_char(argv_case).data(), pack_params, LLAMA_EXAMPLE_COMMON));
+        }
+        std::vector<std::string> ok_case = {"binary_name", "-m", "m.gguf", "--moe-pack-profile", "p.csv", "--moe-pack-slots", "4", "--moe-cache", "off"};
+        common_params pack_params;
+        assert(true == common_params_parse(ok_case.size(), list_str_to_char(ok_case).data(), pack_params, LLAMA_EXAMPLE_COMMON));
+        assert(pack_params.moe_pack_profile == "p.csv");
+        assert(pack_params.moe_pack_slots == 4);
+    }
+
+    // --cpu-tp: needs --split-mode tensor, an accelerator and exactly one way to give the split
+    {
+        const std::vector<std::vector<std::string>> invalid = {
+            {"binary_name", "-m", "m.gguf", "--cpu-tp", "-ts", "1,1"},
+            {"binary_name", "-m", "m.gguf", "--cpu-tp-margin", "512"},
+            {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-dev", "none", "-ts", "1,1"},
+            {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "--cpu-tp-margin", "-1"},
+            // -dev never names the CPU, so a device list that ends with it was prepared already
+            {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-dev", "CPU", "-ts", "1"},
+        };
+        for (auto argv_case : invalid) {
+            common_params tp_params;
+            assert(false == common_params_parse(argv_case.size(), list_str_to_char(argv_case).data(), tp_params, LLAMA_EXAMPLE_COMMON));
+        }
+
+        ggml_backend_load_all();
+        size_t n_acc = 0;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            n_acc += ggml_backend_dev_buffer_type(ggml_backend_dev_get(i)) != ggml_backend_cpu_buffer_type();
+        }
+        std::string ts_ok, ts_short;
+        for (size_t i = 0; i <= n_acc; ++i) {
+            ts_ok += (i ? "," : "") + std::string("1");
+            ts_short += (i ? "," : "") + std::string(i == n_acc ? "0" : "1");
+        }
+        std::vector<std::string> ok_case = {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-ts", ts_ok};
+        common_params tp_params;
+        const bool ok = common_params_parse(ok_case.size(), list_str_to_char(ok_case).data(), tp_params, LLAMA_EXAMPLE_COMMON);
+        if (n_acc == 0) {
+            assert(!ok); // the CPU alone needs no tensor split
+        } else {
+            assert(ok);
+            assert(tp_params.devices.size() == n_acc + 2);
+            assert(ggml_backend_dev_type(tp_params.devices[n_acc]) == GGML_BACKEND_DEVICE_TYPE_CPU);
+            assert(tp_params.devices[n_acc + 1] == nullptr);
+            const std::vector<std::vector<std::string>> bad_split = {
+                {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp"},                                    // no split
+                {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-ts", ts_short},                   // CPU share 0
+                {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-ts", ts_ok + ",1"},               // one too many
+                {"binary_name", "-m", "m.gguf", "-sm", "tensor", "--cpu-tp", "-ts", ts_ok, "--cpu-tp-margin", "0"}, // both
+            };
+            for (auto argv_case : bad_split) {
+                common_params bad_params;
+                assert(false == common_params_parse(argv_case.size(), list_str_to_char(argv_case).data(), bad_params, LLAMA_EXAMPLE_COMMON));
+            }
+        }
+        printf("test-arg-parser: --cpu-tp checked with %zu accelerator(s)\n", n_acc);
+    }
 
     printf("test-arg-parser: test valid usage\n\n");
 

@@ -38,6 +38,7 @@ this snapshot when they change.
 | Measure speed, quality or capacity | [Scripts catalog](../scripts/README.md) | [Benchmark collection](benchmarks/README.md), [research index](research/README.md) |
 | Work on drafting and acceptance | [Speculative decoding](features/speculative.md) | [Speculative implementation](../common/speculative.cpp), [performance harness findings](../scripts/perf/FINDINGS.md) |
 | Sync upstream or prepare the generated SDK | [Upstream merge runbook](development/upstream-merge.md), [SDK guide](SDK.md) | [SDK generator](../scripts/prune-to-lib.sh); generation changes branch state |
+| Offload MoE experts (static packs, routing traces, CPU split overlap, CPU tensor parallel, decisions) | [MoE offload integration context](development/moe-offload-integration-context.md) | [Static pack guide](backend/MOE-PACK.md), [routing trace tool](../tools/moe-trace/README.md), [CPU TP guide](backend/CPU-TP.md), [decision engine](../tools/schema-decision/README.md) |
 | Delegate a bounded maintenance task | [Agent roster and contract](development/agents.md) | Shared role bodies in [.claude/agents](../.claude/agents/) and Codex wrappers in [.codex/agents](../.codex/agents/) |
 
 ## Repository map
@@ -148,9 +149,9 @@ old notes without understanding their effects.
 | Collection | Tracked paths | Read as |
 | --- | ---: | --- |
 | [build/](build/), [user/](user/), [features/](features/) | 7, 4, 16 | Build/how-to and feature reference, including relocated upstream docs |
-| [backend/](backend/) | 3 | Backend and MoE-cache operational guides |
+| [backend/](backend/) | 6 | Backend, MoE-cache, static-pack and CPU-TP operational guides |
 | [turboquant/](turboquant/) | 20 | Codec policy, quality methodology and per-model result tables |
-| [development/](development/) | 11 | Maintainer runbooks and implementation guidance |
+| [development/](development/) | 12 | Maintainer runbooks and implementation guidance |
 | [research/](research/README.md) | 564 | Dated reports plus supporting JSON, CSV, logs, patches and probes |
 | [plans/](plans/README.md) | 13 | Proposed work and dependencies; a plan does not prove implementation or validation |
 | [ops/](ops/), [ops.md](ops.md) | 5 plus one root doc | Backend support inputs and generated table; hardware/device-specific snapshots |

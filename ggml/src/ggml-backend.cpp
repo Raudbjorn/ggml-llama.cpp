@@ -55,7 +55,10 @@ static enum ggml_status ggml_backend_sched_maybe_consume_sycl_status(ggml_backen
 #include "ggml-backend-moe-cache.h"
 
 #include <algorithm>
+#include <condition_variable>
 #include <mutex>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 
 // MoE expert cache providers, keyed by backend registration object. Multiple
@@ -116,6 +119,36 @@ ggml_moe_cache_api ggml_moe_cache_active(void) {
     }
     return ggml_moe_cache_api{};
 }
+
+// Makes a scheduler's cache session the current one on this thread for the scope's lifetime:
+// the CPU backend reads t_moe_cache_active, and providers keep thread-local session stacks.
+// The CPU worker enters it too, so that both threads see the same provider table (the worker
+// is not used while a session exists, see ggml_backend_sched_compute_splits).
+struct ggml_sched_moe_cache_scope {
+    void * session;
+    void (*leave)(void *);
+    ggml_moe_cache_api previous_active;
+
+    ggml_sched_moe_cache_scope(void * session, const ggml_moe_cache_api & api)
+        : session(session), leave(api.session_leave), previous_active(t_moe_cache_active) {
+        t_moe_cache_active = api;
+        if (api.session_enter && api.session_leave) {
+            api.session_enter(session);
+        } else {
+            leave = nullptr;
+        }
+    }
+
+    ~ggml_sched_moe_cache_scope() {
+        t_moe_cache_active = previous_active;
+        if (leave) {
+            leave(session);
+        }
+    }
+
+    ggml_sched_moe_cache_scope(const ggml_sched_moe_cache_scope &) = delete;
+    ggml_sched_moe_cache_scope & operator=(const ggml_sched_moe_cache_scope &) = delete;
+};
 
 // Providers whose backend owns at least one device in the scheduler set, in
 // registration order. Returns copies: the scheduler keeps the selected copy
@@ -1120,6 +1153,144 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
+// ggml_new_tensor_impl already points view_src at the root; walk the chain anyway so that a
+// tensor built another way cannot hide a dependency from the CPU worker's conflict check
+static const ggml_tensor * ggml_sched_tensor_root(const ggml_tensor * t) {
+    while (t->view_src) {
+        t = t->view_src;
+    }
+    return t;
+}
+
+// Opt-in, see ggml_backend_sched_set_async_cpu(): one thread per scheduler computes the splits of
+// CPU-device backends, so that a later split on another backend that does not touch the CPU
+// split's memory is launched while it runs. A job never outlives ggml_backend_sched_compute_splits().
+struct ggml_sched_cpu_async {
+    std::mutex              mtx;
+    std::condition_variable cv;
+    ggml_backend_t          job_backend = nullptr;
+    struct ggml_cgraph *    job_graph   = nullptr;
+    void *                  job_session = nullptr;
+    ggml_moe_cache_api      job_api     = {};
+    enum ggml_status        job_status  = GGML_STATUS_SUCCESS;
+    bool                    job_ready   = false;
+    bool                    job_done    = false;
+    bool                    stop        = false;
+
+    // main thread only: a job was launched and not joined, and the roots of the tensors it
+    // writes and of those it only reads
+    bool pending = false;
+    std::unordered_set<const ggml_tensor *> written;
+    std::unordered_set<const ggml_tensor *> read;
+
+    std::thread worker; // last: starts after every member it uses is constructed
+
+    ggml_sched_cpu_async() : worker([this] { run(); }) {}
+
+    ~ggml_sched_cpu_async() {
+        join();
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            stop = true;
+        }
+        cv.notify_all();
+        worker.join();
+    }
+
+    ggml_sched_cpu_async(const ggml_sched_cpu_async &) = delete;
+    ggml_sched_cpu_async & operator=(const ggml_sched_cpu_async &) = delete;
+
+    void run() {
+        std::unique_lock<std::mutex> lock(mtx);
+        for (;;) {
+            cv.wait(lock, [this] { return job_ready || stop; });
+            if (stop) {
+                return;
+            }
+            job_ready = false;
+            ggml_backend_t           backend = job_backend;
+            struct ggml_cgraph *     graph   = job_graph;
+            void *                   session = job_session;
+            const ggml_moe_cache_api api     = job_api;
+            lock.unlock();
+
+            enum ggml_status status = GGML_STATUS_FAILED;
+            try {
+                ggml_sched_moe_cache_scope scope(session, api);
+                status = ggml_backend_graph_compute_async(backend, graph);
+            } catch (...) {
+                status = GGML_STATUS_FAILED;
+            }
+
+            lock.lock();
+            job_status = status;
+            job_done   = true;
+            cv.notify_all();
+        }
+    }
+
+    void launch(ggml_backend_t backend, struct ggml_cgraph * graph, void * session, const ggml_moe_cache_api & api) {
+        GGML_ASSERT(!pending);
+        written.clear();
+        read.clear();
+        for (int i = 0; i < graph->n_nodes; i++) {
+            const ggml_tensor * node = graph->nodes[i];
+            (ggml_is_view_op(node->op) ? read : written).insert(ggml_sched_tensor_root(node));
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                if (node->src[j]) {
+                    read.insert(ggml_sched_tensor_root(node->src[j]));
+                }
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            job_backend = backend;
+            job_graph   = graph;
+            job_session = session;
+            job_api     = api;
+            job_status  = GGML_STATUS_SUCCESS;
+            job_done    = false;
+            job_ready   = true;
+        }
+        cv.notify_all();
+        pending = true;
+    }
+
+    // waits for the launched job, if any, and returns its status
+    enum ggml_status join() {
+        if (!pending) {
+            return GGML_STATUS_SUCCESS;
+        }
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [this] { return job_done; });
+        pending = false;
+        return job_status;
+    }
+
+    // true if the split reads memory the job writes, or writes memory the job uses; its
+    // inputs are read by the copies at the split's start
+    bool conflicts(const struct ggml_backend_sched_split * split) const {
+        for (int i = 0; i < split->n_inputs; i++) {
+            if (written.count(ggml_sched_tensor_root(split->inputs[i]))) {
+                return true;
+            }
+        }
+        for (int i = 0; i < split->graph.n_nodes; i++) {
+            const ggml_tensor * node = split->graph.nodes[i];
+            const ggml_tensor * root = ggml_sched_tensor_root(node);
+            if (written.count(root) || (!ggml_is_view_op(node->op) && read.count(root))) {
+                return true;
+            }
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                if (node->src[j] && written.count(ggml_sched_tensor_root(node->src[j]))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+};
+
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
@@ -1183,6 +1354,13 @@ struct ggml_backend_sched {
     uint64_t n_stream_ordered_copies;
     uint64_t n_host_read_flushes_split;
     uint64_t n_host_read_flushes_graph;
+
+    // CPU splits on a worker thread (ggml_backend_sched_set_async_cpu); NULL when off
+    struct ggml_sched_cpu_async * cpu_async;
+    uint64_t n_async_cpu_splits;   // CPU splits the worker computed
+    // splits launched while a CPU split was on the worker and not joined: the scheduler did not wait
+    // for it. Whether it was still computing then is timing, which this count does not measure
+    uint64_t n_async_cpu_overlaps;
 
     // mindcontrol-port of --prefetch-experts-slots: full-tensor lookahead prefetch of
     // offloaded MUL_MAT_ID weights (MoE experts resident in CPU/host memory, i.e. ncmoe).
@@ -2390,33 +2568,31 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
-    struct moe_cache_scope {
-        void * session;
-        void (*leave)(void *);
-        ggml_moe_cache_api previous_active;
+    ggml_sched_moe_cache_scope cache_scope(sched->moe_cache_session, sched->moe_cache_api);
 
-        explicit moe_cache_scope(void * session, void (*enter)(void *),
-                                 void (*leave_fn)(void *),
-                                 const ggml_moe_cache_api & active_api)
-            : session(session), leave(leave_fn), previous_active(t_moe_cache_active) {
-            t_moe_cache_active = active_api;
-            if (enter && leave) {
-                enter(session);
-            } else {
-                leave = nullptr;
+    // CPU splits on the worker thread; the eval callback needs every split computed in order.
+    // A MoE cache session keeps them serial too: its provider submits to the device's own queue
+    // from inside the CPU split (Vulkan: vkQueueSubmit without the backend's submit lock; SYCL:
+    // the backend's in-order stream), which must not race the main thread's launches.
+    // The job never outlives this function: every return joins it first. The worker takes
+    // the splits of every CPU-device backend without events (the CPU device has none), so
+    // that the event record below cannot race it.
+    ggml_sched_cpu_async * cpu_async = sched->callback_eval || sched->moe_cache_session ? nullptr : sched->cpu_async;
+    bool on_worker[GGML_SCHED_MAX_BACKENDS] = {};
+    for (int b = 0; cpu_async && b < sched->n_backends; b++) {
+        ggml_backend_dev_t dev = ggml_backend_get_device(sched->backends[b]);
+        on_worker[b] = dev != NULL && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU &&
+                       sched->events[b][sched->cur_copy] == NULL;
+    }
+    int async_backend_id = -1; // backend of the launched job
+    struct cpu_async_join_guard {
+        ggml_sched_cpu_async * worker;
+        ~cpu_async_join_guard() {
+            if (worker) {
+                worker->join();
             }
         }
-
-        ~moe_cache_scope() {
-            t_moe_cache_active = previous_active;
-            if (leave) {
-                leave(session);
-            }
-        }
-    } cache_scope(sched->moe_cache_session,
-                  sched->moe_cache_api.session_enter,
-                  sched->moe_cache_api.session_leave,
-                  sched->moe_cache_api);
+    } cpu_async_guard { cpu_async };
 
     ggml_tensor * prev_ids_tensor = nullptr;
     std::vector<int32_t> ids;
@@ -2491,6 +2667,22 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
     }
 
+    // On a failure, undo every lookahead that primed a tensor for a split we're not going to
+    // reach: its buffer/data still point at a staging slot, and the caller may retry using the
+    // same graph/tensors expecting the allocator's own buffer back.
+    auto abandon_lookahead = [&](int first_split) {
+        for (int i = first_split; i < sched->n_splits; i++) {
+            if (lookahead[i].slot != -1 && lookahead[i].input_cpy != NULL) {
+                lookahead[i].input_cpy->buffer = lookahead[i].saved_buffer;
+                lookahead[i].input_cpy->data   = lookahead[i].saved_data;
+                lookahead[i].slot = -1;
+            }
+        }
+        if (sched->prefetch_backend) {
+            ggml_backend_synchronize(sched->prefetch_backend);
+        }
+    };
+
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
@@ -2516,6 +2708,25 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
 
+        // A CPU split may still run on the worker. A CPU or host-buffer split computes on the CPU
+        // or may share its allocator (gallocr shares memory only between identical buffer
+        // types); any other split runs beside it unless it touches the CPU split's memory.
+        if (cpu_async && cpu_async->pending) {
+            const ggml_backend_buffer_type_t buft = sched->bufts[split_backend_id];
+            if (on_worker[split_backend_id] || buft == sched->bufts[async_backend_id] ||
+                ggml_backend_buft_is_host(buft) || cpu_async->conflicts(split)) {
+                const enum ggml_status ec = cpu_async->join();
+                if (ec != GGML_STATUS_SUCCESS) {
+                    abandon_lookahead(split_id);
+                    // splits launched beside the job may still run; the caller may reset their memory
+                    ggml_backend_sched_synchronize(sched);
+                    return ec;
+                }
+            } else {
+                sched->n_async_cpu_overlaps++;
+            }
+        }
+
         // A host split writes host memory, starting with its own input copies, and that memory
         // may be the source of a stream-ordered upload another backend has not executed yet.
         if (ggml_backend_buft_is_host(sched->bufts[split_backend_id]) && ggml_backend_sched_flush_host_reads(sched)) {
@@ -2524,6 +2735,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         // ensure the previous split's async work has completed before we start
         // this split, the allocator may have reused buffer regions across splits
+        // (a CPU split on the worker was joined above if this split shares its allocator)
         if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
             if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
                 ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
@@ -2744,6 +2956,19 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!sched->callback_eval) {
+            // every CPU-device split goes to the worker, so that one thread (and one OpenMP team)
+            // computes all of them; the previous job was joined above
+            if (on_worker[split_backend_id] && split_prefetch_slot == -1) {
+                cpu_async->launch(split_backend, &split->graph, sched->moe_cache_session, sched->moe_cache_api);
+                async_backend_id = split_backend_id;
+                sched->n_async_cpu_splits++;
+                if (LOOKAHEAD > 0) {
+                    try_fire_prefetch(split_id + 1 + LOOKAHEAD);
+                }
+                prev_backend_id = split_backend_id;
+                continue;
+            }
+
             // Cross-stream sync for a lookahead/inline-prefetched weight: wait until the
             // H2D on the prefetch backend has completed before launching compute (mode 1).
             if (split_prefetch_slot != -1) {
@@ -2763,21 +2988,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 prefetch_input_cpy->data   = prefetch_saved_data;
             }
             if (ec != GGML_STATUS_SUCCESS) {
-                // don't fire more prefetch work on top of a failure, and undo every
-                // lookahead that primed a tensor for a split we're not going to reach:
-                // its buffer/data still point at a staging slot, and the caller may
-                // retry using the same graph/tensors expecting the allocator's own
-                // buffer back.
-                for (int i = split_id + 1; i < sched->n_splits; i++) {
-                    if (lookahead[i].slot != -1 && lookahead[i].input_cpy != NULL) {
-                        lookahead[i].input_cpy->buffer = lookahead[i].saved_buffer;
-                        lookahead[i].input_cpy->data   = lookahead[i].saved_data;
-                        lookahead[i].slot = -1;
-                    }
-                }
-                if (sched->prefetch_backend) {
-                    ggml_backend_synchronize(sched->prefetch_backend);
-                }
+                // don't fire more prefetch work on top of a failure; this split's slot was
+                // restored above
+                abandon_lookahead(split_id + 1);
                 return ec;
             }
             // fire lookahead prefetch for a future split so the H2D overlaps this split's
@@ -2832,6 +3045,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     if (prefetch_wait_mode >= 2 && !pending_prefetch_slots.empty() && last_prefetch_split_backend) {
         for (int slot : pending_prefetch_slots) {
             ggml_backend_event_wait(last_prefetch_split_backend, sched->prefetch_ready[slot]);
+        }
+    }
+
+    // the CPU work of a graph is complete on return, as without the worker
+    if (cpu_async) {
+        const enum ggml_status ec = cpu_async->join();
+        if (ec != GGML_STATUS_SUCCESS) {
+            // splits launched beside the job may still run; the caller may reset their memory
+            ggml_backend_sched_synchronize(sched);
+            return ec;
         }
     }
 
@@ -3021,9 +3244,42 @@ void ggml_backend_sched_set_prefetch_experts_slots(ggml_backend_sched_t sched, i
     sched->prefetch_wait_mode = 1; // per-split wait: only mode that preserves tool_calls
 }
 
+bool ggml_backend_sched_set_async_cpu(ggml_backend_sched_t sched, bool enable) {
+    if (sched == NULL) {
+        return false;
+    }
+    if (!enable || sched->moe_cache_session) {
+        delete sched->cpu_async; // idle: a job never outlives a graph compute
+        sched->cpu_async = NULL;
+        if (enable) {
+            // compute_splits would keep every split off the worker (see there)
+            GGML_LOG_INFO("%s: a MoE cache session keeps CPU splits synchronous\n", __func__);
+        }
+        return !enable;
+    }
+    if (sched->cpu_async) {
+        return true;
+    }
+    try {
+        sched->cpu_async = new ggml_sched_cpu_async();
+    } catch (const std::exception & e) {
+        GGML_LOG_WARN("%s: cannot start the CPU split thread (%s); CPU splits stay synchronous\n", __func__, e.what());
+        sched->cpu_async = NULL;
+        return false;
+    }
+    return true;
+}
+
 void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     if (sched == NULL) {
         return;
+    }
+    if (sched->cpu_async) {
+        GGML_LOG_DEBUG("%s: async CPU splits: %llu, splits launched without waiting for one: %llu\n", __func__,
+                       (unsigned long long) sched->n_async_cpu_splits,
+                       (unsigned long long) sched->n_async_cpu_overlaps);
+        delete sched->cpu_async; // idle: a job never outlives a graph compute
+        sched->cpu_async = NULL;
     }
     if (sched->moe_cache_session && sched->moe_cache_api.session_destroy) {
         sched->moe_cache_api.session_destroy(sched->moe_cache_session);

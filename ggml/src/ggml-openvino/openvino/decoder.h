@@ -82,6 +82,10 @@ public:
 
     virtual int32_t * get_input_op_params(int node_idx, const std::string & name) const = 0;
 
+    // true when the input comes straight from an ARGSORT or TOP_K, through views only; such
+    // MUL_MAT_ID ids are router output and never hold the skip id -1
+    virtual bool is_input_sorted_ids(int node_idx, const std::string & name) const = 0;
+
     virtual int32_t * get_output_op_params(int node_idx) const = 0;
 
     virtual size_t get_output_op_offset(int node_idx) const = 0;

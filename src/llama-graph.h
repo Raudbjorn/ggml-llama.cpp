@@ -787,6 +787,35 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
 
 class llm_graph_result;
 
+// static MoE expert pack of one layer (llama_model::moe_packs)
+struct llama_moe_pack_layer {
+    // the CPU-resident expert tensors the pack mirrors: the graph uses the pack
+    // only when build_moe_ffn receives exactly these tensors; either gate and up
+    // or the merged gate_up is set
+    const ggml_tensor * gate_src    = nullptr;
+    const ggml_tensor * up_src      = nullptr;
+    const ggml_tensor * gate_up_src = nullptr;
+    const ggml_tensor * down_src    = nullptr;
+
+    ggml_tensor * gate    = nullptr; // [ne0, ne1, n_slots], source type, on the layer's device
+    ggml_tensor * up      = nullptr;
+    ggml_tensor * gate_up = nullptr;
+    ggml_tensor * down    = nullptr;
+
+    ggml_tensor * map_hot  = nullptr; // I32 [1, n_expert]: slot of a packed expert, else -1
+    ggml_tensor * map_cold = nullptr; // I32 [1, n_expert]: the expert id if not packed, else -1
+
+    // map_hot on the pack's device, when it runs GET_ROWS on I32 weights; used only with
+    // sched_async_cpu, so that the pack's split does not wait for the CPU remap
+    ggml_tensor * map_hot_dev = nullptr;
+
+    ggml_backend_dev_t dev = nullptr; // the device the pack tensors are on
+};
+
+// the first pack tensor of pk that pk.dev cannot run MUL_MAT_ID on for n_tokens tokens of
+// n_used experts each, else nullptr; support can depend on the batch (OpenVINO: MXFP4)
+const ggml_tensor * llama_moe_pack_unsupported(const llama_moe_pack_layer & pk, int64_t n_used, int64_t n_tokens);
+
 struct llm_graph_params {
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
@@ -808,6 +837,7 @@ struct llm_graph_params {
 
     const llama_prec_policy * prec_policy = nullptr;
 
+    const std::vector<llama_moe_pack_layer> * moe_packs = nullptr;
     const llama_hadamard * hdmd = nullptr;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
@@ -984,6 +1014,9 @@ public:
 
     int64_t max_nodes;
 
+    // number of MoE layers that used their static expert pack in this graph
+    int32_t n_moe_pack_used = 0;
+
 private:
     // keep a copy of the previous graph parameters
     // we will use this to determine whether the graph can be reused by comparing them with the new parameters
@@ -1058,6 +1091,7 @@ struct llm_graph_context {
 
     const llama_prec_policy * prec_policy;
 
+    const std::vector<llama_moe_pack_layer> * moe_packs;
     const llama_hadamard * hdmd;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
@@ -1158,6 +1192,13 @@ struct llm_graph_context {
          llm_ffn_op_type   type_op,
        llm_ffn_gate_type   type_gate,
                      int   il) const;
+
+    // llama-moe-trace diagnostic (cparams.moe_spec_router_k): the top k of this layer's router on
+    // its input before attention, normalized with the router's own RMS norm, named
+    // "ffn_moe_spec_topk-<il>". Nothing consumes it. Its nodes follow attn_norm (expanded first) so
+    // that a backend fusing the residual add with the next norm still sees them adjacent; extra
+    // nodes can still change other fusions and so the last bits of later results.
+    void build_moe_spec_router(ggml_tensor * attn_norm, ggml_tensor * inp, ggml_tensor * norm_w, ggml_tensor * gate_inp, int il);
 
     // build MoE FFN without bias tensors
     ggml_tensor * build_moe_ffn(

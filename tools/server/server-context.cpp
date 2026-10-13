@@ -17,6 +17,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "schema-decision.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -52,6 +53,9 @@ static common_speculative_output_limits server_output_limits(const common_params
     }
 
     auto result = common_speculative_get_output_limits(params.n_batch, params.n_parallel, n_max);
+
+    // /v1/decision reads one output row per branch sequence, all in one ubatch
+    result.total = std::min<int32_t>(params.n_batch, result.total + params.n_seq_decision);
 
     result.total   = std::max<int32_t>(1, result.total);
     result.per_seq = std::max<int32_t>(1, result.per_seq);
@@ -1204,6 +1208,10 @@ private:
 
     common_speculative_ptr spec;
 
+    // POST /v1/decision: created by the first request, on the sequences above the slots; it keeps
+    // raw pointers into ctx_tgt, so destroy() frees it first
+    std::unique_ptr<schema_decision::engine> schema_decision_engine;
+
     bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
@@ -1245,6 +1253,8 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        schema_decision_engine.reset();
+
         spec.reset();
         spec_init.reset();
 
@@ -2064,6 +2074,14 @@ private:
                 // clear slots one by one
                 break;
             }
+        }
+
+        // the decision engine keeps its static prefix between requests; give the cells back once
+        // no idle slot is left to purge (the next decision re-evaluates the prefix)
+        if (!res && schema_decision_engine && schema_decision_engine->has_cached_prefix()) {
+            SRV_WRN("%s", "purging the cached decision prefix\n");
+            schema_decision_engine->reset();
+            res = true;
         }
 
         return res;
@@ -3411,6 +3429,10 @@ private:
                     }
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_SCHEMA_DECISION:
+                {
+                    process_schema_decision(task);
+                } break;
             case SERVER_TASK_TYPE_SET_LORA:
                 {
                     auto new_loras = construct_lora_list(task.set_lora);
@@ -3420,6 +3442,10 @@ private:
                     }
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
                     params_base.lora_adapters = new_loras;
+                    // the cached decision prefix was computed under the old scales
+                    if (schema_decision_engine) {
+                        schema_decision_engine->reset();
+                    }
                     auto res = std::make_unique<server_task_result_apply_lora>();
                     res->id = task.id;
                     queue_results.send(std::move(res));
@@ -3427,6 +3453,62 @@ private:
         }
 
         return true;
+    }
+
+    // POST /v1/decision (tools/schema-decision): scores the whole request here on the task thread,
+    // on the sequences [n_slots, n_slots + n_seq_decision) that --decision-seqs reserves above the
+    // slots. The task loop runs it between slot decodes, never during one.
+    void process_schema_decision(server_task & task) {
+        if (!task.schema_decision) {
+            send_error(task, "missing decision request", ERROR_TYPE_SERVER);
+            return;
+        }
+        if (params_base.n_seq_decision < 3) {
+            send_error(task, "decisions are disabled: start the server with --decision-seqs N", ERROR_TYPE_NOT_SUPPORTED);
+            return;
+        }
+        if (!schema_decision_engine) {
+            auto eng = schema_decision::engine::create(ctx_tgt, (llama_seq_id) slots.size(), params_base.n_seq_decision);
+            if (!eng.ok()) {
+                send_error(task, eng.error, ERROR_TYPE_SERVER);
+                return;
+            }
+            schema_decision_engine = std::move(eng.value);
+        }
+
+        const auto cancel = task.schema_decision_cancel;
+        task.schema_decision->opt.should_abort = [cancel]() {
+            return cancel && cancel->load();
+        };
+        // the last slot batch may have left its per-request adapter scales and embedding mode on the
+        // context; embedding mode would make every decision token an output
+        common_set_adapter_lora(ctx_tgt, params_base.lora_adapters);
+        llama_set_embeddings(ctx_tgt, false);
+        auto out = schema_decision::run(*schema_decision_engine, chat_params.tmpls.get(), chat_params.use_jinja,
+                                        *task.schema_decision);
+        // idle slots keep their prompts in the shared cache: take their cells one slot at a time (a
+        // failed run has already dropped the engine's prefix, so this stops once no slot is left)
+        while (!out.ok() && out.code == schema_decision::error_code::no_memory && try_clear_idle_slots()) {
+            out = schema_decision::run(*schema_decision_engine, chat_params.tmpls.get(), chat_params.use_jinja,
+                                       *task.schema_decision);
+        }
+        if (!out.ok()) {
+            error_type type = ERROR_TYPE_SERVER;
+            switch (out.code) {
+                case schema_decision::error_code::invalid_request: type = ERROR_TYPE_INVALID_REQUEST; break;
+                case schema_decision::error_code::no_memory:       type = ERROR_TYPE_UNAVAILABLE;     break;
+                case schema_decision::error_code::cancelled:       type = ERROR_TYPE_UNAVAILABLE;     break;
+                default:                                           type = ERROR_TYPE_SERVER;          break;
+            }
+            send_error(task, out.error, type);
+            return;
+        }
+        auto res = std::make_unique<server_task_result_schema_decision>();
+        res->id              = task.id;
+        res->data            = out.value;
+        res->data["model"]   = model_name;
+        res->data["created"] = (int64_t) std::time(nullptr);
+        queue_results.send(std::move(res));
     }
 
     void iterate(std::vector<server_slot> & slots, std::function<void(server_slot &)> callback) {
@@ -6142,6 +6224,42 @@ void server_routes::init_routes() {
             top_n);
 
         res->ok(root);
+        return res;
+    };
+
+    this->post_schema_decision = [this](const server_http_req & req) {
+        auto res = create_response();
+        if (params.n_seq_decision < 3) {
+            res->error(format_error_response("decisions are disabled: start the server with --decision-seqs N", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+        const json body = json::parse(req.body);
+        auto parsed = schema_decision::parse_request(body);
+        if (!parsed.ok()) {
+            res->error(format_error_response(parsed.error, ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        auto cancel = std::make_shared<std::atomic<bool>>(false);
+        {
+            server_task task(SERVER_TASK_TYPE_SCHEMA_DECISION);
+            task.id                     = rd.get_new_id();
+            task.schema_decision        = std::make_shared<schema_decision::request>(std::move(parsed.value));
+            task.schema_decision_cancel = cancel;
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            cancel->store(true); // the client went away: stop at the next decode
+            return res;
+        }
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+        res->ok(result->to_json());
         return res;
     };
 

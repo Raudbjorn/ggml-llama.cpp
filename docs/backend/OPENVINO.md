@@ -744,6 +744,7 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
 - Multimodal features (audio/image/video) are a work in progress.
 - Limited Embedding and Reranking model support.
 - Llama.cpp tool coverage across CPU/GPU/NPU is not uniform.
+- MoE: `MUL_MAT_ID` and `ADD_ID` honor ggml's skip id `-1`. Ids that do not come straight from the router's `ARGSORT`/`TOP_K` (a [static expert pack](MOE-PACK.md)'s remap, for one) are masked and lowered to one GatherMatmul per slot, because the CPU plugin's GatherMatmul assumes distinct ids within a token row; router ids keep the single, fusable GatherMatmul.
 
 **Tool-specific**
 

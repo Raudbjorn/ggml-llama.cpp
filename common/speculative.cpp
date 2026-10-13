@@ -3377,6 +3377,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
 
     result.embedding    = false;
     result.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
+    result.n_seq_decision = 0; // /v1/decision runs on the target context only
 
     if (has_draft) {
         // default to global devices value

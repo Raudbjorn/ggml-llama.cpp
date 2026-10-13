@@ -87,6 +87,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ncffn, --n-cpu-ffn N` | keep the dense FFN weights of the first N layers in the CPU<br/>(dense models; for MoE expert weights use --n-cpu-moe)<br/>(env: LLAMA_ARG_N_CPU_FFN) |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
 | `-sm, --split-mode {none,layer,row,tensor}` | how to split the model across multiple GPUs, one of:<br/>- none: use one GPU only<br/>- layer (default): split layers and KV across GPUs (pipelined)<br/>- row: split weight across GPUs by rows (parallelized)<br/>- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)<br/>(env: LLAMA_ARG_SPLIT_MODE) |
+| `--cpu-tp` | with --split-mode tensor, add the CPU as the last tensor-parallel member: every split weight is<br/>divided by rows between the accelerators and the CPU. give the split with -ts (one value per<br/>accelerator, then the CPU) or size it with --cpu-tp-margin (EXPERIMENTAL)<br/>(env: LLAMA_ARG_CPU_TP) |
+| `--cpu-tp-margin MiB` | size the --cpu-tp split from the model's tensor bytes, giving each accelerator its free memory<br/>minus MiB and the CPU the rest; the margin must hold the KV cache and compute buffers (default: unset, use -ts)<br/>(env: LLAMA_ARG_CPU_TP_MARGIN) |
 | `-ts, --tensor-split N0,N1,N2,...` | fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1<br/>(env: LLAMA_ARG_TENSOR_SPLIT) |
 | `-mg, --main-gpu INDEX` | the GPU to use for the model (with split-mode = none), or for intermediate results and KV (with split-mode = row) (default: 0)<br/>(env: LLAMA_ARG_MAIN_GPU) |
 | `-fit, --fit [on\|off]` | whether to adjust unset arguments to fit in device memory ('on' or 'off', default: 'on')<br/>(env: LLAMA_ARG_FIT) |
@@ -94,6 +96,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-fitc, --fit-ctx N` | minimum ctx size that can be set by --fit option, default: 4096<br/>(env: LLAMA_ARG_FIT_CTX) |
 | `--check-tensors` | check model tensor data for invalid values (default: false) |
 | `--override-kv KEY=TYPE:VALUE,...` | advanced option to override model metadata by key. to specify multiple overrides, either use comma-separated values.<br/>types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false,tokenizer.ggml.add_eos_token=bool:false |
+| `--sched-async-cpu, --no-sched-async-cpu` | [EXPERIMENTAL] compute CPU graph splits on a worker thread, so that GPU splits that do not depend<br/>on them (the hot experts of --moe-pack-profile) run at the same time (default: disabled)<br/>(env: LLAMA_ARG_SCHED_ASYNC_CPU) |
 | `--op-offload, --no-op-offload` | whether to offload host tensor operations to device (default: true) |
 | `--lora FNAME` | path to LoRA adapter (use comma-separated values to load multiple adapters) |
 | `--lora-scaled FNAME:SCALE,...` | path to LoRA adapter with user defined scaling (format: FNAME:SCALE,...)<br/>note: use comma-separated values |
@@ -178,6 +181,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spm-infill` | use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: disabled) |
 | `--pooling {none,mean,cls,last,rank}` | pooling type for embeddings, use model default if unspecified<br/>(env: LLAMA_ARG_POOLING) |
 | `-np, --parallel N` | number of server slots (default: -1, -1 = auto)<br/>(env: LLAMA_ARG_N_PARALLEL) |
+| `--decision-seqs N` | sequences for schema decisions (llama-server: POST /v1/decision, above the slots, with a unified KV cache): one caches the instructions, one per context in flight, the rest score values (default: 0 = disabled, minimum 3, maximum 256)<br/>(env: LLAMA_ARG_DECISION_SEQS) |
 | `-cb, --cont-batching, -nocb, --no-cont-batching` | whether to enable continuous batching (a.k.a dynamic batching) (default: enabled)<br/>(env: LLAMA_ARG_CONT_BATCHING) |
 | `-mm, --mmproj FILE` | path to a multimodal projector file. see tools/mtmd/README.md<br/>note: if -hf is used, this argument can be omitted<br/>(env: LLAMA_ARG_MMPROJ) |
 | `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
@@ -1786,6 +1790,52 @@ curl http://localhost:9931/v1/messages/count_tokens \
 ```
 
 ## TypeSafe-compatible API Endpoints
+
+### POST `/v1/decision`: Constrained decisions for a finite JSON schema
+
+Also served as `/decision`. Answers a finite JSON schema (enum strings, booleans, bounded
+integers, numbers on a grid) about 1-256 contexts with any generative model, by scoring each
+field's allowed values on sequences forked from the context instead of generating. The JSON is
+assembled by code, so it always matches the schema, and every field returns a constrained-decoding
+probability. Fields are independent of each other.
+
+Enable it with `--decision-seqs N` (N >= 3): it reserves `N` sequences above the slots (one caches
+the instructions and field catalogue, one per context in flight, the rest score values) and turns
+on the unified KV cache. The decision shares that KV cache with the slots: its cached prefix keeps
+its cells between requests, and a request needs room for its contexts and scored rows on top.
+A slot that runs out of cells drops the cached prefix once no idle slot is left to purge; a
+decision that runs out of cells purges idle slots, one at a time, before it returns 503.
+Decisions score with the adapter scales the server started with, whatever `lora` a completion
+asked for.
+`--parallel` plus `--decision-seqs` may not exceed 256.
+
+A request runs on the server's task thread between slot decodes, so a large one delays the slots
+for its duration. A client that disconnects stops it at the next decode.
+
+```shell
+curl http://127.0.0.1:8080/v1/decision -H "Content-Type: application/json" -d '{
+  "instructions": "Answer each question about this support request.",
+  "schema": {
+    "category": {"type": "enum", "choices": ["billing", "technical", "other"], "description": "Request type."},
+    "urgent":   {"type": "boolean", "description": "Does it need urgent handling?"}
+  },
+  "contexts": ["I was charged twice and need this fixed today."]
+}'
+```
+
+The request also takes `mode` (`auto`, `tree` or `greedy`), `tree_max` (0-255) and `cache_prompt`.
+The schema may also be a JSON Schema object with `properties`. The response holds one result per
+context, in order, with the `decision` object and per-field `value`, `probability`,
+`scored_nodes` and `tree`, plus `usage` and `timings`. See
+[tools/schema-decision/README.md](../schema-decision/README.md) for the schema keys, what the
+probabilities mean, the limits, and the CLI `llama-schema-decision`, which runs the same engine.
+
+Invalid requests return 400, a server started without `--decision-seqs` returns 501, and a request
+that runs out of KV space returns 503.
+
+`/v1/decision` and [`/v1/systemone`](#post-v1systemone-typesafe-compatible-system-one-api) are
+different APIs: `/v1/systemone` serves native decision-model GGUFs only and returns 501 for
+ordinary LLMs; `/v1/decision` prompts an ordinary LLM with the schema and scores its tokens.
 
 ### POST `/v1/systemone`: TypeSafe-compatible System One API
 

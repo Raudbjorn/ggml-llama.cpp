@@ -85,6 +85,10 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
     }
 }
 
+// expert counts of the generated MoE fixtures (--n-expert / --n-expert-used)
+static uint32_t g_n_expert      = 0; // 0: 2, or 64 where host_experts_test asks for it
+static uint32_t g_n_expert_used = 2;
+
 static void usage(char ** argv) {
     LOG("Usage: %s [options]\n\n", argv[0]);
     LOG("Options:\n");
@@ -92,6 +96,8 @@ static void usage(char ** argv) {
     LOG("  -s, --seed <seed>        Set the random seed for tensor initialization and token generation\n");
     LOG("  -d, --stdev <stdev>      Set the standard deviation of the tensor initialization distribution (default: 0.1f)\n");
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
+    LOG("  --n-expert <N>           Experts per MoE layer in the generated models (default: 2, 64 for deepseek2)\n");
+    LOG("  --n-expert-used <N>      Experts routed per token in the generated models (default: 2)\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
     LOG("  -h, --help               Show this help message\n\n");
@@ -437,9 +443,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);  // distinct from n_ff so a saver key-clobber surfaces on reload
         ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
-        // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
-        ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : 2));
-        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
+        // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them;
+        // --n-expert sets the count explicitly
+        const uint32_t n_expert = g_n_expert ? g_n_expert : uint32_t(host_experts_test(arch) ? 64 : 2);
+        if (g_n_expert_used > n_expert) {
+            throw std::runtime_error(string_format("--n-expert-used %u exceeds the %u experts of the %s fixture; set --n-expert",
+                                            g_n_expert_used, n_expert, llm_arch_name(arch)));
+        }
+        ms.add_kv(LLM_KV_EXPERT_COUNT,               n_expert);
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          g_n_expert_used);
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
         ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,
                 arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DFLASH ? uint32_t(4) : uint32_t(2)); // sqrtsoftplus : sigmoid
@@ -1172,6 +1184,18 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--n-expert") == 0 || strcmp(argv[i], "--n-expert-used") == 0) {
+            const bool used = strcmp(argv[i], "--n-expert-used") == 0;
+            if (i + 1 >= argc) {
+                usage(argv);
+                return 1;
+            }
+            const int n = atoi(argv[++i]);
+            if (n < 1 || n > 64) {
+                LOG_ERR("%s: %s must be in 1..64\n", __func__, used ? "--n-expert-used" : "--n-expert");
+                return 1;
+            }
+            (used ? g_n_expert_used : g_n_expert) = (uint32_t) n;
         } else if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
             if (i + 1 < argc) {
                 out = argv[++i];
@@ -1200,6 +1224,11 @@ int main(int argc, char ** argv) {
     }
     if (stdev <= 0.0f) {
         LOG_ERR("%s: stdev must be > 0\n", __func__);
+        return 1;
+    }
+    // the default count depends on the arch (host_experts_test), so get_gguf_ctx checks it
+    if (g_n_expert && g_n_expert_used > g_n_expert) {
+        LOG_ERR("%s: --n-expert-used must not exceed --n-expert\n", __func__);
         return 1;
     }
     LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);

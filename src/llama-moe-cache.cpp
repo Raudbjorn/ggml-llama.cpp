@@ -244,6 +244,10 @@ struct llama_moe_cache::impl {
             if (experts.empty() || !std::all_of(experts.begin(), experts.end(), llama_moe_cache_is_host_weight)) {
                 continue;
             }
+            // a static expert pack serves the layer, the graph gives it no cache slots
+            if (il < model.moe_packs.size() && model.moe_packs[il].down) {
+                continue;
+            }
             const auto it_dev = std::find_if(devices.begin(), devices.end(), [&](const device & d) { return ggml_backend_get_device(d.backend) == model.dev_layer(il); });
             if (it_dev == devices.end()) {
                 continue;

@@ -152,6 +152,10 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
         if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
             return false;
         }
+        // the kernels broadcast one packed 2D weight over the batches of src1
+        if (src0->ne[2] != 1 || src0->ne[3] != 1) {
+            return false;
+        }
         if (!src0->buffer || src0->buffer->buft != ggml_backend_amx_buffer_type()) {
             return false;
         }

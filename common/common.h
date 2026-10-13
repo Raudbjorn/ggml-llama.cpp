@@ -111,6 +111,8 @@ enum llama_example {
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
     LLAMA_EXAMPLE_TOKENIZE,
+    LLAMA_EXAMPLE_MOE_TRACE,
+    LLAMA_EXAMPLE_SCHEMA_DECISION,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -501,6 +503,7 @@ struct common_params {
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_parallel            =     1; // number of parallel sequences to decode
+    int32_t n_seq_decision        =     0; // sequences for schema decisions (0 = disabled)
     bool    n_parallel_explicit   = false; // true if -np/--parallel was passed on the command line
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t n_outputs_max         =     0; // max outputs in a batch (0 = n_batch)
@@ -625,6 +628,7 @@ struct common_params {
     bool ctx_shift         = false; // context shift on infinite text generation
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
+    bool sched_async_cpu   = false; // [EXPERIMENTAL] CPU graph splits on a scheduler worker thread
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool verbose_prompt    = false; // print prompt tokens before generation
@@ -635,6 +639,19 @@ struct common_params {
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     common_moe_cache_params moe_cache;
+
+    // static MoE expert packs (exclusive with an explicit --moe-cache other than off)
+    std::string moe_pack_profile; // llama-moe-trace CSV that selects the packed experts
+    int32_t     moe_pack_slots = 0; // packed experts per layer, 0 = disabled
+
+    // llama-moe-trace research diagnostics
+    int32_t     moe_spec_router_k  = 0;  // --spec-router: also trace the pre-attention router's top K
+    std::string moe_trace_spec_out = "moe-trace-spec.csv"; // --spec-out
+    std::string moe_trace_hidden_out;    // --hidden-out: binary hidden-state dump, empty = off
+    int32_t     moe_trace_hidden_n = 64; // --hidden-n: decode steps captured in it
+
+    bool    cpu_tp        = false; // the CPU as the last tensor-parallel member (--split-mode tensor)
+    int32_t cpu_tp_margin = -1;    // MiB left free per accelerator when sizing the split (-1 = -ts gives it)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
     bool load_mtp          = false; // load MTP/NextN layers
 
@@ -804,6 +821,9 @@ struct common_params {
     bool tokenize_stdin      = false; // if true, read the prompt from stdin
     bool tokenize_no_bos     = false; // if true, do not add the BOS token
     bool tokenize_show_count = false; // if true, print the total token count
+
+    // schema decision params
+    std::string decision_request; // request JSON for llama-schema-decision, "-" = stdin
 
     // common params
     std::string out_file; // output filename for all example programs
@@ -1057,6 +1077,17 @@ private:
 using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
+
+// --cpu-tp: appends the CPU to the tensor-parallel devices and checks the split; at parse time.
+// Returns an error, empty on success.
+std::string common_cpu_tp_prepare(common_params & params);
+
+// --cpu-tp with --cpu-tp-margin: sizes the split from the model's tensor bytes and the free memory
+// of each accelerator; before the model loads. Returns an error, empty on success.
+std::string common_cpu_tp_size_split(common_params & params);
+
+// bytes of tensor data over every file of a (split) GGUF, named by its first file; 0 with an error on failure
+size_t common_model_tensor_bytes(const std::string & path, std::string & error);
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);

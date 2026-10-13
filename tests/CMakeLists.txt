@@ -529,6 +529,29 @@ if (LLAMA_TEST_BASH AND TARGET test-llama-archs AND TARGET test-export-graph-ops
     )
 endif()
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_Interpreter_FOUND)
+    add_test(NAME test-moe-trace-simulate
+        COMMAND ${Python3_EXECUTABLE} -m unittest test_moe_trace_simulate
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(test-moe-trace-simulate PROPERTIES LABELS "python" TIMEOUT 60)
+endif()
+
+if (LLAMA_TEST_BASH AND TARGET test-llama-archs)
+    llama_build(test-moe-pack.cpp)
+    llama_test_cmd(
+        ${LLAMA_TEST_BASH}
+        NAME test-moe-pack
+        ARGS
+            ${CMAKE_CURRENT_SOURCE_DIR}/test-moe-pack.sh
+            $<TARGET_FILE:test-llama-archs>
+            $<TARGET_FILE:test-moe-pack>
+            # tools/ is configured after tests/, so the target is checked at generate time
+            $<$<TARGET_EXISTS:llama-bench>:$<TARGET_FILE:llama-bench>>
+    )
+    set_tests_properties(test-moe-pack PROPERTIES TIMEOUT 300)
+endif()
+
 # Fork-specific TurboQuant and SYCL tests.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(P45A_DEPS bash jq timeout sha256sum ldd fuser git realpath stat grep hostname

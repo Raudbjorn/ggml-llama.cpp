@@ -11,6 +11,7 @@
 #include <openvino/op/gather.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
+#include <openvino/op/unsqueeze.hpp>
 
 namespace ov {
 namespace frontend {
@@ -52,13 +53,21 @@ OutputVector translate_add_id(const NodeContext & context) {
         ids = std::make_shared<ov::op::v0::Convert>(ids, ov::element::i32);
     }
 
-    // NOTE: ggml lets an id of -1 mark a skipped slot (the row passes through unchanged, see
-    // ggml_add_id in ggml.h). Gather reads ids verbatim and OpenVINO treats a negative index as
-    // counting from the end, so a -1 id would add the last bias row instead of nothing. No model
-    // in this tree emits -1 ids today; this backend does not implement the skip semantics (same
-    // gap as its MUL_MAT_ID converter and as upstream PR #26631).
+    // ggml lets an id of -1 mark a skipped slot (the row passes through unchanged, see ggml_add_id
+    // in ggml.h). Router ids never hold -1; other ids get the skip mask (see mask_skip_ids).
+    ov::Output<ov::Node> skip;
+    if (!context.is_input_sorted_ids(2)) {
+        auto masked = mask_skip_ids(ids);
+        ids  = masked.ids;
+        skip = masked.skip;
+    }
     auto gather_axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
     ov::Output<ov::Node> selected_bias = std::make_shared<ov::op::v8::Gather>(bias, ids, gather_axis);
+    if (skip.get_node()) {
+        // selected_bias is [n_token, n_used, n_embd]; skip is [n_token, n_used]
+        auto axis = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {2});
+        selected_bias = zero_skipped_rows(selected_bias, std::make_shared<ov::op::v0::Unsqueeze>(skip, axis));
+    }
     selected_bias = std::make_shared<ov::op::v1::Reshape>(
         selected_bias, std::make_shared<ov::op::v3::ShapeOf>(input, ov::element::i64), false);
 

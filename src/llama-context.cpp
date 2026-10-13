@@ -65,6 +65,12 @@ static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_b
 // llama_context
 //
 
+// the InnerQ capture opt-in: LLAMA_ENABLE_INNERQ set, not empty and not 0
+static bool llama_innerq_env_enabled() {
+    const char * env = getenv("LLAMA_ENABLE_INNERQ");
+    return env != nullptr && env[0] != '\0' && env[0] != '0';
+}
+
 // check that each folded weight in the graph gets its Hadamard transform, and each latent lookup gets the inverse
 // without this check, an arch that skips the transform helpers loads and computes wrong results
 static void llama_verify_hadamard_graph(
@@ -516,6 +522,8 @@ llama_context::llama_context(
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size = params.moe_cache_size;
     cparams.prefetch_experts_slots = params.prefetch_experts_slots;
+    cparams.sched_async_cpu = params.sched_async_cpu;
+    cparams.moe_spec_router_k = params.moe_spec_router_k > 0 ? (uint32_t) params.moe_spec_router_k : 0;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -884,6 +892,11 @@ static bool llama_model_has_cacheable_moe_weights(
         LLAMA_LOG_INFO("%s: MoE cache disabled (mode=off)\n", __func__);
         return false;
     }
+    if (model.n_moe_pack_layers > 0) {
+        // one residency mechanism per run: shared ownership and budgets are not defined
+        LLAMA_LOG_INFO("%s: MoE cache disabled (static expert packs are active)\n", __func__);
+        return false;
+    }
     if (!api.query_config || !api.query_device || !api.query_shape) {
         LLAMA_LOG_INFO("%s: MoE cache disabled (no provider registered)\n", __func__);
         return false;
@@ -992,6 +1005,20 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
     ggml_backend_sched_set_moe_cache(sched.get(), moe_cache_mode, cparams.moe_cache_budget_mib);
     ggml_backend_sched_set_prefetch_experts_slots(
             sched.get(), cparams.moe_cache_size > 0 ? 0 : cparams.prefetch_experts_slots);
+
+    // cparams.sched_async_cpu is what runs (llama_get_sched_async_cpu): the graph pins the expert
+    // merge only for the worker, and an eval callback keeps every split off it
+    if (cparams.sched_async_cpu && (cparams.cb_eval || llama_innerq_env_enabled())) {
+        LLAMA_LOG_WARN("%s: sched_async_cpu ignored: an eval callback runs every split in order\n", __func__);
+        cparams.sched_async_cpu = false;
+    }
+    if (cparams.sched_async_cpu && !ggml_backend_sched_set_async_cpu(sched.get(), true)) {
+        LLAMA_LOG_WARN("%s: sched_async_cpu ignored: the scheduler keeps CPU splits synchronous\n", __func__);
+        cparams.sched_async_cpu = false;
+    }
+    if (cparams.sched_async_cpu) {
+        LLAMA_LOG_INFO("%s: CPU graph splits run on a scheduler worker thread (experimental)\n", __func__);
+    }
 }
 
 void llama_context::sched_reserve() {
@@ -1126,6 +1153,16 @@ void llama_context::sched_reserve() {
         n_nodes_pp         = ggml_graph_n_nodes(gf);
         n_inputs_pp        = get_gf_res_reserve()->inputs.size();
         n_input_tensors_pp = this->n_input_tensors;
+
+        if (model.n_moe_pack_layers > 0) {
+            const int32_t n_used = get_gf_res_reserve()->n_moe_pack_used;
+            if (n_used < model.n_moe_pack_layers) {
+                LLAMA_LOG_WARN("%s: the graph uses %d of %d static expert packs; -lv 5 logs why a layer does not\n",
+                        __func__, n_used, model.n_moe_pack_layers);
+            } else {
+                LLAMA_LOG_INFO("%s: the graph uses all %d static expert packs\n", __func__, n_used);
+            }
+        }
     }
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
@@ -2028,6 +2065,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch &     ubatch
 
         gf_res_prev_active = res;
     }
+    n_moe_pack_used_min = n_moe_pack_used_min < 0 ? res->n_moe_pack_used : std::min(n_moe_pack_used_min, res->n_moe_pack_used);
 
     // InnerQ capture enablement: route through the same env-var
     // semantics as ggml_innerq_state_decide so the contract stays in
@@ -2035,10 +2073,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch &     ubatch
     // model_fp/kv_quant/head_dim checks); this is just the env-var
     // half. Empty/0 values are treated as disabled, matching
     // ggml_innerq_state_decide.
-    const bool innerq_env_enabled = []() {
-        const char * env = getenv("LLAMA_ENABLE_INNERQ");
-        return env != nullptr && env[0] != '\0' && env[0] != '0';
-    }();
+    const bool innerq_env_enabled = llama_innerq_env_enabled();
     turbo_innerq_eval_capture innerq_cap = {
         /* .mctx                   = */ mctx,
         /* .user_cb                = */ cparams.cb_eval,
@@ -3168,6 +3203,9 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         }
     }
 
+    // a packed MoE layer adds the id remap and a second gate/up/down chain
+    res += 16u * (uint32_t) model.n_moe_pack_layers;
+
     if (model.arch == LLM_ARCH_QWEN4EXP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
         // Only actual chain rows unroll a projection, block, head and sampler.
         // Retain the high watermark across sequential/chain mode switches.
@@ -3348,6 +3386,7 @@ llm_graph_params llama_context::graph_params(llm_graph_result *             res,
         /*.cross       =*/ &cross,
         /*.moe_cache   =*/ moe_cache.get(),
         /*.prec_policy =*/ &model.prec_policy,
+        /*.moe_packs   =*/ model.moe_packs.empty() ? nullptr : &model.moe_packs,
         /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
@@ -4693,7 +4732,9 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.sched_async_cpu             =*/ false,
         /*.prefetch_experts_slots      =*/ 0,
+        /*.moe_spec_router_k           =*/ 0,
         /*.samplers                    =*/ nullptr,
         /*.n_samplers                  =*/ 0,
         /*.ctx_other                   =*/ nullptr,
@@ -5040,6 +5081,20 @@ enum ggml_type llama_get_kv_cache_type_v(const struct llama_context * ctx) {
     }
 
     return ctx->get_kv_type_v();
+}
+
+bool llama_get_sched_async_cpu(const struct llama_context * ctx) {
+    return ctx && ctx->get_cparams().sched_async_cpu;
+}
+
+int32_t llama_context::take_n_moe_pack_used() {
+    const int32_t n = n_moe_pack_used_min;
+    n_moe_pack_used_min = -1;
+    return n;
+}
+
+int32_t llama_take_n_moe_pack_used(struct llama_context * ctx) {
+    return ctx ? ctx->take_n_moe_pack_used() : -1;
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {

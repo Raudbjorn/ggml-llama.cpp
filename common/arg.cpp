@@ -55,6 +55,9 @@
 #endif
 #endif
 
+// a context holds at most 256 sequences (LLAMA_MAX_SEQ in src/llama-cparams.h)
+static constexpr int COMMON_MAX_SEQ_DECISION = 256;
+
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 using json = common_json;
@@ -354,6 +357,17 @@ static bool parse_bool_value(const std::string & value) {
     } else {
         throw std::invalid_argument("invalid boolean value");
     }
+}
+
+// a whole decimal integer in [lo, hi]; std::stoi would accept "12abc"
+static int32_t parse_bounded_int(const std::string & value, long long lo, long long hi) {
+    char * end = nullptr;
+    errno = 0;
+    const long long n = strtoll(value.c_str(), &end, 10);
+    if (errno != 0 || end == value.c_str() || *end != '\0' || n < lo || n > hi) {
+        throw std::invalid_argument(string_format("expected an integer in %lld..%lld", lo, hi));
+    }
+    return (int32_t) n;
 }
 
 [[noreturn]] static void arg_removed(const std::string & msg) {
@@ -960,6 +974,18 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     }
 
+    if (params.moe_pack_profile.empty() != (params.moe_pack_slots == 0)) {
+        throw std::invalid_argument("error: --moe-pack-profile and --moe-pack-slots must be given together\n");
+    }
+    if (!params.moe_pack_profile.empty() && params.moe_cache.mode_explicit &&
+        params.moe_cache.mode != COMMON_MOE_CACHE_MODE_OFF) {
+        throw std::invalid_argument("error: --moe-pack-profile and --moe-cache are mutually exclusive\n");
+    }
+
+    if (const std::string err = common_cpu_tp_prepare(params); !err.empty()) {
+        throw std::invalid_argument("error: " + err + "\n");
+    }
+
     if (params.moe_cache.mode == COMMON_MOE_CACHE_MODE_ON && !params.no_extra_bufts) {
         LOG_INF("explicit MoE cache mode disables weight repacking\n");
         params.no_extra_bufts = true;
@@ -1520,6 +1546,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         params.n_parallel = -1;     // auto by default
     } else if (ex == LLAMA_EXAMPLE_TOKENIZE) {
         params.parse_special = true; // parse special tokens by default, like the old tokenize tool
+    } else if (ex == LLAMA_EXAMPLE_MOE_TRACE) {
+        params.out_file  = "moe-trace.csv";
+        params.n_predict = 256;
+    } else if (ex == LLAMA_EXAMPLE_SCHEMA_DECISION) {
+        params.n_seq_decision = 16;
+        params.kv_unified     = true; // branches share the trunk's cells
     } else if (ex == LLAMA_EXAMPLE_TTS) {
         params.out_file = "output.wav";
         params.sampling.penalty_repeat = 1.05f;
@@ -2685,6 +2717,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         ).set_env("LLAMA_ARG_N_PARALLEL"));
     }
     add_opt(common_arg(
+        {"--decision-seqs"}, "N",
+        string_format("sequences for schema decisions (llama-server: POST /v1/decision, above the slots, with a unified KV cache): "
+                      "one caches the instructions, one per context in flight, the rest score values "
+                      "(default: %d%s, minimum 3, maximum %d)", params.n_seq_decision,
+                      params.n_seq_decision == 0 ? " = disabled" : "", COMMON_MAX_SEQ_DECISION),
+        [](common_params & params, int value) {
+            if (value < 3 || value > COMMON_MAX_SEQ_DECISION) {
+                throw std::invalid_argument(string_format("--decision-seqs must be 3-%d", COMMON_MAX_SEQ_DECISION));
+            }
+            params.n_seq_decision = value;
+        }
+    ).set_env("LLAMA_ARG_DECISION_SEQS").set_examples({LLAMA_EXAMPLE_SCHEMA_DECISION, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--decision-request"}, "FNAME",
+        "decision request: a /v1/decision body as JSON, - reads stdin",
+        [](common_params & params, const std::string & value) {
+            params.decision_request = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SCHEMA_DECISION}));
+    add_opt(common_arg(
         {"-ns", "--sequences"}, "N",
         string_format("number of sequences to decode (default: %d)", params.n_sequences),
         [](common_params & params, int value) {
@@ -2970,6 +3022,68 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_MOE_CACHE"));
+    add_opt(common_arg(
+        {"--moe-pack-profile"}, "FNAME",
+        "llama-moe-trace CSV whose decode routing selects the experts of every CPU-resident MoE layer "
+        "to keep resident on the GPU that runs the layer (static expert pack; requires --moe-pack-slots; "
+        "exclusive with --moe-cache)",
+        [](common_params & params, const std::string & value) {
+            if (value.empty()) {
+                throw std::invalid_argument("expected a file name");
+            }
+            params.moe_pack_profile = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_PACK_PROFILE"));
+    add_opt(common_arg(
+        {"--spec-router"}, "K",
+        "also trace this many experts per layer from the router evaluated on the layer input before attention "
+        "(qwen3moe, qwen35moe), written to --spec-out, with the recall of the routed experts in the log; "
+        "1..4096 and at most the model's expert count, else the trace fails (default: 0 = off)",
+        [](common_params & params, const std::string & value) {
+            params.moe_spec_router_k = parse_bounded_int(value, 0, 4096);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MOE_TRACE}));
+    add_opt(common_arg(
+        {"--spec-out"}, "FNAME",
+        string_format("trace file of the --spec-router ids, same format as -o (default: '%s')", params.moe_trace_spec_out.c_str()),
+        [](common_params & params, const std::string & value) {
+            if (value.empty()) {
+                throw std::invalid_argument("expected a file name");
+            }
+            params.moe_trace_spec_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MOE_TRACE}));
+    add_opt(common_arg(
+        {"--hidden-out"}, "FNAME",
+        "also write the hidden states of the first --hidden-n decode steps (layer output, residual after "
+        "attention, router input) to a binary file with a text header (default: off)",
+        [](common_params & params, const std::string & value) {
+            if (value.empty()) {
+                throw std::invalid_argument("expected a file name");
+            }
+            params.moe_trace_hidden_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MOE_TRACE}));
+    add_opt(common_arg(
+        {"--hidden-n"}, "N",
+        string_format("decode steps captured by --hidden-out, 1..65536 (default: %d)", params.moe_trace_hidden_n),
+        [](common_params & params, const std::string & value) {
+            params.moe_trace_hidden_n = parse_bounded_int(value, 1, 65536);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MOE_TRACE}));
+    add_opt(common_arg(
+        {"--moe-pack-slots"}, "N",
+        "experts per layer in the static expert pack, 1..4096 (default: 0 = disabled; requires --moe-pack-profile)",
+        [](common_params & params, const std::string & value) {
+            char * end = nullptr;
+            errno = 0;
+            const long long n = strtoll(value.c_str(), &end, 10);
+            if (errno != 0 || end == value.c_str() || *end != '\0' || n < 0 || n > 4096) {
+                throw std::invalid_argument("expected an integer in 0..4096");
+            }
+            params.moe_pack_slots = (int32_t) n;
+        }
+    ).set_env("LLAMA_ARG_MOE_PACK_SLOTS"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
@@ -3013,6 +3127,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_SPLIT_MODE"));
+    add_opt(common_arg(
+        {"--cpu-tp"},
+        "with --split-mode tensor, add the CPU as the last tensor-parallel member: every split weight is\n"
+        "divided by rows between the accelerators and the CPU. give the split with -ts (one value per\n"
+        "accelerator, then the CPU) or size it with --cpu-tp-margin (EXPERIMENTAL)",
+        [](common_params & params) {
+            params.cpu_tp = true;
+        }
+    ).set_env("LLAMA_ARG_CPU_TP"));
+    add_opt(common_arg(
+        {"--cpu-tp-margin"}, "MiB",
+        "size the --cpu-tp split from the model's tensor bytes, giving each accelerator its free memory\n"
+        "minus MiB and the CPU the rest; the margin must hold the KV cache and compute buffers (default: unset, use -ts)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("--cpu-tp-margin must be >= 0");
+            }
+            params.cpu_tp_margin = value;
+        }
+    ).set_env("LLAMA_ARG_CPU_TP_MARGIN"));
     add_opt(common_arg(
         {"-ts", "--tensor-split"}, "N0,N1,N2,...",
         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1",
@@ -3129,6 +3263,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ));
+    add_opt(common_arg(
+        {"--sched-async-cpu"},
+        {"--no-sched-async-cpu"},
+        string_format("[EXPERIMENTAL] compute CPU graph splits on a worker thread, so that GPU splits that do not "
+                      "depend on them (the hot experts of --moe-pack-profile) run at the same time (default: %s)",
+                      params.sched_async_cpu ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.sched_async_cpu = value;
+        }
+    ).set_env("LLAMA_ARG_SCHED_ASYNC_CPU"));
     add_opt(common_arg(
         {"--op-offload"},
         {"--no-op-offload"},
@@ -3335,7 +3479,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.out_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE,
-                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS, LLAMA_EXAMPLE_CLI}));
+                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MOE_TRACE}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -3896,7 +4040,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, bool value) {
             params.use_jinja = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_SCHEMA_DECISION}).set_env("LLAMA_ARG_JINJA"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
@@ -3979,7 +4123,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_SCHEMA_DECISION}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
     add_opt(common_arg(
         {"--chat-template-file"}, "JINJA_TEMPLATE_FILE",
         string_format(
@@ -3991,7 +4135,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = read_file(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_SCHEMA_DECISION}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
     add_opt(common_arg(
         {"--skip-chat-parsing"},
         {"--no-skip-chat-parsing"},

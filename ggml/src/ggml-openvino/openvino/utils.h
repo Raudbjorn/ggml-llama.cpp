@@ -55,6 +55,20 @@ std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::Node> & node,
 
 OutputVector rename_outputs_with_suffix(const OutputVector & outputs, const std::string & suffix);
 
+// ggml's skip id for MUL_MAT_ID / ADD_ID: a slot whose id is -1 yields a zero row (MUL_MAT_ID) or
+// adds nothing (ADD_ID). Gather reads a negative index from the end, so the id is replaced by 0
+// before the lookup and the looked-up row is selected to zero afterwards (a select, so a
+// non-finite row of expert 0 cannot leak through). Only exactly -1 is a skip.
+struct skip_ids {
+    ov::Output<ov::Node> ids;  // ids with -1 replaced by 0
+    ov::Output<ov::Node> skip; // boolean, true where the id was -1
+};
+
+skip_ids mask_skip_ids(const ov::Output<ov::Node> & ids);
+
+// zero the rows of value where skip_rows (broadcast against value) is true
+ov::Output<ov::Node> zero_skipped_rows(const ov::Output<ov::Node> & value, const ov::Output<ov::Node> & skip_rows);
+
 std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
                                                            std::shared_ptr<ov::Node> inp_pos,
                                                            std::shared_ptr<ov::Node> rope_freqs_weight = nullptr,

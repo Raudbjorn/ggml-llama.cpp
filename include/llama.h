@@ -359,6 +359,12 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // static MoE expert pack: a llama-moe-trace CSV whose decode rows select, for every
+        // layer with CPU-resident experts, the moe_pack_slots most routed experts to keep
+        // resident on the device that runs the layer (NULL or moe_pack_slots <= 0: disabled)
+        const char * moe_pack_profile;
+        int32_t      moe_pack_slots;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool check_tensors;   // validate model tensor data
@@ -430,6 +436,8 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool sched_async_cpu; // [EXPERIMENTAL] compute CPU graph splits on a worker thread so that independent
+                              // GPU splits (static expert packs) overlap them; see ggml_backend_sched_set_async_cpu
 
         // mindcontrol-port of --prefetch-experts-slots: MoE expert H2D staging slots.
         // 0 = off (no memory overhead); >=2 enables full-tensor lookahead prefetch of
@@ -438,6 +446,13 @@ extern "C" {
         // expert tensor (plus the same in pinned host memory for mmap-backed weights). Needs a
         // backend with a private stream (SYCL on Level Zero v1); elsewhere it stays off.
         int prefetch_experts_slots;  // set via llama_context_default_params() / llama_context_from_params
+
+        // [EXPERIMENTAL] diagnostic for llama-moe-trace: where the architecture supports it (qwen3moe,
+        // qwen35moe), every MoE layer also evaluates its router on the layer input before attention and
+        // exposes the top k ids as "ffn_moe_spec_topk-<il>" to the eval callback. Nothing consumes them,
+        // but the extra nodes can change backend fusion and so the last bits of later results.
+        // 0 = off; capped at the layer's expert count.
+        int32_t moe_spec_router_k;
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -632,6 +647,11 @@ extern "C" {
     // can legitimately hold different effective types (e.g. DSV4's raw/CSA/HCA/indexer caches).
     LLAMA_API enum ggml_type llama_get_kv_cache_type_k(const struct llama_context * ctx);
     LLAMA_API enum ggml_type llama_get_kv_cache_type_v(const struct llama_context * ctx);
+
+    // [EXPERIMENTAL] whether CPU graph splits run on the scheduler's worker thread: the requested
+    // sched_async_cpu, or false when the context keeps them synchronous (an eval callback,
+    // LLAMA_ENABLE_INNERQ, a MoE cache provider session, or a worker that did not start)
+    LLAMA_API bool llama_get_sched_async_cpu(const struct llama_context * ctx);
 
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);

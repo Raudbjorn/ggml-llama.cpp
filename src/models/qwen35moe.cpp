@@ -186,6 +186,8 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
         cb(cur, "attn_norm", il);
 
         ggml_build_forward_expand(gf, cur);
+        // attn_post_norm is this architecture's router input norm
+        build_moe_spec_router(cur, inpL, model.layers[il].attn_post_norm, model.layers[il].ffn_gate_inp, il);
 
         // Determine layer type and build appropriate attention mechanism
         if (hparams.is_recr(il)) {
