@@ -161,6 +161,7 @@ static void test_schema() {
     expect_schema_error("pattern", R"({"type": "object", "properties": {"s": {"type": "string", "enum": ["a"], "pattern": "a"}}})", "pattern");
     expect_schema_error("anyOf at the top", R"({"type": "object", "properties": {"b": {"type": "boolean"}}, "anyOf": []})", "anyOf");
     expect_schema_error("integer step", R"({"n": {"type": "integer", "minimum": 0, "maximum": 4, "step": 2, "description": "d"}})", "no step");
+    expect_schema_error("aggregate and x-aggregate", R"({"n": {"type": "integer", "minimum": 0, "maximum": 3, "aggregate": "mode", "x-aggregate": "mean", "description": "d"}})", "not both");
     expect_schema_error("mean of an enum", R"({"e": {"type": "enum", "choices": ["a", "b"], "aggregate": "mean", "description": "d"}})", "aggregate");
     expect_schema_error("missing description", R"({"b": {"type": "boolean"}})", "description");
     expect_schema_error("33 fields", [] {

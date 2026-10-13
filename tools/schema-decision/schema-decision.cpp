@@ -1195,6 +1195,10 @@ outcome<field_spec> make_field(const std::string & name, const std::string & typ
         }
     }
     std::string agg = "mode";
+    // two names for one setting; both would leave one of them unchecked
+    if (spec.contains("aggregate") && spec.contains("x-aggregate")) {
+        return bad("give the aggregate as \"aggregate\" or as \"x-aggregate\", not both");
+    }
     for (const char * key : { "aggregate", "x-aggregate" }) {
         if (spec.contains(key)) {
             if (!spec.at(key).is_string()) {
