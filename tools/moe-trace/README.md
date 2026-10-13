@@ -20,7 +20,8 @@ tools/moe-trace/simulate.py eval.csv --profile work.csv --budgets 0.125,0.25
 
 Lines starting with `#` carry provenance: tool version, a per-run `session`
 id, model path/description/size, architecture, `n_layer`, `n_expert`,
-`n_expert_used`, prompt length and the context's `n_ctx`, `n_batch` and `n_ubatch`
+`n_expert_used`, prompt length and identity (`# prompt_tokens=COUNT:FNV-1a-64` of the token ids
+as 4 little-endian bytes each) and the context's `n_ctx`, `n_batch` and `n_ubatch`
 (as the context resolved them, not as requested), and the sampling seed and settings. Without
 `--seed` the tool draws one seed and gives it to every sampler (the distribution, XTC and mirostat
 samplers would each draw their own), so the recorded seed replays the run.

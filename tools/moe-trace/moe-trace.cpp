@@ -382,8 +382,22 @@ static bool write_sampling(FILE * out, const common_params_sampling & s, const s
     return !failed;
 }
 
+// the prompt's token ids, each as 4 little-endian bytes, as COUNT:FNV-1a-64
+static std::string prompt_identity(const std::vector<llama_token> & tokens) {
+    uint64_t h = fnv1a(nullptr, 0);
+    for (const llama_token t : tokens) {
+        const uint32_t u = (uint32_t) t;
+        const unsigned char b[4] = { (unsigned char) u, (unsigned char) (u >> 8), (unsigned char) (u >> 16),
+                                     (unsigned char) (u >> 24) };
+        h = fnv1a(b, sizeof(b), h);
+    }
+    return fingerprint(tokens.size(), h);
+}
+
 static bool write_header(FILE * out, const llama_model * model, const llama_context * lctx, const common_params & params,
-                         uint32_t seed, const std::string & chain, size_t n_prompt, uint64_t session, const char * kind) {
+                         uint32_t seed, const std::string & chain, const std::vector<llama_token> & prompt,
+                         uint64_t session, const char * kind) {
+    const size_t n_prompt = prompt.size();
     char desc[256] = {};
     llama_model_desc(model, desc, sizeof(desc));
     const std::string arch     = meta_str(model, "general.architecture");
@@ -412,6 +426,8 @@ static bool write_header(FILE * out, const llama_model * model, const llama_cont
     // the context's sizes, not the requested ones: -c 0 takes the model's, and n_batch/n_ubatch are capped
     failed |= fprintf(out, "# n_prompt=%zu n_predict=%d n_ctx=%u n_batch=%u n_ubatch=%u\n", n_prompt, params.n_predict,
                       llama_n_ctx(lctx), llama_n_batch(lctx), llama_n_ubatch(lctx)) < 0;
+    // which prompt: runs of equal length but different text route differently
+    failed |= fprintf(out, "# prompt_tokens=%s\n", prompt_identity(prompt).c_str()) < 0;
     failed |= fprintf(out, "# sampling seed=%u temp=%.4f top_k=%d top_p=%.4f min_p=%.4f\n",
                   seed, s.temp, s.top_k, s.top_p, s.min_p) < 0;
     failed |= !write_sampling(out, s, chain);
@@ -672,7 +688,7 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, params.out_file.c_str(), strerror(errno));
         return 1;
     }
-    if (!write_header(ts.out, model, lctx, params, seed, chain, tokens.size(), session, nullptr)) {
+    if (!write_header(ts.out, model, lctx, params, seed, chain, tokens, session, nullptr)) {
         ts.write_failed = true;
     }
     if (params.moe_spec_router_k > 0) {
@@ -683,7 +699,7 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
             return 1;
         }
         const std::string kind = "kind=spec-router k=" + std::to_string(params.moe_spec_router_k);
-        if (!write_header(ts.spec_out, model, lctx, params, seed, chain, tokens.size(), session, kind.c_str())) {
+        if (!write_header(ts.spec_out, model, lctx, params, seed, chain, tokens, session, kind.c_str())) {
             ts.write_failed = true;
         }
     }

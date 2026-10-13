@@ -241,6 +241,19 @@ cmp -s <(grep -v '^#' "$work_dir/xtc0.csv") <(grep -v '^#' "$work_dir/xtc1.csv")
     || fail "an XTC trace replayed with its recorded seed $seed routed differently"
 printf 'ok: the recorded seed reproduces every sampler\n'
 
+# the header identifies the prompt: equal token counts, different tokens, different identities
+for p in a b a2; do
+    case "$p" in b) text="four five six" ;; *) text="one two three" ;; esac
+    "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "$text" -n 1 -c 64 --seed 1 -o "$work_dir/prompt-$p.csv" \
+        > "$work_dir/prompt.log" 2>&1 || fail "prompt trace failed: $(tail -n 2 "$work_dir/prompt.log")"
+done
+id() { sed -n 's/^# prompt_tokens=\([0-9]*:[0-9a-f]\{16\}\)$/\1/p' "$work_dir/prompt-$1.csv"; }
+n() { sed -n 's/^# n_prompt=\([0-9]*\) .*/\1/p' "$work_dir/prompt-$1.csv"; }
+[ "$(n a)" = "$(n b)" ] || fail "the two prompts must have the same token count ($(n a), $(n b))"
+[ -n "$(id a)" ] && [ "$(id a)" = "$(id a2)" ] && [ "$(id a)" != "$(id b)" ] \
+    || fail "prompt identities: '$(id a)' '$(id a2)' '$(id b)'"
+printf 'ok: header identifies the prompt tokens\n'
+
 if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 2 -c 64 \
         -o "$work_dir/no-such-dir/x.csv" > "$work_dir/badpath.log" 2>&1; then
     fail "an unwritable output path must fail"
