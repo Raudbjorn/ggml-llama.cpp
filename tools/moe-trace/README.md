@@ -22,9 +22,12 @@ Lines starting with `#` carry provenance: tool version, a per-run `session`
 id, model path/description/size, architecture, `n_layer`, `n_expert`,
 `n_expert_used`, prompt length and the context's `n_ctx`, `n_batch` and `n_ubatch`
 (as the context resolved them, not as requested), and the sampling seed and settings.
-One `# expert_tensors=LAYER:TYPE/BYTES,...` line per MoE layer lists its expert
-tensors in model order, with the weight type and bytes per expert; the simulator
-groups them into the provider's pools. Then a header row and one row per (token, layer):
+One `# expert_tensors=LAYER:TYPE/BYTES,...` line per MoE layer lists its routed
+expert tensors in the order the graph multiplies them (up, gate, down; or
+gate_up, down), with the weight type and bytes per expert; the simulator groups
+them into the provider's pools. A layer with a second router under the same
+tensor name (GroveMoE's adjugate experts) keeps only the main router's rows and
+tensors. Then a header row and one row per (token, layer):
 
 ```
 pos,layer,id0,...,idK-1

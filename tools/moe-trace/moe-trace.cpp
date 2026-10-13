@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <map>
 #include <random>
 #include <string>
@@ -62,6 +63,12 @@ struct trace_state {
 
     uint64_t rows_written  = 0;
     uint64_t rows_unmapped = 0;
+
+    // a layer may route twice (GroveMoE's adjugate experts reuse ffn_moe_topk-<il>): only the first
+    // router of a layer in each decode call, the main experts that packs and simulate.py model, is kept
+    int64_t              epoch = 0; // the current decode call
+    std::vector<int64_t> topk_epoch;
+    uint64_t             rows_second_group = 0;
 
     // --spec-router: per layer, the latest decode-step ids of both routers, matched by step
     FILE *   spec_out  = nullptr;
@@ -236,7 +243,13 @@ static bool trace_cb(struct ggml_tensor * t, bool ask, void * user_data) {
     if (t->type != GGML_TYPE_I32) {
         return true;
     }
-    if (layer_topk >= 0) {
+    if (layer_topk >= 0 && (size_t) layer_topk < ts->topk_epoch.size() && ts->topk_epoch[layer_topk] == ts->epoch) {
+        ts->rows_second_group += (uint64_t) t->ne[1];
+    } else if (layer_topk >= 0) {
+        if ((size_t) layer_topk >= ts->topk_epoch.size()) {
+            ts->topk_epoch.resize((size_t) layer_topk + 1, -1);
+        }
+        ts->topk_epoch[layer_topk] = ts->epoch;
         write_ids(ts, t, layer_topk, ts->out, ts->rows_written,
                   ts->spec_out ? &ts->act_step : nullptr, ts->spec_out ? &ts->act_ids : nullptr);
     } else if (layer_spec >= 0) {
@@ -251,22 +264,31 @@ static std::string meta_str(const llama_model * model, const std::string & key) 
     return n < 0 ? std::string() : std::string(buf);
 }
 
-// the expert tensors of each MoE layer, in model order, as TYPE/BYTES per expert: the --moe-cache
-// provider keeps one pool per weight type and expert size, so simulate.py replays them per pool
+// the routed expert tensors of each MoE layer as TYPE/BYTES per expert, in the order build_moe_ffn
+// multiplies them: the --moe-cache provider keeps one pool per weight type and expert size, so
+// simulate.py replays them per pool. Only the main experts: a second router of the layer (GroveMoE's
+// _chexps) is not traced
 static bool write_expert_tensors(FILE * out, const llama_model * model) {
+    static const char * const order[] = {
+        "ffn_gate_up_exps.weight", "ffn_up_exps.weight", "ffn_gate_exps.weight", "ffn_down_exps.weight",
+    };
     std::vector<llama_moe_tensor_info> info(llama_model_get_moe_tensor_info(model, nullptr, 0));
     info.resize(std::min(info.size(), llama_model_get_moe_tensor_info(model, info.data(), info.size())));
-    std::map<int64_t, std::string> by_layer;
+    std::map<int64_t, std::map<size_t, std::string>> by_layer; // layer -> rank in order -> TYPE/BYTES
     for (const llama_moe_tensor_info & t : info) {
-        if (t.layer < 0) {
-            continue;
+        const char * dot = t.name && t.layer >= 0 ? strchr(t.name + 4, '.') : nullptr; // after "blk.N"
+        for (size_t rank = 0; dot && rank < std::size(order); rank++) {
+            if (strcmp(dot + 1, order[rank]) == 0) {
+                by_layer[t.layer][rank] = std::string(ggml_type_name(t.type)) + "/" + std::to_string(t.expert_size);
+            }
         }
-        std::string & line = by_layer[t.layer];
-        line += line.empty() ? "" : ",";
-        line += std::string(ggml_type_name(t.type)) + "/" + std::to_string(t.expert_size);
     }
     bool failed = false;
-    for (const auto & [layer, line] : by_layer) {
+    for (const auto & [layer, tensors] : by_layer) {
+        std::string line;
+        for (const auto & [rank, entry] : tensors) {
+            line += (line.empty() ? "" : ",") + entry;
+        }
         failed |= fprintf(out, "# expert_tensors=%lld:%s\n", (long long) layer, line.c_str()) < 0;
     }
     return !failed;
@@ -592,6 +614,7 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         const int32_t n_eval = (int32_t) std::min<size_t>(tokens.size() - i, n_chunk);
         ts.batch_start = (int64_t) i;
         ts.n_eval      = n_eval;
+        ts.epoch++;
         if (llama_decode(lctx, llama_batch_get_one(tokens.data() + i, n_eval)) != 0) {
             LOG_ERR("%s: prompt decode failed at token %zu of %zu\n", __func__, i, tokens.size());
             decode_ok = false;
@@ -615,6 +638,7 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
             break;
         }
         ts.decode_step = i;
+        ts.epoch++;
         if (llama_decode(lctx, llama_batch_get_one(&tok, 1)) != 0) {
             LOG_ERR("%s: decode failed at step %d\n", __func__, i);
             decode_ok = false;
@@ -634,6 +658,10 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         return 1;
     }
 
+    if (ts.rows_second_group > 0) {
+        LOG_INF("%s: %" PRIu64 " rows of a second router in the same layer (GroveMoE adjugate experts) were not "
+                "traced; the trace holds the main experts\n", __func__, ts.rows_second_group);
+    }
     if (ts.rows_unmapped > 0) {
         LOG_WRN("%s: %" PRIu64 " rows had more tokens than the decode call and were skipped\n", __func__, ts.rows_unmapped);
     }

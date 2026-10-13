@@ -27,7 +27,7 @@ done
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/llama-moe-trace.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT
 
-"$archs_bin" -o "$work_dir" -a '^(qwen3moe|qwen35moe|llama)$' > "$work_dir/archs.log" 2>&1
+"$archs_bin" -o "$work_dir" -a '^(qwen3moe|qwen35moe|grovemoe|llama)$' > "$work_dir/archs.log" 2>&1
 
 fail() {
     printf 'FAIL: %s\n' "$1" >&2
@@ -175,6 +175,23 @@ if "$trace_bin" -m "$work_dir/llama-dense.gguf" -p "hello world" -n 2 -c 64 -dev
 fi
 grep -q "no 'ffn_moe_topk-\*' tensors were observed" "$work_dir/dense.log" || fail "dense model: missing diagnostic"
 printf 'ok: dense model rejected\n'
+
+# GroveMoE routes each layer twice, for its main and its adjugate experts, under one tensor name:
+# the trace keeps one row per (pos, layer), the main router's
+"$trace_bin" -m "$work_dir/grovemoe-moe.gguf" -p "one two three" -n 2 -c 64 --seed 7 -o "$work_dir/grove.csv" \
+    > "$work_dir/grove.log" 2>&1 || fail "grovemoe: llama-moe-trace failed: $(tail -n 2 "$work_dir/grove.log")"
+dups=$(grep -v '^#' "$work_dir/grove.csv" | awk -F, 'NR > 1 { print $1 "," $2 }' | sort | uniq -d | wc -l)
+[ "$dups" -eq 0 ] || fail "grovemoe: $dups (pos, layer) pairs have more than one row"
+grep -q "second router in the same layer" "$work_dir/grove.log" || fail "grovemoe: no note about the second router"
+# and lists only the main experts' gate, up and down tensors
+if grep '^# expert_tensors=' "$work_dir/grove.csv" | grep -vqE '^# expert_tensors=[0-9]+:[^,]+,[^,]+,[^,]+$'; then
+    fail "grovemoe: expert_tensors lines must hold the 3 main expert tensors: $(grep '^# expert_tensors=' "$work_dir/grove.csv" | head -n 1)"
+fi
+if [ -n "$python_bin" ]; then
+    "$python_bin" "$simulate_py" "$work_dir/grove.csv" --budgets 0.5 > "$work_dir/grove.sim" 2>&1 \
+        || fail "grovemoe: simulate.py rejected the trace: $(tail -n 2 "$work_dir/grove.sim")"
+fi
+printf 'ok: grovemoe keeps the main router\n'
 
 # the header records the context's sizes: -c 0 takes the model's, n_batch and n_ubatch are capped
 "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 0 -b 4096 -ub 4096 -o "$work_dir/ctx.csv" \

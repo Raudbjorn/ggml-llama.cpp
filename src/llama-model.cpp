@@ -4464,6 +4464,7 @@ size_t llama_model_get_moe_tensor_info(
                 tensor->ne[1],
                 tensor->ne[2],
                 layer,
+                tensor->name,
             };
         }
         count++;
