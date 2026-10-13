@@ -24,7 +24,7 @@
 #include "log.h"
 #include "sampling.h"
 #include "llama.h"
-#include "../../src/llama-ext.h" // llama_model_get_moe_tensor_info
+#include "../../src/llama-ext.h" // llama_model_get_moe_tensor_info, llama_model_router_fingerprint
 
 #include <algorithm>
 #include <cerrno>
@@ -416,6 +416,10 @@ static bool write_header(FILE * out, const llama_model * model, const llama_cont
     failed |= fprintf(out, "# model_size=%" PRIu64 "\n", llama_model_size(model)) < 0;
     failed |= fprintf(out, "# arch=%s\n", arch.c_str()) < 0;
     failed |= fprintf(out, "# n_layer=%d\n", llama_model_n_layer(model)) < 0;
+    // which routers: a fine-tune of the same shapes numbers its experts differently
+    if (const uint64_t router = llama_model_router_fingerprint(model)) {
+        failed |= fprintf(out, "# router_fingerprint=%016" PRIx64 "\n", router) < 0;
+    }
     if (!n_expert.empty()) {
         failed |= fprintf(out, "# n_expert=%s\n", n_expert.c_str()) < 0;
     }

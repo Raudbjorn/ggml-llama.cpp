@@ -89,6 +89,11 @@ LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 // layers that got a static expert pack at load: 0 when none was requested or built
 LLAMA_API int32_t llama_model_n_moe_pack_layers(const struct llama_model * model);
 
+// identifies the expert routers (ffn_gate_inp) of a loaded MoE model: traces and pack profiles
+// of models with other routers number the experts differently. Quantizations of one checkpoint
+// share it; 0 for a model without routers or without loaded weights
+LLAMA_API uint64_t llama_model_router_fingerprint(const struct llama_model * model);
+
 // the fewest static expert packs that a graph computed by ctx since the previous call used (a
 // graph leaves a pack out where its device refuses the batch, or the arch's graph does not
 // qualify), or -1 if no graph was computed; each call starts a new count

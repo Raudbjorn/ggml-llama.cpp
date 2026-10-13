@@ -502,6 +502,26 @@ class CliTests(unittest.TestCase):
         code, _, err = run([a, model("d", "qwen3moe", 2), "--profile", a, "--budgets", "0.5"])
         self.assertEqual(code, 0, err)
 
+    def test_traces_of_other_routers_are_rejected(self) -> None:
+        # same arch, layers and experts, but another checkpoint (a fine-tune): its experts are numbered differently
+        def model(sid: str, router: str) -> str:
+            head = HEADER.format(sid=sid).replace("# n_expert", f"# arch=qwen3moe\n# router_fingerprint={router}\n# n_expert", 1)
+            return write(self.tmp.name, f"{sid}.csv", head + "0,0,0,1\n1,0,1,2\n")
+        a = model("a", "00000000000000a1")
+        b = model("b", "00000000000000b2")
+        for argv in ([a, b], [a, "--profile", b]):
+            with self.subTest(argv=argv):
+                code, _, err = run(argv)
+                self.assertEqual(code, 2)
+                self.assertIn("router fingerprint", err)
+        for bad in ("0", "00000000000000a1x", "0000000000000000", "00000000000000g1"):
+            with self.subTest(bad=bad):
+                code, _, err = run([model("x", bad)])
+                self.assertEqual(code, 2)
+                self.assertIn("invalid router_fingerprint", err)
+        code, _, err = run([a, model("c", "00000000000000A1"), "--profile", a, "--budgets", "0.5"])
+        self.assertEqual(code, 0, err)
+
     def test_layers_past_n_layer_are_rejected(self) -> None:
         # a row of layer 2 in a 2-layer trace would add a layer, and pool units, to the replay
         head = HEADER.format(sid="n").replace("# n_expert", "# n_layer=2\n# n_expert", 1)

@@ -360,6 +360,34 @@ grep -q "must not name the input file" "$work_dir/again-pf.log" || fail "trace a
 [ "$(cksum < "$work_dir/again.csv")" = "$before" ] || fail "-o naming the prompt file changed it"
 printf 'ok: colliding output paths rejected\n'
 
+# the router fingerprint names the checkpoint: a fixture of another seed has the same arch and
+# shapes but other weights, so its experts are numbered differently
+fp() { sed -n 's/^# router_fingerprint=\([0-9a-f]\{16\}\)$/\1/p' "$1"; }
+fp_a=$(fp "$work_dir/again.csv")
+[ -n "$fp_a" ] || fail "no router fingerprint in the trace header"
+[ "$(fp "$work_dir/profile.csv")" = "$fp_a" ] || fail "two traces of one model have different router fingerprints"
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 --moe-pack-profile "$work_dir/again.csv" \
+    --moe-pack-slots 1 -o "$work_dir/own.csv" > "$work_dir/own.log" 2>&1 \
+    || fail "tracing with the model's own profile failed: $(tail -n 2 "$work_dir/own.log")"
+if grep -q "was traced on another model" "$work_dir/own.log"; then
+    fail "a profile of the model itself was refused"
+fi
+mkdir -p "$work_dir/reseed"
+"$archs_bin" -o "$work_dir/reseed" -a '^qwen3moe$' -s 4242 > "$work_dir/reseed.log" 2>&1
+"$trace_bin" -m "$work_dir/reseed/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 --moe-pack-profile "$work_dir/again.csv" \
+    --moe-pack-slots 1 -o "$work_dir/reseed.csv" > "$work_dir/reseed-trace.log" 2>&1 \
+    || fail "tracing the reseeded fixture failed: $(tail -n 2 "$work_dir/reseed-trace.log")"
+fp_b=$(fp "$work_dir/reseed.csv")
+{ [ -n "$fp_b" ] && [ "$fp_b" != "$fp_a" ]; } || fail "fixtures of two seeds share router fingerprint $fp_a"
+grep -q "was traced on another model" "$work_dir/reseed-trace.log" || fail "a profile of another checkpoint must be refused"
+if [ -n "$python_bin" ] && [ -n "$simulate_py" ]; then
+    if "$python_bin" "$simulate_py" "$work_dir/again.csv" "$work_dir/reseed.csv" --budgets 0.5 > "$work_dir/two.sim" 2>&1; then
+        fail "simulate.py must refuse traces of two checkpoints"
+    fi
+    grep -q "router fingerprint" "$work_dir/two.sim" || fail "simulate.py: missing router fingerprint diagnostic"
+fi
+printf 'ok: router fingerprints tell checkpoints apart\n'
+
 if "$trace_bin" -m "$work_dir/llama-moe.gguf" -p "hello world" -n 2 -c 64 -o "$work_dir/lm.csv" \
         --spec-router 1 --spec-out "$work_dir/lm-spec.csv" > "$work_dir/lm.log" 2>&1; then
     fail "--spec-router on an architecture without it must fail"

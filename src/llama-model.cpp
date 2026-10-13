@@ -2121,7 +2121,54 @@ struct moe_pack_profile {
     std::string arch;
     int64_t n_layer  = -1;
     int64_t n_expert = -1;
+    uint64_t router  = 0; // '# router_fingerprint=', 0 when absent
 };
+
+// FNV-1a over each MoE layer's router (ffn_gate_inp): its layer, type and shape, and up to 16
+// evenly spaced whole rows (one per expert; whole rows also suit a split tensor's reads). Models
+// whose routers differ number their experts differently, so a trace of one does not describe the
+// other; quantizing keeps the router (llama-quant does not quantize ffn_gate_inp). 0 when the
+// model has no router or its weights are not loaded (no_alloc).
+static uint64_t moe_router_fingerprint(const std::vector<llama_layer> & layers) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    const auto mix = [&h](const uint8_t * p, size_t n) {
+        for (size_t i = 0; i < n; i++) {
+            h = (h ^ p[i]) * 0x100000001b3ull;
+        }
+    };
+    const auto mix_i64 = [&mix](int64_t v) {
+        uint8_t le[8];
+        for (int i = 0; i < 8; i++) {
+            le[i] = (uint8_t) ((uint64_t) v >> (8*i));
+        }
+        mix(le, sizeof(le));
+    };
+    constexpr int64_t max_rows = 16;
+    bool any = false;
+    std::vector<uint8_t> row;
+    for (size_t il = 0; il < layers.size(); il++) {
+        const ggml_tensor * t = layers[il].ffn_gate_inp;
+        if (t == nullptr) {
+            continue;
+        }
+        if (t->buffer == nullptr || t->data == nullptr) {
+            return 0; // no_alloc: a buffer with no memory behind it
+        }
+        for (const int64_t v : { (int64_t) il, (int64_t) t->type, t->ne[0], t->ne[1], t->ne[2], t->ne[3] }) {
+            mix_i64(v);
+        }
+        const int64_t n_rows = ggml_nrows(t);
+        const int64_t n_take = std::min(n_rows, max_rows);
+        row.resize(t->nb[1]);
+        for (int64_t i = 0; i < n_take; i++) {
+            const int64_t r = n_take == 1 ? 0 : i * (n_rows - 1) / (n_take - 1);
+            ggml_backend_tensor_get(t, row.data(), (size_t) r * t->nb[1], t->nb[1]);
+            mix(row.data(), row.size());
+        }
+        any = true;
+    }
+    return any ? h : 0;
+}
 
 // whole-field decimal integer; rejects empty fields, signs other than a leading
 // '-', trailing characters and overflow
@@ -2210,6 +2257,26 @@ bool moe_pack_read_profile(const char * path, moe_pack_profile & prof, std::stri
                 // llama-moe-trace --spec-out writes predicted ids in the same format
                 err = format("'%s':%lld: a '%s' trace holds no routing", path, (long long) lineno, val.c_str());
                 return false;
+            } else if (key == "router_fingerprint") {
+                uint64_t fp = 0; // 16 hex digits, as llama-moe-trace writes it
+                bool hex = val.size() == 16;
+                for (size_t i = 0; hex && i < val.size(); i++) {
+                    const char c = val[i];
+                    const int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+                                  c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+                    hex = d >= 0;
+                    fp = (fp << 4) | (uint64_t) (d & 15);
+                }
+                if (!hex || fp == 0) {
+                    err = format("'%s':%lld: invalid router_fingerprint '%s'", path, (long long) lineno, val.c_str());
+                    return false;
+                }
+                if (prof.router != 0 && prof.router != fp) {
+                    err = format("'%s':%lld: router fingerprint %s conflicts with %016llx: traces of different models",
+                                 path, (long long) lineno, val.c_str(), (unsigned long long) prof.router);
+                    return false;
+                }
+                prof.router = fp;
             } else if (key == "n_layer" || key == "n_expert") {
                 if (!moe_pack_parse_i64(val.data(), val.data() + val.size(), v) || v <= 0) {
                     err = format("'%s':%lld: invalid %s '%s'", path, (long long) lineno, key.c_str(), val.c_str());
@@ -2333,6 +2400,15 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
         LLAMA_LOG_ERROR("%s: profile '%s' has n_layer=%lld n_expert=%lld, model has %u and %u - packs disabled\n",
                 __func__, path, (long long) prof.n_layer, (long long) prof.n_expert, hparams.n_layer(), hparams.n_expert);
         return;
+    }
+    // a fine-tune or another checkpoint of the same shapes routes to other experts
+    if (prof.router != 0) {
+        const uint64_t router = moe_router_fingerprint(layers);
+        if (router != 0 && router != prof.router) {
+            LLAMA_LOG_ERROR("%s: profile '%s' was traced on another model (router fingerprint %016llx, this model %016llx)"
+                    " - packs disabled\n", __func__, path, (unsigned long long) prof.router, (unsigned long long) router);
+            return;
+        }
     }
 
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // as in build_moe_ffn
@@ -4477,6 +4553,10 @@ int32_t llama_model_n_devices(const struct llama_model * model) {
 
 int32_t llama_model_n_moe_pack_layers(const struct llama_model * model) {
     return model->n_moe_pack_layers;
+}
+
+uint64_t llama_model_router_fingerprint(const struct llama_model * model) {
+    return model ? moe_router_fingerprint(model->layers) : 0;
 }
 
 ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i) {

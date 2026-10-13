@@ -651,6 +651,34 @@ int main(int argc, char ** argv) {
     expect_disabled("spec-router trace as a profile", base, run_model(f32, p_spec.c_str(), 2), "holds no routing");
     expect_disabled("sessions from two models", base, run_model(f32, p_two.c_str(), 2), "conflicts with 'llama'");
 
+    // the routers identify the checkpoint: a profile traced on another one of the same shapes (a
+    // fine-tune) numbers the experts differently
+    {
+        uint64_t router = 0;
+        if (llama_model * m = llama_model_load_from_file(f32.c_str(), model_params(nullptr, 0, PLACE_CPU))) {
+            router = llama_model_router_fingerprint(m);
+            llama_model_free(m);
+        }
+        CHECK(router != 0, "the fixture has no router fingerprint");
+        char own[64], other[64];
+        snprintf(own,   sizeof(own),   "# router_fingerprint=%016llx\n", (unsigned long long) router);
+        snprintf(other, sizeof(other), "# router_fingerprint=%016llx\n", (unsigned long long) (router ^ 1));
+        const std::string next = "# llama-moe-trace v1\n# session=00000000000000ab\n# arch=" + arch + "\n";
+        const std::string p_own   = work + "/router-own.csv";
+        const std::string p_other = work + "/router-other.csv";
+        const std::string p_both  = work + "/router-both.csv";
+        const std::string p_badfp = work + "/router-bad.csv";
+        CHECK(write_text(p_own,   hdr + own + rows) &&
+              write_text(p_other, hdr + other + rows) &&
+              write_text(p_both,  hdr + own + rows + next + other + rows) &&
+              write_text(p_badfp, hdr + "# router_fingerprint=12345\n" + rows), "cannot write router profiles");
+        expect_equivalent("profile of this model's routers", base, run_model(f32, p_own.c_str(), 2),
+                "static expert packs on CPU: 2 layer(s), up to 2 slot(s)", true);
+        expect_disabled("profile of other routers", base, run_model(f32, p_other.c_str(), 2), "was traced on another model");
+        expect_disabled("sessions of two routers", base, run_model(f32, p_both.c_str(), 2), "traces of different models");
+        expect_disabled("malformed router fingerprint", base, run_model(f32, p_badfp.c_str(), 2), "invalid router_fingerprint");
+    }
+
     // the precision policy is keyed by the model's tensors: the hot chain must take its source's entry
     {
         const std::string q8 = work + "/prec-q8.gguf";
