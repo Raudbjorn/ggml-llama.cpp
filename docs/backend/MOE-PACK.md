@@ -93,12 +93,16 @@ The device MoE cache (`--moe-cache-mib`) skips a layer that has a pack; the
 other host-resident layers keep it.
 
 The graph then uses a pack only when `build_moe_ffn` receives exactly the
-pack's source tensors and no LoRA adapter on them. The hot and the cold chain
-apply the layer's own activation (SiLU, GELU, ReLU, and the others
+pack's source tensors and no LoRA adapter on them, and the device runs
+`MUL_MAT_ID` on the pack tensors for the graph's own batch: a `-ub` above 512
+can exceed what the loader probed, and that prompt graph then computes the
+layer from the host experts instead of copying the pack. The hot and the cold
+chain apply the layer's own activation (SiLU, GELU, ReLU, and the others
 `build_moe_ffn` knows), which acts on each (token, expert) row alone, so the
 split is exact whatever it is.
-`sched_reserve` logs how many packs the graph uses; fewer than built means the
-architecture's graph does not qualify and the pack memory is wasted.
+`sched_reserve` logs how many packs the prompt graph uses; fewer than built
+means the architecture's graph does not qualify or the device refuses the
+`-ub` batch (`-lv 5` logs which), and for the former the pack memory is wasted.
 
 ## Profile checks
 

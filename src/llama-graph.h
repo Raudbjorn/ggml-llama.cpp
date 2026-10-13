@@ -808,7 +808,13 @@ struct llama_moe_pack_layer {
     // map_hot on the pack's device, when it runs GET_ROWS on I32 weights; used only with
     // sched_async_cpu, so that the pack's split does not wait for the CPU remap
     ggml_tensor * map_hot_dev = nullptr;
+
+    ggml_backend_dev_t dev = nullptr; // the device the pack tensors are on
 };
+
+// the first pack tensor of pk that pk.dev cannot run MUL_MAT_ID on for n_tokens tokens of
+// n_used experts each, else nullptr; support can depend on the batch (OpenVINO: MXFP4)
+const ggml_tensor * llama_moe_pack_unsupported(const llama_moe_pack_layer & pk, int64_t n_used, int64_t n_tokens);
 
 struct llm_graph_params {
     llm_arch arch = LLM_ARCH_UNKNOWN;

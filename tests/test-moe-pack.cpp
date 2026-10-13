@@ -194,28 +194,35 @@ static bool device_runs_mul_mat_id(ggml_backend_dev_t dev, ggml_type type) {
     return ok;
 }
 
-// a GPU-typed copy of the CPU device whose MUL_MAT_ID takes at most 8 tokens, like a backend
-// with a vector kernel and no batched kernel for a weight type
-static ggml_backend_device g_decode_only;
+// a GPU-typed copy of the CPU device whose MUL_MAT_ID takes at most MAX_TOKENS tokens: 8 is a
+// backend with a vector kernel and no batched kernel for a weight type, 512 one whose temporary
+// outgrows a limit only above the loader's probe batch (OpenVINO MXFP4). One at a time.
+static ggml_backend_device g_limited;
+static int64_t g_limited_tokens = 0;
+static char g_limited_name[32];
+static char g_limited_desc[64];
 
-static ggml_backend_dev_t decode_only_device() {
-    g_decode_only = *ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    g_decode_only.iface.get_name        = [](ggml_backend_dev_t) { return "DecodeOnly"; };
-    g_decode_only.iface.get_description = [](ggml_backend_dev_t) { return "CPU, MUL_MAT_ID for at most 8 tokens"; };
-    g_decode_only.iface.get_type        = [](ggml_backend_dev_t) { return GGML_BACKEND_DEVICE_TYPE_GPU; };
-    g_decode_only.iface.get_props       = [](ggml_backend_dev_t, ggml_backend_dev_props * props) {
+static ggml_backend_dev_t limited_device(const char * name, int64_t max_tokens) {
+    snprintf(g_limited_name, sizeof(g_limited_name), "%s", name);
+    snprintf(g_limited_desc, sizeof(g_limited_desc), "CPU, MUL_MAT_ID for at most %lld tokens", (long long) max_tokens);
+    g_limited_tokens = max_tokens;
+    g_limited = *ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    g_limited.iface.get_name        = [](ggml_backend_dev_t) { return (const char *) g_limited_name; };
+    g_limited.iface.get_description = [](ggml_backend_dev_t) { return (const char *) g_limited_desc; };
+    g_limited.iface.get_type        = [](ggml_backend_dev_t) { return GGML_BACKEND_DEVICE_TYPE_GPU; };
+    g_limited.iface.get_props       = [](ggml_backend_dev_t, ggml_backend_dev_props * props) {
         ggml_backend_dev_get_props(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU), props);
-        props->name        = "DecodeOnly";
-        props->description = "CPU, MUL_MAT_ID for at most 8 tokens";
+        props->name        = g_limited_name;
+        props->description = g_limited_desc;
         props->type        = GGML_BACKEND_DEVICE_TYPE_GPU;
     };
-    g_decode_only.iface.supports_op = [](ggml_backend_dev_t, const ggml_tensor * op) {
-        if (op->op == GGML_OP_MUL_MAT_ID && op->src[2]->ne[1] > 8) {
+    g_limited.iface.supports_op = [](ggml_backend_dev_t, const ggml_tensor * op) {
+        if (op->op == GGML_OP_MUL_MAT_ID && op->src[2]->ne[1] > g_limited_tokens) {
             return false;
         }
         return ggml_backend_dev_supports_op(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU), op);
     };
-    return &g_decode_only;
+    return &g_limited;
 }
 
 // Q4_0, with the down experts in DOWN_TYPE
@@ -661,7 +668,7 @@ int main(int argc, char ** argv) {
     // a device that runs the pack for a decode step but not for a prompt batch would copy the
     // pack every prompt ubatch: no pack there
     {
-        ggml_backend_dev_t devices[2] = { decode_only_device(), nullptr };
+        ggml_backend_dev_t devices[2] = { limited_device("DecodeOnly", 8), nullptr };
         llama_model_params mp = model_params(p_mixed.c_str(), 2, PLACE_DEVICE);
         mp.devices = devices;
         {
@@ -682,6 +689,48 @@ int main(int argc, char ** argv) {
         if (model && n_packed == 0 && contains(log, "for 512 token(s)")) {
             printf("ok: no pack on a device that runs MUL_MAT_ID only for decode steps\n");
         }
+        llama_model_free(model);
+    }
+
+    // a device that runs the pack for the loader's probe batches but not for a larger -ub: the
+    // prompt graph must leave the pack out rather than have it copied for every prompt ubatch,
+    // and the decode graph must keep it
+    {
+        ggml_backend_dev_t devices[2] = { limited_device("PromptLimit", 512), nullptr };
+        llama_model_params mp = model_params(p_mixed.c_str(), 2, PLACE_DEVICE);
+        mp.devices = devices;
+        {
+            std::lock_guard<std::mutex> lock(g_log_mutex);
+            g_log.clear();
+        }
+        llama_model * model = llama_model_load_from_file(f32.c_str(), mp);
+        const int32_t n_packed = model ? llama_model_n_moe_pack_layers(model) : -1;
+        CHECK(n_packed == 2, "prompt-limit device: %d pack layer(s), expected 2", n_packed);
+        llama_context * ctx = nullptr;
+        if (model) {
+            llama_context_params cp = llama_context_default_params();
+            cp.n_ctx           = 1024;
+            cp.n_batch         = 1024;
+            cp.n_ubatch        = 1024;
+            cp.n_threads       = 2;
+            cp.n_threads_batch = 2;
+            ctx = llama_init_from_model(model, cp);
+        }
+        CHECK(ctx != nullptr, "prompt-limit device: no context for -ub 1024");
+        std::string log;
+        {
+            std::lock_guard<std::mutex> lock(g_log_mutex);
+            log = g_log;
+        }
+        const bool left_out = contains(log, "the graph uses 0 of 2 static expert packs") &&
+                contains(log, "1024 token(s): static expert pack not used: its device cannot run MUL_MAT_ID");
+        const bool decode_kept = !contains(log, ", 1 token(s): static expert pack not used");
+        CHECK(left_out, "prompt-limit device: the 1024-token graph must leave both packs out");
+        CHECK(decode_kept, "prompt-limit device: the decode graph must keep the packs");
+        if (ctx && left_out && decode_kept) {
+            printf("ok: no pack in a prompt graph larger than the device runs, packs kept for decode\n");
+        }
+        llama_free(ctx);
         llama_model_free(model);
     }
 

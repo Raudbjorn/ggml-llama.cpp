@@ -2124,6 +2124,26 @@ void llm_graph_context::build_moe_spec_router(ggml_tensor * attn_norm, ggml_tens
     ggml_build_forward_expand(gf, ids);
 }
 
+const ggml_tensor * llama_moe_pack_unsupported(const llama_moe_pack_layer & pk, int64_t n_used, int64_t n_tokens) {
+    if (pk.dev == nullptr || pk.down == nullptr || pk.down->buffer == nullptr) {
+        return nullptr; // a no_alloc model (the --fit pass): the loader did not probe either
+    }
+    for (ggml_tensor * w : { pk.gate, pk.up, pk.gate_up, pk.down }) {
+        if (w == nullptr) {
+            continue;
+        }
+        // the op reads w with its buffer, as the scheduler's check of the graph node does
+        ggml_init_params params = { 3*ggml_tensor_overhead(), nullptr, true };
+        ggml_context_ptr ctx(ggml_init(params));
+        ggml_tensor * b   = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, w->ne[0], n_used, n_tokens);
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, n_used, n_tokens);
+        if (!ggml_backend_dev_supports_op(pk.dev, ggml_mul_mat_id(ctx.get(), w, b, ids))) {
+            return w;
+        }
+    }
+    return nullptr;
+}
+
 ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * cur,
          ggml_tensor * gate_inp,
@@ -2349,6 +2369,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // sum the two complete FFN chains. Skipped rows are zero and swiglu(0, 0) = 0,
     // so the sum equals the single-chain result for plain SiLU-gated experts.
     const llama_moe_pack_layer * pack = nullptr;
+    const ggml_tensor * pack_unsupported = nullptr;
     if (moe_packs && il >= 0 && (size_t) il < moe_packs->size() && (*moe_packs)[il].down) {
         const llama_moe_pack_layer & pk = (*moe_packs)[il];
         const auto has_lora = [&](const ggml_tensor * w) {
@@ -2372,9 +2393,14 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             why = "routed expert count differs from the tensor";
         } else if (has_lora(down_exps) || (gate_up_exps ? has_lora(gate_up_exps) : has_lora(gate_exps) || has_lora(up_exps))) {
             why = "a LoRA adapter targets the experts";
+        } else if ((pack_unsupported = llama_moe_pack_unsupported(pk, n_expert_used, n_tokens))) {
+            // the loader probed a decode step and 512 tokens; -ub sets the prompt batch, and a
+            // pack the device rejects would be copied to the CPU for every evaluation
+            why = "its device cannot run MUL_MAT_ID on it for this batch";
         }
         if (why) {
-            LLAMA_LOG_DEBUG("%s: layer %d: static expert pack not used: %s\n", __func__, il, why);
+            LLAMA_LOG_DEBUG("%s: layer %d, %lld token(s): static expert pack not used: %s%s%s\n", __func__, il,
+                    (long long) n_tokens, why, pack_unsupported ? " - " : "", pack_unsupported ? pack_unsupported->name : "");
         } else {
             pack = &pk;
             res->n_moe_pack_used++;
