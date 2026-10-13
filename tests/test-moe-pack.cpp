@@ -14,7 +14,8 @@
 // cold one with the merge moved to the CPU, an exact f32 add either way. An
 // abort raised by the CPU split on the worker fails the decode, and the context
 // decodes the same logits afterwards. A layer with Hadamard-folded experts gets no
-// pack, and the device MoE cache (moe_cache_size) leaves a packed layer to its pack.
+// pack, and the device MoE cache (moe_cache_size) leaves a packed layer to its pack. A
+// device that runs MUL_MAT_ID only for decode-sized batches gets no pack.
 //
 // usage: test-moe-pack MODEL.gguf WORK_DIR
 //   MODEL is a MoE fixture with separate gate/up/down experts and at least
@@ -25,6 +26,7 @@
 #include "llama.h"
 
 #include "../src/llama-ext.h"
+#include "../ggml/src/ggml-backend-impl.h"
 
 #include <cctype>
 #include <cmath>
@@ -170,16 +172,44 @@ static bool record_down_prec(ggml_tensor * t, bool ask, void * user_data) {
     return false;
 }
 
-// whether DEV runs MUL_MAT_ID on experts of TYPE, probed like the loader probes a pack tensor
+// whether DEV runs MUL_MAT_ID on experts of TYPE, probed like the loader probes a pack tensor:
+// the fixture's 2 experts per token, for a decode step and for 512 tokens
 static bool device_runs_mul_mat_id(ggml_backend_dev_t dev, ggml_type type) {
-    ggml_init_params params = { 4*ggml_tensor_overhead(), nullptr, true };
-    ggml_context * ctx = ggml_init(params);
-    ggml_tensor * w   = ggml_new_tensor_3d(ctx, type, 256, 256, 8);
-    ggml_tensor * b   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 256, 1, 1);
-    ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, 1);
-    const bool ok = ggml_backend_dev_supports_op(dev, ggml_mul_mat_id(ctx, w, b, ids));
-    ggml_free(ctx);
+    bool ok = true;
+    for (const int64_t n_tokens : { (int64_t) 1, (int64_t) 512 }) {
+        ggml_init_params params = { 4*ggml_tensor_overhead(), nullptr, true };
+        ggml_context * ctx = ggml_init(params);
+        ggml_tensor * w   = ggml_new_tensor_3d(ctx, type, 256, 256, 8);
+        ggml_tensor * b   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 256, 2, n_tokens);
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 2, n_tokens);
+        ok = ok && ggml_backend_dev_supports_op(dev, ggml_mul_mat_id(ctx, w, b, ids));
+        ggml_free(ctx);
+    }
     return ok;
+}
+
+// a GPU-typed copy of the CPU device whose MUL_MAT_ID takes at most 8 tokens, like a backend
+// with a vector kernel and no batched kernel for a weight type
+static ggml_backend_device g_decode_only;
+
+static ggml_backend_dev_t decode_only_device() {
+    g_decode_only = *ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    g_decode_only.iface.get_name        = [](ggml_backend_dev_t) { return "DecodeOnly"; };
+    g_decode_only.iface.get_description = [](ggml_backend_dev_t) { return "CPU, MUL_MAT_ID for at most 8 tokens"; };
+    g_decode_only.iface.get_type        = [](ggml_backend_dev_t) { return GGML_BACKEND_DEVICE_TYPE_GPU; };
+    g_decode_only.iface.get_props       = [](ggml_backend_dev_t, ggml_backend_dev_props * props) {
+        ggml_backend_dev_get_props(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU), props);
+        props->name        = "DecodeOnly";
+        props->description = "CPU, MUL_MAT_ID for at most 8 tokens";
+        props->type        = GGML_BACKEND_DEVICE_TYPE_GPU;
+    };
+    g_decode_only.iface.supports_op = [](ggml_backend_dev_t, const ggml_tensor * op) {
+        if (op->op == GGML_OP_MUL_MAT_ID && op->src[2]->ne[1] > 8) {
+            return false;
+        }
+        return ggml_backend_dev_supports_op(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU), op);
+    };
+    return &g_decode_only;
 }
 
 // Q4_0, with the down experts in DOWN_TYPE
@@ -584,6 +614,33 @@ int main(int argc, char ** argv) {
         if (r.ok && seen.cold == GGML_PREC_Q8 && seen.hot == GGML_PREC_Q8) {
             printf("ok: pack matmuls keep the precision policy of their source\n");
         }
+    }
+
+    // a device that runs the pack for a decode step but not for a prompt batch would copy the
+    // pack every prompt ubatch: no pack there
+    {
+        ggml_backend_dev_t devices[2] = { decode_only_device(), nullptr };
+        llama_model_params mp = model_params(p_mixed.c_str(), 2, PLACE_DEVICE);
+        mp.devices = devices;
+        {
+            std::lock_guard<std::mutex> lock(g_log_mutex);
+            g_log.clear();
+        }
+        llama_model * model = llama_model_load_from_file(f32.c_str(), mp);
+        CHECK(model != nullptr, "decode-only device: the model must load");
+        const int32_t n_packed = model ? llama_model_n_moe_pack_layers(model) : -1;
+        std::string log;
+        {
+            std::lock_guard<std::mutex> lock(g_log_mutex);
+            log = g_log;
+        }
+        CHECK(n_packed == 0, "decode-only device: %d pack layer(s), expected none", n_packed);
+        CHECK(contains(log, "DecodeOnly cannot run MUL_MAT_ID on f32 experts") && contains(log, "for 512 token(s)"),
+                "decode-only device: missing the prompt-batch refusal");
+        if (model && n_packed == 0 && contains(log, "for 512 token(s)")) {
+            printf("ok: no pack on a device that runs MUL_MAT_ID only for decode steps\n");
+        }
+        llama_model_free(model);
     }
 
     // a pack copy of a Hadamard-folded expert would get unrotated activations

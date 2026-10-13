@@ -2533,27 +2533,33 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
 
         if (!ml.no_alloc) {
             // the hot matmuls must run on the pack device, or every evaluation copies the pack;
-            // support depends on the type and shape of each pack tensor
+            // support depends on the type and shape of each pack tensor and, on some backends, on
+            // the batch: probe a decode step and the batch the loader probes expert weights with
+            // (weight_buft_supported: n_expert_used ids for 512 tokens)
+            const int64_t n_used = (int64_t) hparams.n_expert_used_max();
             const ggml_tensor * unsupported = nullptr;
+            int64_t unsupported_tokens = 0;
             for (size_t i = 0; i < packs.size() && !unsupported; i++) {
                 for (ggml_tensor * w : { packs[i].gate, packs[i].up, packs[i].gate_up, packs[i].down }) {
-                    if (!w) {
-                        continue;
-                    }
-                    ggml_init_params op_params = { 3*ggml_tensor_overhead(), nullptr, true };
-                    ggml_context_ptr op_ctx(ggml_init(op_params));
-                    ggml_tensor * b   = ggml_new_tensor_3d(op_ctx.get(), GGML_TYPE_F32, w->ne[0], 1, 1);
-                    ggml_tensor * ids = ggml_new_tensor_2d(op_ctx.get(), GGML_TYPE_I32, 1, 1);
-                    if (!ggml_backend_dev_supports_op(dev, ggml_mul_mat_id(op_ctx.get(), w, b, ids))) {
-                        unsupported = w;
-                        break;
+                    for (const int64_t n_tokens : { (int64_t) 1, (int64_t) 512 }) {
+                        if (!w || unsupported) {
+                            break;
+                        }
+                        ggml_init_params op_params = { 3*ggml_tensor_overhead(), nullptr, true };
+                        ggml_context_ptr op_ctx(ggml_init(op_params));
+                        ggml_tensor * b   = ggml_new_tensor_3d(op_ctx.get(), GGML_TYPE_F32, w->ne[0], n_used, n_tokens);
+                        ggml_tensor * ids = ggml_new_tensor_2d(op_ctx.get(), GGML_TYPE_I32, n_used, n_tokens);
+                        if (!ggml_backend_dev_supports_op(dev, ggml_mul_mat_id(op_ctx.get(), w, b, ids))) {
+                            unsupported        = w;
+                            unsupported_tokens = n_tokens;
+                        }
                     }
                 }
             }
             if (unsupported) {
-                LLAMA_LOG_WARN("%s: %s cannot run MUL_MAT_ID on %s experts (%s) - %zu layer(s) without a pack\n",
+                LLAMA_LOG_WARN("%s: %s cannot run MUL_MAT_ID on %s experts (%s) for %lld token(s) - %zu layer(s) without a pack\n",
                         __func__, ggml_backend_dev_name(dev), ggml_type_name(unsupported->type), unsupported->name,
-                        entries.size());
+                        (long long) unsupported_tokens, entries.size());
                 continue;
             }
 

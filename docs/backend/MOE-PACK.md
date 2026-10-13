@@ -82,8 +82,11 @@ counts it under a reason (`-lv 4`):
   buffer);
 - the layer itself runs on a GPU or iGPU device, which is where its pack goes;
 - the device runs `MUL_MAT_ID` on every pack tensor of its layers, probed with
-  each tensor's type and shape (OpenVINO, for one, takes no `q5_0` experts);
-  otherwise none of that device's layers gets a pack;
+  each tensor's type and shape for a decode step and for a 512-token batch, the
+  batch the loader probes expert weights with (OpenVINO, for one, takes no `q5_0`
+  experts, and on a GPU no MXFP4 batch whose expert temporary exceeds 1 GiB);
+  otherwise none of that device's layers gets a pack, since a prompt batch the
+  device refuses would copy the pack on every ubatch;
 - the split mode is not `tensor`.
 
 The device MoE cache (`--moe-cache-mib`) skips a layer that has a pack; the
