@@ -2412,22 +2412,32 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(ids_hot,  "ffn_moe_ids_hot",  il);
         cb(ids_cold, "ffn_moe_ids_cold", il);
 
-        // build_lora_mm_id keeps the precision policy; eligibility excludes adapters and scales
+        // build_lora_mm_id keeps the precision policy, which is keyed by the model's tensor: a pack
+        // copy takes the entry of its source. Eligibility excludes adapters and scales
+        const auto mm = [&](ggml_tensor * w, const ggml_tensor * src, ggml_tensor * x, ggml_tensor * ids) {
+            ggml_tensor * r = build_lora_mm_id(w, x, ids, nullptr);
+            if (prec_policy && w != src) {
+                if (const auto it = prec_policy->prec_src1.find(src); it != prec_policy->prec_src1.end()) {
+                    ggml_prec_set_src(r, it->second, 1);
+                }
+            }
+            return r;
+        };
         const auto chain = [&](ggml_tensor * w_gate, ggml_tensor * w_up, ggml_tensor * w_gate_up,
                                ggml_tensor * w_down, ggml_tensor * ids) {
             ggml_tensor * g = nullptr;
             ggml_tensor * u = nullptr;
             if (w_gate_up) {
-                ggml_tensor * gu = build_lora_mm_id(w_gate_up, cur, ids, nullptr);
+                ggml_tensor * gu = mm(w_gate_up, gate_up_exps, cur, ids);
                 const int64_t n_ff = gu->ne[0] / 2;
                 g = ggml_view_3d(ctx0, gu, n_ff, gu->ne[1], gu->ne[2], gu->nb[1], gu->nb[2], 0);
                 u = ggml_view_3d(ctx0, gu, n_ff, gu->ne[1], gu->ne[2], gu->nb[1], gu->nb[2], n_ff * gu->nb[0]);
             } else {
-                g = build_lora_mm_id(w_gate, cur, ids, nullptr);
-                u = build_lora_mm_id(w_up,   cur, ids, nullptr);
+                g = mm(w_gate, gate_exps, cur, ids);
+                u = mm(w_up,   up_exps,   cur, ids);
             }
             ggml_tensor * act = ggml_swiglu_split(ctx0, g, u);
-            ggml_tensor * d   = build_lora_mm_id(w_down, act, ids, nullptr);
+            ggml_tensor * d   = mm(w_down, down_exps, act, ids);
             if (arch == LLM_ARCH_MISTRAL4) {
                 ggml_prec_set_src(d, GGML_PREC_F32, 1);
             }

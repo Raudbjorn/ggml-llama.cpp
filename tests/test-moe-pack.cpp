@@ -123,6 +123,53 @@ static bool fold_expert_hadamard(const std::string & src, const std::string & ds
     return ok;
 }
 
+// copy a GGUF whose routed expert weights may not take 4-bit activations
+// (general.tensor_extra.prec_a4 = false): their matmuls get GGML_PREC_Q8 on src1
+static bool mark_experts_prec_q8(const std::string & src, const std::string & dst) {
+    ggml_context * meta = nullptr;
+    gguf_init_params params = { /*no_alloc =*/ false, /*ctx =*/ &meta };
+    gguf_context * in = gguf_init_from_file(src.c_str(), params);
+    if (!in) {
+        return false;
+    }
+    gguf_context * out = gguf_init_empty();
+    gguf_set_kv(out, in);
+    std::vector<const char *> names;
+    for (int64_t i = 0; i < gguf_get_n_tensors(in); i++) {
+        const char * name = gguf_get_tensor_name(in, i);
+        if (strstr(name, "_exps.weight")) {
+            names.push_back(name);
+        }
+        gguf_add_tensor(out, ggml_get_tensor(meta, name));
+    }
+    const std::vector<int8_t> no_a4(names.size(), 0);
+    gguf_set_arr_str(out, "general.tensor_extra.name", names.data(), names.size());
+    gguf_set_arr_data(out, "general.tensor_extra.prec_a4", GGUF_TYPE_BOOL, no_a4.data(), no_a4.size());
+    const bool ok = !names.empty() && gguf_write_to_file(out, dst.c_str(), false);
+    gguf_free(out);
+    gguf_free(in);
+    ggml_free(meta);
+    return ok;
+}
+
+// the src1 precision of the layer-0 down matmuls of the hot and the cold chain
+struct down_prec {
+    int32_t hot  = -1;
+    int32_t cold = -1;
+};
+
+static bool record_down_prec(ggml_tensor * t, bool ask, void * user_data) {
+    auto * seen = static_cast<down_prec *>(user_data);
+    if (ask && t->op == GGML_OP_MUL_MAT_ID) {
+        if (strcmp(t->name, "ffn_moe_down_hot-0") == 0) {
+            seen->hot = t->op_params[3]; // ggml_prec_set_src(t, prec, 1)
+        } else if (strcmp(t->name, "ffn_moe_down_cold-0") == 0) {
+            seen->cold = t->op_params[3];
+        }
+    }
+    return false;
+}
+
 // whether DEV runs MUL_MAT_ID on experts of TYPE, probed like the loader probes a pack tensor
 static bool device_runs_mul_mat_id(ggml_backend_dev_t dev, ggml_type type) {
     ggml_init_params params = { 4*ggml_tensor_overhead(), nullptr, true };
@@ -197,9 +244,11 @@ static llama_model_params model_params(const char * profile, int32_t slots, plac
 
 // a prompt of 12 tokens in one batch, then 4 single-token steps; logits for every token.
 // abort_first: an aborted decode of the prompt and a cleared memory come first;
-// moe_cache_size: the device MoE cache for the experts in host memory, 0 = none
+// moe_cache_size: the device MoE cache for the experts in host memory, 0 = none; cb_eval: the
+// context's eval callback
 static run_result run_model(const std::string & path, const char * profile, int32_t slots, placement place = PLACE_CPU,
-                            bool async = false, bool abort_first = false, size_t moe_cache_size = 0) {
+                            bool async = false, bool abort_first = false, size_t moe_cache_size = 0,
+                            ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_data = nullptr) {
     run_result r;
     {
         std::lock_guard<std::mutex> lock(g_log_mutex);
@@ -218,6 +267,8 @@ static run_result run_model(const std::string & path, const char * profile, int3
     cp.n_threads_batch = 2;
     cp.sched_async_cpu = async;
     cp.moe_cache_size  = moe_cache_size;
+    cp.cb_eval           = cb_eval;
+    cp.cb_eval_user_data = cb_eval_data;
     llama_context * ctx = llama_init_from_model(model, cp);
     if (!ctx) {
         llama_model_free(model);
@@ -520,6 +571,20 @@ int main(int argc, char ** argv) {
     expect_disabled("missing profile", base, run_model(f32, (work + "/none.csv").c_str(), 2), "cannot open");
     expect_disabled("spec-router trace as a profile", base, run_model(f32, p_spec.c_str(), 2), "holds no routing");
     expect_disabled("sessions from two models", base, run_model(f32, p_two.c_str(), 2), "conflicts with 'llama'");
+
+    // the precision policy is keyed by the model's tensors: the hot chain must take its source's entry
+    {
+        const std::string q8 = work + "/prec-q8.gguf";
+        CHECK(mark_experts_prec_q8(f32, q8), "cannot write %s", q8.c_str());
+        down_prec seen;
+        const run_result r = run_model(q8, p_mixed.c_str(), 2, PLACE_CPU, false, false, 0, record_down_prec, &seen);
+        CHECK(r.ok, "precision policy run failed");
+        CHECK(seen.cold == GGML_PREC_Q8 && seen.hot == GGML_PREC_Q8,
+                "down matmul src1 precision: cold %d, hot %d, expected %d", seen.cold, seen.hot, (int) GGML_PREC_Q8);
+        if (r.ok && seen.cold == GGML_PREC_Q8 && seen.hot == GGML_PREC_Q8) {
+            printf("ok: pack matmuls keep the precision policy of their source\n");
+        }
+    }
 
     // a pack copy of a Hadamard-folded expert would get unrotated activations
     {
