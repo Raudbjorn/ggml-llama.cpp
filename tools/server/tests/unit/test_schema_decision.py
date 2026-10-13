@@ -224,9 +224,9 @@ def test_decision_after_embedding_request():
     global server
     server.server_embeddings = True
     server.pooling = "mean"
-    # mean pooling aborts at load when n_batch is not a multiple of the sequence count
-    # (also without decisions: -np 9 --embedding --pooling mean), so keep 2 + 6 = 8
-    server.decision_seqs = 6
+    # 2 + 5 = 7 sequences do not divide n_batch 256: the server rounds the embedding ubatch down to
+    # 252, where mean pooling used to abort at load
+    server.decision_seqs = 5
     server.start()
     reference = decide(CONTEXTS[:1])
     assert reference.status_code == 200
