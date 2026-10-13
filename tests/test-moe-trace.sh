@@ -226,6 +226,21 @@ grep -q '^# sampling_inputs=.* grammar=17:[0-9a-f]\{16\} ' "$work_dir/smp1.csv" 
     || fail "two sampling policies must not share their provenance"
 printf 'ok: header records the sampling chain, parameters and grammar\n'
 
+# without --seed, every stochastic sampler must take the recorded seed: XTC (p = 0.5, so its own
+# draws decide) replayed with --seed gives the same routing
+xtc="--xtc-probability 0.5 --xtc-threshold 0"
+# shellcheck disable=SC2086
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "one two three four five" -n 8 -c 64 $xtc -o "$work_dir/xtc0.csv" \
+    > "$work_dir/xtc.log" 2>&1 || fail "XTC trace failed: $(tail -n 2 "$work_dir/xtc.log")"
+seed=$(sed -n 's/^# sampling seed=\([0-9]*\) .*/\1/p' "$work_dir/xtc0.csv")
+[ -n "$seed" ] && [ "$seed" != 4294967295 ] || fail "XTC trace recorded no resolved seed ('$seed')"
+# shellcheck disable=SC2086
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "one two three four five" -n 8 -c 64 $xtc --seed "$seed" \
+    -o "$work_dir/xtc1.csv" > "$work_dir/xtc.log" 2>&1 || fail "XTC replay failed: $(tail -n 2 "$work_dir/xtc.log")"
+cmp -s <(grep -v '^#' "$work_dir/xtc0.csv") <(grep -v '^#' "$work_dir/xtc1.csv") \
+    || fail "an XTC trace replayed with its recorded seed $seed routed differently"
+printf 'ok: the recorded seed reproduces every sampler\n'
+
 if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 2 -c 64 \
         -o "$work_dir/no-such-dir/x.csv" > "$work_dir/badpath.log" 2>&1; then
     fail "an unwritable output path must fail"

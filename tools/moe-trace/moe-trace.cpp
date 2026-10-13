@@ -622,12 +622,21 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         return 1;
     }
 
+    // each stochastic sampler (dist, XTC, mirostat) resolves a default seed on its own, so resolve
+    // one here: the recorded seed then reproduces all of them, as --seed does
+    if (params.sampling.seed == LLAMA_DEFAULT_SEED) {
+        std::random_device rd;
+        const uint32_t t = (uint32_t) std::chrono::system_clock::now().time_since_epoch().count();
+        do {
+            params.sampling.seed = rd() ^ t;
+        } while (params.sampling.seed == LLAMA_DEFAULT_SEED);
+    }
     common_sampler_ptr smpl(common_sampler_init(model, params.sampling));
     if (!smpl) {
         LOG_ERR("%s: failed to initialize the sampler\n", __func__);
         return 1;
     }
-    const uint32_t seed = llama_sampler_get_seed(common_sampler_get(smpl.get()));
+    const uint32_t seed = params.sampling.seed;
     std::string chain = common_sampler_print(smpl.get()); // "logits -> a -> b "
     chain.erase(chain.find_last_not_of(' ') + 1);
     const uint64_t session = new_session_id();
