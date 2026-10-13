@@ -651,7 +651,33 @@ static bool written_by_trace(const std::string & path) {
     const size_t n = fread(head, 1, sizeof(head), f);
     fclose(f);
     const std::string h(head, n);
-    return h.rfind("# llama-moe-trace v1\n", 0) == 0 || h.rfind("llama-moe-trace hidden v1\n", 0) == 0;
+    // the CSV outputs are text files: CRLF where the C runtime writes one (Windows)
+    return h.rfind("# llama-moe-trace v1\n", 0) == 0 || h.rfind("# llama-moe-trace v1\r\n", 0) == 0 ||
+           h.rfind("llama-moe-trace hidden v1\n", 0) == 0;
+}
+
+// opening an output truncates it, so every output must open before any is: a --spec-out or
+// --hidden-out that cannot be written must not cost the trace -o names. Appending opens a file
+// without changing it; one this check creates is removed again when a later one fails
+static bool outputs_writable(const std::vector<std::string> & outs) {
+    std::vector<std::string> created;
+    for (const std::string & out : outs) {
+        std::error_code ec;
+        const bool existed = std::filesystem::exists(out, ec);
+        FILE * f = fopen(out.c_str(), "ab");
+        if (f == nullptr) {
+            LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, out.c_str(), strerror(errno));
+            for (const std::string & c : created) {
+                std::filesystem::remove(c, ec);
+            }
+            return false;
+        }
+        fclose(f);
+        if (!existed) {
+            created.push_back(out);
+        }
+    }
+    return true;
 }
 
 static int run_trace(common_params & params, trace_state & ts, const std::vector<std::string> & named) {
@@ -744,6 +770,9 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
     const std::string adapters = adapters_identity(params); // after init: it resolves the cvec range
     if (adapters.empty()) {
         LOG_ERR("%s: cannot read an adapter or control vector file to identify it\n", __func__);
+        return 1;
+    }
+    if (!outputs_writable(outs)) {
         return 1;
     }
     ts.out = fopen(params.out_file.c_str(), "w");

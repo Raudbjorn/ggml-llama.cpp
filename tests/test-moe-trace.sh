@@ -428,6 +428,24 @@ if [ "$(command id -u)" != 0 ] || [ "${#run_as[@]}" -gt 0 ]; then
 else
     printf 'skip: unreadable output (root, and nobody cannot reach the work dir)\n'
 fi
+# an output that cannot be opened stops the run before any output is truncated, and a file the
+# check created is removed again
+before=$(cksum < "$work_dir/again.csv")
+for out in again fresh; do
+    if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/$out.csv" \
+            --hidden-out "$work_dir/no-such-dir/h.bin" > "$work_dir/aux.log" 2>&1; then
+        fail "an unwritable --hidden-out must be rejected"
+    fi
+    grep -q "cannot open '$work_dir/no-such-dir/h.bin' for writing" "$work_dir/aux.log" \
+        || fail "unwritable --hidden-out: missing diagnostic"
+done
+[ "$(cksum < "$work_dir/again.csv")" = "$before" ] || fail "an unwritable --hidden-out truncated the -o trace"
+[ ! -e "$work_dir/fresh.csv" ] || fail "a run refused for its --hidden-out left the -o file it created"
+# a trace written on Windows has CRLF lines: it may be replaced
+printf '# llama-moe-trace v1\r\n# session=00000000000000aa\r\n' > "$work_dir/crlf.csv"
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/crlf.csv" > "$work_dir/crlf.log" 2>&1 \
+    || fail "replacing a CRLF trace failed: $(tail -n 2 "$work_dir/crlf.log")"
+grep -q '^# llama-moe-trace v1$' "$work_dir/crlf.csv" || fail "the CRLF trace was not replaced"
 printf 'ok: colliding output paths rejected\n'
 
 # the router fingerprint names the checkpoint: a fixture of another seed has the same arch and
