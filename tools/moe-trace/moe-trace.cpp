@@ -643,7 +643,9 @@ static bool written_by_trace(const std::string & path) {
     }
     FILE * f = fopen(path.c_str(), "rb");
     if (f == nullptr) {
-        return true;
+        // a file that cannot be read cannot be shown to be a trace: keep it
+        LOG_ERR("%s: cannot read '%s' to check that it is a trace: %s\n", __func__, path.c_str(), strerror(errno));
+        return false;
     }
     char head[32] = {};
     const size_t n = fread(head, 1, sizeof(head), f);

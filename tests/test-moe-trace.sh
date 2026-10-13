@@ -405,6 +405,29 @@ if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -f "$work_dir/again.csv" -n 1 -
 fi
 grep -q "must not name the input file" "$work_dir/again-pf.log" || fail "trace as prompt file: missing diagnostic"
 [ "$(cksum < "$work_dir/again.csv")" = "$before" ] || fail "-o naming the prompt file changed it"
+# an existing file that cannot be read cannot be shown to be a trace: it must survive. As root,
+# run as nobody (root reads a mode 0200 file), through a work dir it may traverse
+printf 'precious\n' > "$work_dir/unreadable.txt"
+run_as=()
+if [ "$(command id -u)" = 0 ] && command -v setpriv > /dev/null 2>&1; then
+    chmod 711 "$work_dir"
+    chown 65534 "$work_dir/unreadable.txt"
+    run_as=(setpriv --reuid=65534 --regid=65534 --clear-groups)
+    # TMPDIR's own parents may keep nobody out
+    "${run_as[@]}" test -r "$work_dir/qwen3moe-moe.gguf" -a -x "$trace_bin" 2> /dev/null || run_as=()
+fi
+chmod 0200 "$work_dir/unreadable.txt"
+if [ "$(command id -u)" != 0 ] || [ "${#run_as[@]}" -gt 0 ]; then
+    if "${run_as[@]}" "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/unreadable.txt" \
+            > "$work_dir/unreadable.log" 2>&1; then
+        fail "-o naming an unreadable file must be rejected"
+    fi
+    grep -q "cannot read .* to check that it is a trace" "$work_dir/unreadable.log" || fail "unreadable output: missing diagnostic"
+    chmod 0600 "$work_dir/unreadable.txt"
+    [ "$(cat "$work_dir/unreadable.txt")" = precious ] || fail "-o naming an unreadable file replaced it"
+else
+    printf 'skip: unreadable output (root, and nobody cannot reach the work dir)\n'
+fi
 printf 'ok: colliding output paths rejected\n'
 
 # the router fingerprint names the checkpoint: a fixture of another seed has the same arch and
