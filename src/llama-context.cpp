@@ -2065,6 +2065,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch &     ubatch
 
         gf_res_prev_active = res;
     }
+    n_moe_pack_used_min = n_moe_pack_used_min < 0 ? res->n_moe_pack_used : std::min(n_moe_pack_used_min, res->n_moe_pack_used);
 
     // InnerQ capture enablement: route through the same env-var
     // semantics as ggml_innerq_state_decide so the contract stays in
@@ -5084,6 +5085,16 @@ enum ggml_type llama_get_kv_cache_type_v(const struct llama_context * ctx) {
 
 bool llama_get_sched_async_cpu(const struct llama_context * ctx) {
     return ctx && ctx->get_cparams().sched_async_cpu;
+}
+
+int32_t llama_context::take_n_moe_pack_used() {
+    const int32_t n = n_moe_pack_used_min;
+    n_moe_pack_used_min = -1;
+    return n;
+}
+
+int32_t llama_take_n_moe_pack_used(struct llama_context * ctx) {
+    return ctx ? ctx->take_n_moe_pack_used() : -1;
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {

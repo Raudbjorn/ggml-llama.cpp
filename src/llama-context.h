@@ -65,6 +65,10 @@ struct llama_context {
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
 
+    // the fewest static expert packs that a graph computed since the previous call used, or -1
+    // if no graph was computed; each call starts a new count
+    int32_t take_n_moe_pack_used();
+
     ggml_backend_sched_t get_sched() const;
 
     uint32_t n_ctx()     const;
@@ -454,4 +458,6 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
+
+    int32_t n_moe_pack_used_min = -1; // see take_n_moe_pack_used
 };

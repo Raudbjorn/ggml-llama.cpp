@@ -2821,6 +2821,7 @@ int llama_bench(int argc, char ** argv) {
             }
         }
 
+        int32_t n_pack_used = -1; // the fewest packs a timed graph used
         for (int i = 0; i < params.reps; i++) {
             llama_memory_clear(llama_get_memory(ctx), false);
 
@@ -2868,6 +2869,7 @@ int llama_bench(int argc, char ** argv) {
                 }
             }
 
+            llama_take_n_moe_pack_used(ctx); // the warmup and depth graphs are not the workload
             uint64_t t_start = get_time_ns();
 
             if (t.n_prompt > 0) {
@@ -2901,6 +2903,18 @@ int llama_bench(int argc, char ** argv) {
 
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
+            const int32_t n_used = llama_take_n_moe_pack_used(ctx);
+            if (n_used >= 0) {
+                n_pack_used = n_pack_used < 0 ? n_used : std::min(n_pack_used, n_used);
+            }
+        }
+
+        // a graph leaves a built pack out where its device refuses the batch: report what ran
+        const int32_t n_pack_built = llama_model_n_moe_pack_layers(lmodel);
+        if (t.moe_pack != "off" && n_pack_used >= 0 && n_pack_used < n_pack_built) {
+            fprintf(stderr, "warning: --moe-pack %s: the test's graphs used %d of %d packs (-v logs why)\n",
+                    t.moe_pack.c_str(), n_pack_used, n_pack_built);
+            t.moe_pack += " (" + std::to_string(n_pack_used) + "/" + std::to_string(n_pack_built) + " layers)";
         }
 
         if (p) {

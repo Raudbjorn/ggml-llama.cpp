@@ -89,6 +89,11 @@ LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 // layers that got a static expert pack at load: 0 when none was requested or built
 LLAMA_API int32_t llama_model_n_moe_pack_layers(const struct llama_model * model);
 
+// the fewest static expert packs that a graph computed by ctx since the previous call used (a
+// graph leaves a pack out where its device refuses the batch, or the arch's graph does not
+// qualify), or -1 if no graph was computed; each call starts a new count
+LLAMA_API int32_t llama_take_n_moe_pack_used(struct llama_context * ctx);
+
 struct llama_moe_tensor_info {
     enum ggml_type type;
     size_t expert_size;

@@ -257,7 +257,12 @@ with their expert scale tensors stripped:
 `llama-bench --moe-pack off,PROFILE:SLOTS` compares the arms in one run and
 reports a `moe-pack` column; an instance with a pack runs with `moe-cache off`.
 The column shows the pack that was built: an arm whose profile selects no layer,
-or whose allocation fails, is reported as `off`, with a warning on stderr.
+or whose allocation fails, is reported as `off`, with a warning on stderr. When
+a timed graph used fewer packs than were built (a device that refuses the
+prompt batch, or a graph that does not qualify), the column adds the fewest it
+used, as in `work.csv:16 (1/48 layers)`, also with a warning. A prompt test
+keeps the last layer's pack in that case: that layer computes only the output
+row.
 
 Not yet run: the SYCL backend on the Arc A770, and any throughput measurement.
 The same test covers a SYCL device unchanged (`ctest -R test-moe-pack` in a

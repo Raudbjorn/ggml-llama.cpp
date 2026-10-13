@@ -730,6 +730,35 @@ int main(int argc, char ** argv) {
         if (ctx && left_out && decode_kept) {
             printf("ok: no pack in a prompt graph larger than the device runs, packs kept for decode\n");
         }
+        // llama_take_n_moe_pack_used (llama-bench's moe_pack field) counts the computed graphs
+        if (ctx) {
+            const int32_t before = llama_take_n_moe_pack_used(ctx); // reserve graphs are not computed
+            llama_batch batch = llama_batch_init(600, 0, 1);
+            batch.n_tokens = 600;
+            for (int32_t i = 0; i < batch.n_tokens; i++) {
+                batch.token[i]     = 1 + i % 50;
+                batch.pos[i]       = i;
+                batch.n_seq_id[i]  = 1;
+                batch.seq_id[i][0] = 0;
+                batch.logits[i]    = 1; // the last layer computes only the output rows
+            }
+            const bool prompt_ok = llama_decode(ctx, batch) == 0;
+            const int32_t prompt_used = llama_take_n_moe_pack_used(ctx);
+            batch.n_tokens     = 1;
+            batch.token[0]     = 7;
+            batch.pos[0]       = 600;
+            batch.logits[0]    = 1;
+            const bool step_ok = llama_decode(ctx, batch) == 0;
+            const int32_t step_used = llama_take_n_moe_pack_used(ctx);
+            llama_batch_free(batch);
+            CHECK(prompt_ok && step_ok, "prompt-limit device: decode failed");
+            CHECK(before == -1 && prompt_used == 0 && step_used == 2,
+                    "prompt-limit device: packs used: %d before a decode, %d by a 600-token prompt, %d by a step; expected -1, 0, 2",
+                    before, prompt_used, step_used);
+            if (prompt_ok && step_ok && before == -1 && prompt_used == 0 && step_used == 2) {
+                printf("ok: packs used per computed graph: none for a 600-token prompt, 2 for a decode step\n");
+            }
+        }
         llama_free(ctx);
         llama_model_free(model);
     }
