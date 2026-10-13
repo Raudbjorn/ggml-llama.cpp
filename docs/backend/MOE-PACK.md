@@ -173,8 +173,9 @@ Hazards to measure before relying on it on the A770:
   overlaps.
 - A `--moe-cache` provider submits to the device's own queue from inside the CPU
   split (Vulkan without the backend's submit lock, SYCL on the backend's in-order
-  stream), so a scheduler with a cache session never uses the worker. Packs turn
-  the cache off, so this costs the pack path nothing.
+  stream), so a scheduler with a cache session refuses the worker
+  (`ggml_backend_sched_set_async_cpu` returns false). Packs turn the cache off,
+  so this costs the pack path nothing.
 - In builds without OpenMP the worker is thread 0 of the CPU threadpool, and the
   threadpool applies `--prio` and `-C` to the calling thread only when a paused pool
   resumes, so they may not reach the worker. Performance only.
@@ -182,7 +183,10 @@ Hazards to measure before relying on it on the A770:
   the worker, so the CPU is oversubscribed. Not tested.
 - Measure decode with and without the worker (`llama-bench -sac 0,1` with the
   pack arm), and check the `M` counter. If `M` is 0, the hot remap did not move
-  to the device.
+  to the device. The `sched_async_cpu` column is the effective state
+  (`llama_get_sched_async_cpu`): 0 in the `-sac 1` arm means nothing ran on the
+  worker (an eval callback, `LLAMA_ENABLE_INNERQ`, or a MoE cache session; the
+  bench's `--moe-cache` defaults to `auto`).
 
 Validation: with the worker, `test-moe-pack` gives logits bitwise equal to the
 synchronous run on the CPU, on Vulkan (llvmpipe) with and without a pack, and on

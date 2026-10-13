@@ -65,6 +65,12 @@ static ggml_backend_sycl_failure llama_backend_sched_consume_sycl_failure(ggml_b
 // llama_context
 //
 
+// the InnerQ capture opt-in: LLAMA_ENABLE_INNERQ set, not empty and not 0
+static bool llama_innerq_env_enabled() {
+    const char * env = getenv("LLAMA_ENABLE_INNERQ");
+    return env != nullptr && env[0] != '\0' && env[0] != '0';
+}
+
 // check that each folded weight in the graph gets its Hadamard transform, and each latent lookup gets the inverse
 // without this check, an arch that skips the transform helpers loads and computes wrong results
 static void llama_verify_hadamard_graph(
@@ -1000,8 +1006,15 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
     ggml_backend_sched_set_prefetch_experts_slots(
             sched.get(), cparams.moe_cache_size > 0 ? 0 : cparams.prefetch_experts_slots);
 
+    // cparams.sched_async_cpu is what runs (llama_get_sched_async_cpu): the graph pins the expert
+    // merge only for the worker, and an eval callback keeps every split off it
+    if (cparams.sched_async_cpu && (cparams.cb_eval || llama_innerq_env_enabled())) {
+        LLAMA_LOG_WARN("%s: sched_async_cpu ignored: an eval callback runs every split in order\n", __func__);
+        cparams.sched_async_cpu = false;
+    }
     if (cparams.sched_async_cpu && !ggml_backend_sched_set_async_cpu(sched.get(), true)) {
-        cparams.sched_async_cpu = false; // the graph pins the expert merge only for the worker
+        LLAMA_LOG_WARN("%s: sched_async_cpu ignored: the scheduler keeps CPU splits synchronous\n", __func__);
+        cparams.sched_async_cpu = false;
     }
     if (cparams.sched_async_cpu) {
         LLAMA_LOG_INFO("%s: CPU graph splits run on a scheduler worker thread (experimental)\n", __func__);
@@ -2059,10 +2072,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch &     ubatch
     // model_fp/kv_quant/head_dim checks); this is just the env-var
     // half. Empty/0 values are treated as disabled, matching
     // ggml_innerq_state_decide.
-    const bool innerq_env_enabled = []() {
-        const char * env = getenv("LLAMA_ENABLE_INNERQ");
-        return env != nullptr && env[0] != '\0' && env[0] != '0';
-    }();
+    const bool innerq_env_enabled = llama_innerq_env_enabled();
     turbo_innerq_eval_capture innerq_cap = {
         /* .mctx                   = */ mctx,
         /* .user_cb                = */ cparams.cb_eval,
@@ -5070,6 +5080,10 @@ enum ggml_type llama_get_kv_cache_type_v(const struct llama_context * ctx) {
     }
 
     return ctx->get_kv_type_v();
+}
+
+bool llama_get_sched_async_cpu(const struct llama_context * ctx) {
+    return ctx && ctx->get_cparams().sched_async_cpu;
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {

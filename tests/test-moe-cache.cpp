@@ -645,10 +645,24 @@ static bool run_scenario(
         fprintf(stderr, "%s: failed to create scheduler\n", name);
         return false;
     }
-    if (async_cpu && !ggml_backend_sched_set_async_cpu(scheduler, true)) {
-        fprintf(stderr, "%s: the CPU split worker did not start\n", name);
-        ggml_backend_sched_free(scheduler);
-        return false;
+    if (async_cpu) {
+        // the provider submits to the device queue from the CPU split: the scheduler refuses the
+        // worker beside a session, and keeps a worker started before the session idle
+        bool bad = ggml_backend_sched_set_async_cpu(scheduler, true);
+        if (bad) {
+            fprintf(stderr, "%s: the CPU split worker started beside a cache session\n", name);
+        } else {
+            ggml_backend_sched_set_moe_cache(scheduler, GGML_MOE_CACHE_MODE_OFF, 0);
+            bad = !ggml_backend_sched_set_async_cpu(scheduler, true);
+            if (bad) {
+                fprintf(stderr, "%s: the CPU split worker did not start without a session\n", name);
+            }
+            ggml_backend_sched_set_moe_cache(scheduler, GGML_MOE_CACHE_MODE_ON, 4);
+        }
+        if (bad) {
+            ggml_backend_sched_free(scheduler);
+            return false;
+        }
     }
     ggml_backend_sched_set_tensor_backend(scheduler, graph.out, cpu);
     if (!ggml_backend_sched_alloc_graph(scheduler, graph.graph) ||

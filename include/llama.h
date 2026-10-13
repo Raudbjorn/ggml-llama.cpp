@@ -648,6 +648,11 @@ extern "C" {
     LLAMA_API enum ggml_type llama_get_kv_cache_type_k(const struct llama_context * ctx);
     LLAMA_API enum ggml_type llama_get_kv_cache_type_v(const struct llama_context * ctx);
 
+    // [EXPERIMENTAL] whether CPU graph splits run on the scheduler's worker thread: the requested
+    // sched_async_cpu, or false when the context keeps them synchronous (an eval callback,
+    // LLAMA_ENABLE_INNERQ, a MoE cache provider session, or a worker that did not start)
+    LLAMA_API bool llama_get_sched_async_cpu(const struct llama_context * ctx);
+
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
 

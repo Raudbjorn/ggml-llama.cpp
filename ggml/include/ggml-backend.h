@@ -405,8 +405,8 @@ extern "C" {
     // with a MoE cache session, run without the worker; every graph compute joins the worker
     // before it returns. The CPU backend's
     // abort callback then runs on the worker thread. Not thread-safe: call it while no graph
-    // compute runs. Returns false if the thread could not be started (the scheduler then stays
-    // synchronous).
+    // compute runs. Returns false if the scheduler has a MoE cache session or the thread could
+    // not be started (the scheduler then stays synchronous).
     GGML_API bool                 ggml_backend_sched_set_async_cpu(ggml_backend_sched_t sched, bool enable);
 
     //

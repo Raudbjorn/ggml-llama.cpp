@@ -1836,7 +1836,7 @@ struct test {
         }
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
-        sched_async_cpu = inst.sched_async_cpu;
+        sched_async_cpu = llama_get_sched_async_cpu(ctx); // effective: off beside a MoE cache session
         no_host        = inst.no_host;
         fit_target     = inst.fit_target;
         fit_min_ctx    = inst.fit_min_ctx;

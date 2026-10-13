@@ -3248,10 +3248,14 @@ bool ggml_backend_sched_set_async_cpu(ggml_backend_sched_t sched, bool enable) {
     if (sched == NULL) {
         return false;
     }
-    if (!enable) {
+    if (!enable || sched->moe_cache_session) {
         delete sched->cpu_async; // idle: a job never outlives a graph compute
         sched->cpu_async = NULL;
-        return true;
+        if (enable) {
+            // compute_splits would keep every split off the worker (see there)
+            GGML_LOG_INFO("%s: a MoE cache session keeps CPU splits synchronous\n", __func__);
+        }
+        return !enable;
     }
     if (sched->cpu_async) {
         return true;

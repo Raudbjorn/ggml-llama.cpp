@@ -173,6 +173,11 @@ static bool record_down_prec(ggml_tensor * t, bool ask, void * user_data) {
     return false;
 }
 
+// an eval callback that observes no tensor
+static bool observe_nothing(ggml_tensor *, bool, void *) {
+    return false;
+}
+
 // whether DEV runs MUL_MAT_ID on experts of TYPE, probed like the loader probes a pack tensor:
 // the fixture's 2 experts per token, for a decode step and for 512 tokens
 static bool device_runs_mul_mat_id(ggml_backend_dev_t dev, ggml_type type) {
@@ -226,6 +231,7 @@ static bool quantize_q4_0(const std::string & src, const std::string & dst, ggml
 struct run_result {
     bool ok = false;
     int  abort_rc = 0;         // llama_decode result of the aborted first decode
+    bool async_on = false;     // llama_get_sched_async_cpu: CPU splits on the worker
     std::vector<float> logits; // [n_tokens, n_vocab]
     std::string log;
 };
@@ -276,10 +282,11 @@ static llama_model_params model_params(const char * profile, int32_t slots, plac
 // a prompt of 12 tokens in one batch, then 4 single-token steps; logits for every token.
 // abort_first: an aborted decode of the prompt and a cleared memory come first;
 // moe_cache_size: the device MoE cache for the experts in host memory, 0 = none; cb_eval: the
-// context's eval callback
+// context's eval callback; moe_cache_mode: the provider MoE cache (--moe-cache)
 static run_result run_model(const std::string & path, const char * profile, int32_t slots, placement place = PLACE_CPU,
                             bool async = false, bool abort_first = false, size_t moe_cache_size = 0,
-                            ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_data = nullptr) {
+                            ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_data = nullptr,
+                            llama_moe_cache_mode moe_cache_mode = LLAMA_MOE_CACHE_MODE_UNSPECIFIED) {
     run_result r;
     {
         std::lock_guard<std::mutex> lock(g_log_mutex);
@@ -302,11 +309,13 @@ static run_result run_model(const std::string & path, const char * profile, int3
     cp.moe_cache_size  = moe_cache_size;
     cp.cb_eval           = cb_eval;
     cp.cb_eval_user_data = cb_eval_data;
+    cp.moe_cache_mode    = moe_cache_mode;
     llama_context * ctx = llama_init_from_model(model, cp);
     if (!ctx) {
         llama_model_free(model);
         return r;
     }
+    r.async_on = llama_get_sched_async_cpu(ctx);
     const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
 
     const std::vector<llama_token> prompt = { 1, 5, 9, 2, 33, 17, 4, 4, 8, 60, 21, 3 };
@@ -448,6 +457,7 @@ static void expect_async_same(const char * name, const run_result & sync, const 
         return;
     }
     unsigned long long splits = 0, overlaps = 0;
+    CHECK(async.async_on, "%s: the context reports the worker off", name);
     CHECK(async_counts(async.log, splits, overlaps), "%s: no async scheduler counters in the log", name);
     CHECK(!need_split || splits > 0, "%s: the worker computed no CPU split", name);
     CHECK(!need_overlap || overlaps > 0, "%s: no split was launched without waiting for a CPU split", name);
@@ -455,6 +465,27 @@ static void expect_async_same(const char * name, const run_result & sync, const 
     CHECK(n_diff == 0, "%s: %zu of %zu logits differ bitwise", name, n_diff, sync.logits.size());
     if (g_failures == failures_before) {
         printf("ok: %s (%llu CPU splits on the worker, %llu splits launched without waiting for them)\n", name, splits, overlaps);
+    }
+}
+
+// a requested worker that the context keeps off must be reported off (reason: its log line) and
+// must not exist; sync, when set: the synchronous run, whose logits must match bit for bit
+static void expect_async_off(const char * name, const run_result * sync, const run_result & r, const char * reason) {
+    const int failures_before = g_failures;
+    CHECK(r.ok, "%s: run failed", name);
+    if (!r.ok) {
+        return;
+    }
+    unsigned long long splits = 0, overlaps = 0;
+    CHECK(!r.async_on, "%s: the context reports the worker on", name);
+    CHECK(contains(r.log, reason), "%s: missing \"%s\" in the log", name, reason);
+    CHECK(!async_counts(r.log, splits, overlaps), "%s: the scheduler has a worker (%llu CPU splits on it)", name, splits);
+    if (sync) {
+        const size_t n_diff = bitwise_diff(sync->logits, r.logits);
+        CHECK(n_diff == 0, "%s: %zu of %zu logits differ bitwise", name, n_diff, sync->logits.size());
+    }
+    if (g_failures == failures_before) {
+        printf("ok: %s (reported off)\n", name);
     }
 }
 
@@ -595,6 +626,14 @@ int main(int argc, char ** argv) {
     expect_async_same("async CPU splits, no pack", base, run_model(f32, nullptr, 0, PLACE_CPU, true), false);
     expect_async_same("async CPU splits, f32 mixed hot/cold", base, run_model(f32, p_mixed.c_str(), 2, PLACE_CPU, true), false);
     expect_abort_recovers("abort on the CPU worker", base, run_model(f32, p_mixed.c_str(), 2, PLACE_CPU, true, true));
+    {
+        // an eval callback runs every split in order: the worker would never run
+        const run_result cb_sync = run_model(f32, p_mixed.c_str(), 2, PLACE_CPU, false, false, 0, observe_nothing);
+        CHECK(cb_sync.ok, "eval callback baseline run failed");
+        expect_async_off("async CPU splits beside an eval callback", cb_sync.ok ? &cb_sync : nullptr,
+                run_model(f32, p_mixed.c_str(), 2, PLACE_CPU, true, false, 0, observe_nothing),
+                "sched_async_cpu ignored: an eval callback runs every split in order");
+    }
     expect_abort_recovers("abort without the worker", base, run_model(f32, p_mixed.c_str(), 2, PLACE_CPU, false, true));
 
     expect_disabled("malformed profile", base, run_model(f32, p_bad.c_str(), 2), "malformed row");
@@ -717,6 +756,20 @@ int main(int argc, char ** argv) {
             // without a pack OpenVINO runs every op, the host experts included, so no CPU split is left
             expect_async_same("device async CPU splits, no pack", dbase, run_model(f32, nullptr, 0, PLACE_DEVICE, true), false,
                     dev_map);
+            // a provider MoE cache session keeps every split off the worker (as llama-bench's
+            // default --moe-cache auto may): the context must report the worker off
+            setenv("GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB", "1", 1); // the fixture's experts are small
+            const run_result sasync = qbase.ok ? run_model(q40, nullptr, 0, PLACE_DEVICE, true, false, 0, nullptr, nullptr,
+                    LLAMA_MOE_CACHE_MODE_ON) : run_result();
+            unsetenv("GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB");
+            // the provider caches quantized experts only
+            if (contains(sasync.log, "MoE cache requested=on resolved=on") && !contains(sasync.log, "session creation failed")) {
+                expect_async_off("device async CPU splits beside a MoE cache session", nullptr, sasync,
+                        "a MoE cache session keeps CPU splits synchronous");
+            } else {
+                printf("skip: async CPU splits beside a MoE cache session (no provider session on %s)\n",
+                        ggml_backend_dev_name(gpu));
+            }
             if (dev_map) {
                 expect_abort_recovers("device abort on the CPU worker", dpack, run_model(f32, p_mixed.c_str(), 2, PLACE_DEVICE, true, true));
             } else {
