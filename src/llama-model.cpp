@@ -2122,6 +2122,7 @@ struct moe_pack_profile {
     int64_t n_layer  = -1;
     int64_t n_expert = -1;
     uint64_t router  = 0; // '# router_fingerprint=', 0 when absent
+    std::string adapters; // '# adapters=', empty when absent
 };
 
 // FNV-1a over each MoE layer's router (ffn_gate_inp): its layer, type, shape and every byte, so
@@ -2252,6 +2253,13 @@ bool moe_pack_read_profile(const char * path, moe_pack_profile & prof, std::stri
                 // llama-moe-trace --spec-out writes predicted ids in the same format
                 err = format("'%s':%lld: a '%s' trace holds no routing", path, (long long) lineno, val.c_str());
                 return false;
+            } else if (key == "adapters") {
+                if (!prof.adapters.empty() && prof.adapters != val) {
+                    err = format("'%s':%lld: adapters '%s' conflict with '%s'", path, (long long) lineno, val.c_str(),
+                                 prof.adapters.c_str());
+                    return false;
+                }
+                prof.adapters = val;
             } else if (key == "router_fingerprint") {
                 uint64_t fp = 0; // 16 hex digits, as llama-moe-trace writes it
                 bool hex = val.size() == 16;
@@ -2394,6 +2402,12 @@ void llama_model_base::init_moe_packs(llama_model_loader & ml) {
         (prof.n_expert > 0 && prof.n_expert != (int64_t) hparams.n_expert)) {
         LLAMA_LOG_ERROR("%s: profile '%s' has n_layer=%lld n_expert=%lld, model has %u and %u - packs disabled\n",
                 __func__, path, (long long) prof.n_layer, (long long) prof.n_expert, hparams.n_layer(), hparams.n_expert);
+        return;
+    }
+    // a LoRA adapter or control vector routes differently, and the context's adapters are not known yet
+    if (!prof.adapters.empty() && prof.adapters != "none") {
+        LLAMA_LOG_ERROR("%s: profile '%s' was traced with adapters (%s), which the loader cannot check the context"
+                " applies - packs disabled; trace without them\n", __func__, path, prof.adapters.c_str());
         return;
     }
     // a fine-tune or another checkpoint of the same shapes routes to other experts

@@ -61,6 +61,7 @@ for arch in qwen3moe qwen35moe; do
     grep -q '^# session=[0-9a-f]\{16\}$' "$out" || fail "$arch: missing session line"
     grep -q '^# n_expert=[0-9][0-9]*$' "$out" || fail "$arch: missing n_expert line"
     grep -q '^# sampling seed=7 ' "$out" || fail "$arch: seed not recorded"
+    grep -q '^# adapters=none$' "$out" || fail "$arch: missing adapters=none line"
 
     # one line per routed layer with its expert tensors (type, bytes, inputs and outputs per expert):
     # separate gate, up and down in qwen3moe, a merged gate_up and down in qwen35moe
@@ -165,6 +166,39 @@ PY
     fi
     grep -q "cannot record the router input of layer 0" "$work_dir/lora-hid.log" || fail "router LoRA: missing diagnostic"
     printf 'ok: --hidden-out with a router LoRA rejected\n'
+
+    # the applied adapters and control vectors are provenance: a router LoRA or a control vector
+    # changes the routing of the base model
+    grep -Eq '^# adapters=lora:[0-9a-f]{16}@1$' "$work_dir/lora.csv" || fail "router LoRA: missing adapters line"
+    "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" --lora-scaled "$work_dir/router-lora.gguf:0.5" -p "hello" -n 2 -c 64 \
+        -o "$work_dir/lora-half.csv" > "$work_dir/lora-half.log" 2>&1 || fail "trace with a scaled LoRA failed"
+    grep -Eq '^# adapters=lora:[0-9a-f]{16}@0.5$' "$work_dir/lora-half.csv" || fail "scaled LoRA: missing adapters line"
+    "$python_bin" - "$(dirname "$0")/../gguf-py" "$work_dir/qwen3moe-moe.gguf" "$work_dir/cvec.gguf" <<'PY' \
+        || fail "could not write the control vector"
+import sys
+sys.path.insert(0, sys.argv[1])
+import numpy as np
+import gguf
+model = gguf.GGUFReader(sys.argv[2])
+n_embd = int(next(t for t in model.tensors if t.name == "blk.0.ffn_gate_inp.weight").shape[0])
+w = gguf.GGUFWriter(sys.argv[3], "controlvector")
+w.add_tensor("direction.1", np.full(n_embd, 0.01, dtype=np.float32))
+w.write_header_to_file()
+w.write_kv_data_to_file()
+w.write_tensors_to_file()
+w.close()
+PY
+    "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" --control-vector-scaled "$work_dir/cvec.gguf:0.25" -p "hello" -n 2 \
+        -c 64 -o "$work_dir/cvec.csv" > "$work_dir/cvec.log" 2>&1 || fail "trace with a control vector failed: $(tail -n 2 "$work_dir/cvec.log")"
+    grep -Eq '^# adapters=cvec:[0-9a-f]{16}@0.25 layers=1-[0-9]+$' "$work_dir/cvec.csv" || fail "control vector: missing adapters line"
+    if "$python_bin" "$simulate_py" "$work_dir/qwen3moe.csv" "$work_dir/lora-half.csv" --budgets 0.5 > "$work_dir/lora.sim" 2>&1; then
+        fail "simulate.py must refuse a trace with a LoRA beside one without"
+    fi
+    grep -q "adapters" "$work_dir/lora.sim" || fail "simulate.py: missing adapters diagnostic"
+    "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 --moe-pack-profile "$work_dir/lora-half.csv" \
+        --moe-pack-slots 1 -o "$work_dir/lora-prof.csv" > "$work_dir/lora-prof.log" 2>&1 || fail "tracing with a LoRA profile failed"
+    grep -q "was traced with adapters" "$work_dir/lora-prof.log" || fail "a profile traced with a LoRA must be refused"
+    printf 'ok: adapters and control vectors recorded and checked\n'
 else
     printf 'skip: router LoRA (no numpy)\n'
 fi

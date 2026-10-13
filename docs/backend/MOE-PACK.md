@@ -111,8 +111,10 @@ cannot be opened, has a malformed or negative field, a line over 64 KiB, more
 than 1 GiB, no decode rows, a `# arch=`, `# n_layer=` or `# n_expert=` line
 that disagrees with the model, a `# router_fingerprint=` line that disagrees
 with the model's routers (another checkpoint of the same shapes, such as a
-fine-tune; quantizations of one checkpoint share it), sessions whose header
-lines disagree, a layer the model does not have, or an expert id outside a
+fine-tune; quantizations of one checkpoint share it), an `# adapters=` line other
+than `none` (a LoRA adapter or control vector routes differently, and the
+loader cannot check that the context applies it: trace without them), sessions
+whose header lines disagree, a layer the model does not have, or an expert id outside a
 layer's range. The `--fit` pass loads no weights, so it cannot check the router
 fingerprint.
 

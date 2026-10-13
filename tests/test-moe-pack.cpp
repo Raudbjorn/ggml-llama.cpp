@@ -677,6 +677,19 @@ int main(int argc, char ** argv) {
         expect_disabled("profile of other routers", base, run_model(f32, p_other.c_str(), 2), "was traced on another model");
         expect_disabled("sessions of two routers", base, run_model(f32, p_both.c_str(), 2), "traces of different models");
         expect_disabled("malformed router fingerprint", base, run_model(f32, p_badfp.c_str(), 2), "invalid router_fingerprint");
+
+        // the context's adapters are applied after the model loads: a profile traced with one is refused
+        const std::string p_plain = work + "/adapters-none.csv";
+        const std::string p_lora  = work + "/adapters-lora.csv";
+        const std::string p_mixa  = work + "/adapters-both.csv";
+        CHECK(write_text(p_plain, hdr + "# adapters=none\n" + rows) &&
+              write_text(p_lora,  hdr + "# adapters=lora:00000000000000a1@1\n" + rows) &&
+              write_text(p_mixa,  hdr + "# adapters=none\n" + rows + next + "# adapters=lora:00000000000000a1@1\n" + rows),
+              "cannot write adapter profiles");
+        expect_equivalent("profile traced without adapters", base, run_model(f32, p_plain.c_str(), 2),
+                "static expert packs on CPU: 2 layer(s), up to 2 slot(s)", true);
+        expect_disabled("profile traced with a LoRA", base, run_model(f32, p_lora.c_str(), 2), "was traced with adapters");
+        expect_disabled("sessions with other adapters", base, run_model(f32, p_mixa.c_str(), 2), "conflict with 'none'");
     }
 
     // the precision policy is keyed by the model's tensors: the hot chain must take its source's entry

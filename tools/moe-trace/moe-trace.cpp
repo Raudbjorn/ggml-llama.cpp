@@ -37,6 +37,7 @@
 #include <filesystem>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <random>
 #include <string>
 #include <system_error>
@@ -383,6 +384,50 @@ static bool write_sampling(FILE * out, const common_params_sampling & s, const s
 }
 
 // the prompt's token ids, each as 4 little-endian bytes, as COUNT:FNV-1a-64
+// FNV-1a over a file's bytes: the identity of an adapter or a control vector, whatever its path
+static bool file_identity(const std::string & path, std::string & out) {
+    std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(path.c_str(), "rb"), fclose);
+    if (!f) {
+        return false;
+    }
+    uint64_t h = fnv1a(nullptr, 0);
+    std::vector<unsigned char> buf(1 << 20);
+    for (size_t n; (n = fread(buf.data(), 1, buf.size(), f.get())) > 0; ) {
+        h = fnv1a(buf.data(), n, h);
+    }
+    if (ferror(f.get())) {
+        return false;
+    }
+    char hex[24];
+    snprintf(hex, sizeof(hex), "%016" PRIx64, h);
+    out = hex;
+    return true;
+}
+
+// the LoRA adapters and control vectors common_init_from_params applied, which change the routing
+// of the base model: "none", or lora:ID@SCALE and cvec:ID@STRENGTH entries, the control vectors'
+// layer range after them; empty when an adapter file cannot be read
+static std::string adapters_identity(const common_params & params) {
+    std::string s, id;
+    for (const auto & la : params.lora_adapters) {
+        if (!file_identity(la.path, id)) {
+            return std::string();
+        }
+        s += (s.empty() ? "" : ",") + std::string("lora:") + id + "@" + exact(la.scale);
+    }
+    for (const auto & cv : params.control_vectors) {
+        if (!file_identity(cv.fname, id)) {
+            return std::string();
+        }
+        s += (s.empty() ? "" : ",") + std::string("cvec:") + id + "@" + exact(cv.strength);
+    }
+    if (!params.control_vectors.empty()) {
+        s += " layers=" + std::to_string(params.control_vector_layer_start) + "-" +
+             std::to_string(params.control_vector_layer_end);
+    }
+    return s.empty() ? std::string("none") : s;
+}
+
 static std::string prompt_identity(const std::vector<llama_token> & tokens) {
     uint64_t h = fnv1a(nullptr, 0);
     for (const llama_token t : tokens) {
@@ -396,7 +441,7 @@ static std::string prompt_identity(const std::vector<llama_token> & tokens) {
 
 static bool write_header(FILE * out, const llama_model * model, const llama_context * lctx, const common_params & params,
                          uint32_t seed, const std::string & chain, const std::vector<llama_token> & prompt,
-                         uint64_t session, uint64_t router, const char * kind) {
+                         uint64_t session, uint64_t router, const std::string & adapters, const char * kind) {
     const size_t n_prompt = prompt.size();
     char desc[256] = {};
     llama_model_desc(model, desc, sizeof(desc));
@@ -420,6 +465,8 @@ static bool write_header(FILE * out, const llama_model * model, const llama_cont
     if (router != 0) {
         failed |= fprintf(out, "# router_fingerprint=%016" PRIx64 "\n", router) < 0;
     }
+    // and what changes them at run time: two adapter files or scales route differently
+    failed |= fprintf(out, "# adapters=%s\n", adapters.c_str()) < 0;
     if (!n_expert.empty()) {
         failed |= fprintf(out, "# n_expert=%s\n", n_expert.c_str()) < 0;
     }
@@ -692,12 +739,17 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
     }
 
     const uint64_t router = llama_model_router_fingerprint(model); // reads every router: once
+    const std::string adapters = adapters_identity(params); // after init: it resolves the cvec range
+    if (adapters.empty()) {
+        LOG_ERR("%s: cannot read an adapter or control vector file to identify it\n", __func__);
+        return 1;
+    }
     ts.out = fopen(params.out_file.c_str(), "w");
     if (ts.out == nullptr) {
         LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, params.out_file.c_str(), strerror(errno));
         return 1;
     }
-    if (!write_header(ts.out, model, lctx, params, seed, chain, tokens, session, router, nullptr)) {
+    if (!write_header(ts.out, model, lctx, params, seed, chain, tokens, session, router, adapters, nullptr)) {
         ts.write_failed = true;
     }
     if (params.moe_spec_router_k > 0) {
@@ -708,7 +760,7 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
             return 1;
         }
         const std::string kind = "kind=spec-router k=" + std::to_string(params.moe_spec_router_k);
-        if (!write_header(ts.spec_out, model, lctx, params, seed, chain, tokens, session, router, kind.c_str())) {
+        if (!write_header(ts.spec_out, model, lctx, params, seed, chain, tokens, session, router, adapters, kind.c_str())) {
             ts.write_failed = true;
         }
     }

@@ -22,7 +22,9 @@ Lines starting with `#` carry provenance: tool version, a per-run `session`
 id, model path/description/size, architecture, `n_layer`, the router
 fingerprint (`# router_fingerprint=`, 16 hex digits: FNV-1a over each MoE layer's
 `ffn_gate_inp` type, shape and bytes; quantizations of one checkpoint share it, a
-fine-tune of the same shapes does not), `n_expert`,
+fine-tune of the same shapes does not), the adapters applied at run time
+(`# adapters=`: `none`, or `lora:ID@SCALE` and `cvec:ID@STRENGTH` entries with the
+control vectors' `layers=START-END`, where ID is FNV-1a over the adapter file), `n_expert`,
 `n_expert_used`, prompt length and identity (`# prompt_tokens=COUNT:FNV-1a-64` of the token ids
 as 4 little-endian bytes each) and the context's `n_ctx`, `n_batch` and `n_ubatch`
 (as the context resolved them, not as requested), and the sampling seed and settings. Without
@@ -197,10 +199,12 @@ previous session's state, and the report says so.
 Expert counts come from the trace's `# n_expert=` line, or from `--n-expert`
 for a trace without one (a different value is an error), never from the
 largest observed id. All traces and the `--profile` traces must agree on
-`# arch=`, `# n_layer=` and `# router_fingerprint=` where they carry them: layer
-ids of different models do not line up, and checkpoints with other routers
-number their experts differently. The model loader applies the same rule to a
-`--moe-pack-profile`, between its sessions and against the loaded model. Sessions are replayed in file order with cache state
+`# arch=`, `# n_layer=`, `# router_fingerprint=` and `# adapters=` where they carry
+them: layer ids of different models do not line up, and checkpoints with other
+routers, or other adapters on them, route differently. The model loader applies
+the same rule to a `--moe-pack-profile`, between its sessions and against the
+loaded model, and refuses a profile traced with adapters: it cannot check that
+the context applies the same ones. Sessions are replayed in file order with cache state
 carried over; `reelect-K` adds each session's prompt routing to its counts when
 that session starts. The cost columns appear only when `--slab-mb`,
 `--ram-gbs` and `--link-gbs` are all given; they are an assumed model that

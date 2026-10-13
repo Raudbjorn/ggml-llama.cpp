@@ -72,6 +72,7 @@ class Trace:
     arch: str | None = None
     n_layer: int | None = None
     router: str | None = None  # '# router_fingerprint=': which routers numbered the experts
+    adapters: str | None = None  # '# adapters=': the LoRA adapters and control vectors applied
     # per MoE layer, its expert tensors as (weight type, bytes per expert), from '# expert_tensors='
     tensors: dict[int, list[tuple[str, int]]] = field(default_factory=dict)
     # per MoE layer, each tensor's (n_in, n_out), where the line carries them
@@ -92,6 +93,7 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
     arch: str | None = None
     n_layer: int | None = None
     router: str | None = None
+    adapters: str | None = None
     tensors: dict[int, list[tuple[str, int]]] = {}
     dims: dict[int, list[tuple[int, int]]] = {}
     for path in paths:
@@ -137,6 +139,12 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
                         return None, (f"{path}:{lineno}: router fingerprint {fp} conflicts with {router}: "
                                       "traces of different models")
                     router = fp
+                elif key == "adapters":
+                    # a LoRA adapter or a control vector on the router changes the routing
+                    a = value.strip()
+                    if adapters is not None and a != adapters:
+                        return None, f"{path}:{lineno}: adapters '{a}' conflict with '{adapters}'"
+                    adapters = a
                 elif key == "n_layer":
                     try:
                         n = int(value)
@@ -191,7 +199,7 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
         for rows in s.decode.values():
             rows.sort(key=lambda r: r[0])
     return Trace(sessions=sessions, n_expert=n_expert, widths=widths, arch=arch, n_layer=n_layer, router=router,
-                 tensors=tensors, dims=dims), None
+                 adapters=adapters, tensors=tensors, dims=dims), None
 
 
 def parse_prompt_chunk(text: str) -> int | None:
@@ -660,7 +668,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: profile n_expert {profile.n_expert} differs from {n_expert}", file=sys.stderr)
             return 2
         for what, ours, theirs in (("arch", trace.arch, profile.arch), ("n_layer", trace.n_layer, profile.n_layer),
-                                   ("router fingerprint", trace.router, profile.router)):
+                                   ("router fingerprint", trace.router, profile.router),
+                                   ("adapters", trace.adapters, profile.adapters)):
             if ours is not None and theirs is not None and ours != theirs:
                 print(f"error: profile {what} {theirs} differs from the trace's {ours}", file=sys.stderr)
                 return 2

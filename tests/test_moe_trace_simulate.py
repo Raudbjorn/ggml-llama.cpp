@@ -522,6 +522,21 @@ class CliTests(unittest.TestCase):
         code, _, err = run([a, model("c", "00000000000000A1"), "--profile", a, "--budgets", "0.5"])
         self.assertEqual(code, 0, err)
 
+    def test_traces_with_other_adapters_are_rejected(self) -> None:
+        # a LoRA adapter or control vector on the router routes differently from the base model
+        def run_of(sid: str, adapters: str) -> str:
+            head = HEADER.format(sid=sid).replace("# n_expert", f"# adapters={adapters}\n# n_expert", 1)
+            return write(self.tmp.name, f"{sid}.csv", head + "0,0,0,1\n1,0,1,2\n")
+        base = run_of("a", "none")
+        lora = run_of("b", "lora:00000000000000a1@1")
+        for argv in ([base, lora], [base, "--profile", lora]):
+            with self.subTest(argv=argv):
+                code, _, err = run(argv)
+                self.assertEqual(code, 2)
+                self.assertIn("adapters", err)
+        code, _, err = run([lora, run_of("c", "lora:00000000000000a1@1"), "--profile", lora, "--budgets", "0.5"])
+        self.assertEqual(code, 0, err)
+
     def test_layers_past_n_layer_are_rejected(self) -> None:
         # a row of layer 2 in a 2-layer trace would add a layer, and pool units, to the replay
         head = HEADER.format(sid="n").replace("# n_expert", "# n_layer=2\n# n_expert", 1)
