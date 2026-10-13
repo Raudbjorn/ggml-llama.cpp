@@ -274,8 +274,9 @@ seed=$(sed -n 's/^# sampling seed=\([0-9]*\) .*/\1/p' "$work_dir/xtc0.csv")
 cmp -s <(grep -v '^#' "$work_dir/xtc0.csv") <(grep -v '^#' "$work_dir/xtc1.csv") \
     || fail "an XTC trace replayed with its recorded seed $seed routed differently"
 # --backend-sampling attaches the context's sampler: it must be the one that takes the recorded
-# seed and the accepted tokens
-bs="--backend-sampling --temp 1.5 --repeat-penalty 1.5"
+# seed and the accepted tokens. On the CPU: OpenVINO fails a backend-sampled repeat penalty
+# (ScatterUpdate shape check), in llama-completion too
+bs="--backend-sampling --temp 1.5 --repeat-penalty 1.5 -dev none"
 # shellcheck disable=SC2086
 "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "one two three four five" -n 8 -c 64 $bs -o "$work_dir/bs0.csv" \
     > "$work_dir/bs.log" 2>&1 || fail "backend sampling trace failed: $(tail -n 2 "$work_dir/bs.log")"
