@@ -137,12 +137,16 @@ per weight type and expert size, caps it at the creating tensor's `n_expert`
 slabs whatever the budget, keys its entries by (expert tensor, expert) and plans
 each `MUL_MAT_ID` on its own. With the trace's `# expert_tensors=` lines the
 replay does the same: each expert tensor of a layer is its own plan, in the
-listed order, on the pool of its type and size, which holds `min(S x member
-tensors, n_expert)` slabs. Gate, up and down of one type and size therefore
-compete for one pool, and hit and `ins/tok` are weighted by bytes, the inserts
-in (layer, expert) units. A trace without those lines (older traces) gets one
-pool of `min(S x n_layers, n_expert)` (layer, expert) units and one plan per
-layer: an upper bound wherever tensors of a layer share a pool. In both, the
+listed order, on the pool of its type and size. Gate, up and down of one type
+and size therefore compete for one pool, and hit and `ins/tok` are weighted by
+bytes, the inserts in (layer, expert) units. The byte budget holds `S` experts of
+every expert tensor, and like the providers' per-device budget the pools take it
+in the order the graph meets them, `min(left / expert size, n_expert)` slabs
+each, so a later pool can get less than its share or nothing. A trace without
+those lines (older traces) gets one pool of `min(S x n_layers, n_expert)`
+(layer, expert) units and one plan per layer: an upper bound wherever tensors of
+a layer share a pool. In both, a pool below the providers' 64-slot minimum is
+not created (models with fewer than 64 experts get no dynamic hits), the
 order is LRU, units with more than `--hot-uses` uses are evicted only when every
 unit is hot, and like the provider each plan fills at most `--inserts-per-plan`
 misses (default 8, as `GGML_CUDA_MOE_CACHE_INSERTS`) and never evicts a unit it

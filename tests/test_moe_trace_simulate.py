@@ -183,13 +183,23 @@ class PolicyTests(unittest.TestCase):
         self.assertAlmostEqual(res.hit, 1 / 3)
         self.assertAlmostEqual(res.inserts_per_step, 1 / 2)
 
+    def test_lfu_decay_counts_events_without_the_layer(self) -> None:
+        # one slot. Layer 0 routes expert 0 twice (score 1.95), then sits out 13 events that layer 1
+        # routes. Decayed by those 13 events and the step itself, expert 0 scores 1.95 x 0.95^14 =
+        # 0.95 < 1, so expert 1 replaces it at once and hits next step. A per-layer clock decays
+        # once (1.85) and admits expert 1 a step later, without the hit.
+        events = [[(0, [0])]] * 2 + [[(1, [5])]] * 13 + [[(0, [1])]] * 2
+        res = simulate.sim_lfu_decay(events, 1)
+        self.assertAlmostEqual(res.hit, 14 / 17)
+        self.assertAlmostEqual(res.inserts_per_step, 3 / 17)
+
     def test_dynamic_tensors_of_one_type_share_the_pool(self) -> None:
         # experts 0 and 1 on every step, S = 2 of 4 experts. Gate, up and down of one type and
         # size share one pool of min(2 x 3, 4) = 4 slabs, too few for 2 experts x 3 tensors:
         # each plan evicts the slabs of the plans before it, so nothing ever hits.
         steps = [[(0, [0, 1])]] * 8
         shared = {0: [("f32", 100)] * 3}
-        pools = simulate.dynamic_pools(shared, [0], 2, 4)
+        pools = simulate.dynamic_pools(shared, [0], 2, 4, min_slots=1)
         self.assertEqual(pools, {("f32", 100): 4})
         self.assertEqual(simulate.sim_dynamic_tensors(steps, shared, pools, hot_uses=4).hit, 0.0)
         # one unit per (layer, expert) holds both experts: the upper bound
@@ -200,11 +210,29 @@ class PolicyTests(unittest.TestCase):
         # Step 0 fills 2 slabs of each tensor, 2 (layer, expert) units over 8 steps.
         steps = [[(0, [0, 1])]] * 8
         split = {0: [("q4_K", 100), ("q4_K", 100), ("q6_K", 150)]}
-        pools = simulate.dynamic_pools(split, [0], 2, 4)
+        # budget 2 x (100 + 100 + 150) = 700 bytes: q4_K takes min(7, 4) slabs, q6_K the 300 left
+        pools = simulate.dynamic_pools(split, [0], 2, 4, min_slots=1)
         self.assertEqual(pools, {("q4_K", 100): 4, ("q6_K", 150): 2})
         res = simulate.sim_dynamic_tensors(steps, split, pools, hot_uses=4)
         self.assertAlmostEqual(res.hit, 7 / 8)
         self.assertAlmostEqual(res.inserts_per_step, 2 / 8)
+
+    def test_dynamic_pools_share_one_byte_budget(self) -> None:
+        # two layers with one tensor each, of equal size but different types, S = 64 of 128: the
+        # first pool met takes the whole budget of 128 experts, the second is not created
+        tensors = {0: [("q4_K", 100)], 1: [("q5_K", 100)]}
+        pools = simulate.dynamic_pools(tensors, [0, 1], 64, 128)
+        self.assertEqual(pools, {("q4_K", 100): 128, ("q5_K", 100): 0})
+        steps = [[(0, [0, 1]), (1, [0, 1])]] * 4
+        res = simulate.sim_dynamic_tensors(steps, tensors, pools, hot_uses=4)
+        self.assertAlmostEqual(res.hit, 3 / 8)  # layer 0 hits from step 1, layer 1 never
+
+    def test_dynamic_pools_below_the_provider_minimum_are_not_created(self) -> None:
+        # S = 30 of 128 is a budget of 30 x (100 + 50) = 4500 bytes: 45 f32 slabs, below the
+        # provider's 64, so that pool is not created and the f16 pool met later gets 90
+        tensors = {0: [("f32", 100)], 1: [("f16", 50)]}
+        self.assertEqual(simulate.dynamic_pools(tensors, [0, 1], 30, 128),
+                         {("f32", 100): 0, ("f16", 50): 90})
 
     def test_dynamic_tensor_plans_fill_separately(self) -> None:
         # each tensor's plan has its own fill budget: one fill per plan still inserts both
@@ -259,11 +287,15 @@ class PolicyTests(unittest.TestCase):
 
 class CliTests(unittest.TestCase):
     def setUp(self) -> None:
+        # the fixtures have 4 experts, far below the provider's 64-slot pool minimum
+        self.pool_min = simulate.PROVIDER_POOL_SLOTS_MIN
+        simulate.PROVIDER_POOL_SLOTS_MIN = 1
         self.tmp = tempfile.TemporaryDirectory()
         self.trace = write(self.tmp.name, "t.csv", HEADER.format(sid="a") + "".join(
             f"-{p},0,0,1\n" for p in range(1, 4)) + "".join(f"{s},0,{s % 4},{(s + 1) % 4}\n" for s in range(16)))
 
     def tearDown(self) -> None:
+        simulate.PROVIDER_POOL_SLOTS_MIN = self.pool_min
         self.tmp.cleanup()
 
     def test_report_runs(self) -> None:
@@ -398,6 +430,13 @@ class CliTests(unittest.TestCase):
         self.assertIn("weighted by bytes", out)
         code, out, _ = run([self.trace])
         self.assertIn("upper bound", out)
+
+    def test_dynamic_needs_the_provider_minimum(self) -> None:
+        simulate.PROVIDER_POOL_SLOTS_MIN = self.pool_min
+        code, out, err = run([self.trace, "--budgets", "0.5"])
+        self.assertEqual(code, 0, err)
+        line = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == "dynamic")
+        self.assertEqual(line.split("|")[1].split()[1:3], ["0.0%", "0.00"])
 
     def test_expert_tensors_must_cover_every_routed_layer(self) -> None:
         text = HEADER.format(sid="m") + "# expert_tensors=0:f32/100\n0,0,0,1\n0,1,0,1\n"

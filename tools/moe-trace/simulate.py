@@ -21,10 +21,12 @@ units with more than --hot-uses uses evicted only when every unit is hot. Each
 plan fills at most --inserts-per-plan misses and never evicts a unit it hit or
 filled; its other misses stay on the CPU. With the trace's '# expert_tensors='
 lines, every expert tensor of a layer is its own plan on the pool of its weight
-type and expert size, which holds min(S x member tensors, n_expert) slabs, so
-gate, up and down of one type compete for one pool; hit and ins/tok are then
-weighted by bytes. Without them, one pool of min(S x n_layers, n_expert)
-(layer, expert) units with one plan per layer is an upper bound.
+type and expert size, so gate, up and down of one type compete for one pool;
+the byte budget holds S experts of every tensor, and the pools take it in the
+order the graph meets them, min(left / expert size, n_expert) slabs each; hit
+and ins/tok are then weighted by bytes. Without them, one pool of
+min(S x n_layers, n_expert) (layer, expert) units with one plan per layer is an
+upper bound. Like the provider, a pool below 64 slots is not created.
 
 Sessions ('# session=' lines) are replayed in file order and never
 interleaved; cache state carries over between sessions as in a long-running
@@ -37,7 +39,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-from collections import Counter, OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import Hashable, Iterable
 from dataclasses import dataclass, field
 
@@ -267,14 +269,20 @@ def sim_lru(decode: dict[int, list[Step]], slots: int, n_steps: int) -> Result:
     return Result(hits / max(total, 1), inserts / max(n_steps, 1))
 
 
-def sim_lfu_decay(decode: dict[int, list[Step]], slots: int, n_steps: int, alpha: float = 0.95) -> Result:
+def sim_lfu_decay(events: list[list[tuple[int, Step]]], slots: int, alpha: float = 0.95) -> Result:
+    """Per-layer decayed frequency, decayed once per decode event of the model, also the events
+    where the layer has no row."""
     hits = total = inserts = 0
-    for steps in decode.values():
-        score: dict[int, float] = defaultdict(float)
-        cache: set[int] = set()
-        for ids in steps:
+    scores: dict[int, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+    caches: dict[int, set[int]] = defaultdict(set)
+    last: dict[int, int] = {}
+    for i, step in enumerate(events):
+        for layer, ids in step:
+            score, cache = scores[layer], caches[layer]
+            decay = alpha ** (i - last.get(layer, i - 1))
+            last[layer] = i
             for k in score:
-                score[k] *= alpha
+                score[k] *= decay
             for e in ids:
                 total += 1
                 score[e] += 1.0
@@ -289,7 +297,7 @@ def sim_lfu_decay(decode: dict[int, list[Step]], slots: int, n_steps: int, alpha
                         cache.discard(victim)
                         cache.add(e)
                         inserts += 1
-    return Result(hits / max(total, 1), inserts / max(n_steps, 1))
+    return Result(hits / max(total, 1), inserts / max(len(events), 1))
 
 
 def sim_reelect(trace: Trace, slots: int, interval: int, n_steps: int, alpha: float = 0.98) -> Result:
@@ -339,6 +347,7 @@ def sim_reelect(trace: Trace, slots: int, interval: int, n_steps: int, alpha: fl
 
 
 PROVIDER_INSERTS_PER_PLAN = 8  # GGML_CUDA_MOE_CACHE_INSERTS default, ggml-moe-cache-common.h
+PROVIDER_POOL_SLOTS_MIN = 64   # moe_cache_pool_slots_min, ggml-moe-cache-common.h: a smaller pool is not created
 
 
 def plan(uses: OrderedDict[Hashable, int], units: int, keys: Iterable[Hashable], hot_uses: int,
@@ -389,11 +398,26 @@ def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int,
 
 
 def dynamic_pools(tensors: dict[int, list[tuple[str, int]]], layers: Iterable[int], slots: int,
-                  n_expert: int) -> dict[tuple[str, int], int]:
-    """Slabs of each provider pool: one pool per weight type and expert size, S slabs per
-    member tensor, capped at n_expert slabs (moe-cache.cpp)."""
-    members = Counter(t for layer in layers for t in tensors[layer])
-    return {t: min(slots * n, n_expert) for t, n in members.items()}
+                  n_expert: int, min_slots: int | None = None) -> dict[tuple[str, int], int]:
+    """Slabs of each provider pool, one per weight type and expert size. The byte budget holds S
+    experts of every expert tensor; like the providers' per-device budget (moe-cache.cpp), the
+    pools take it in the order the graph first meets them (layer, then tensor order), each
+    min(left / expert size, n_expert) slabs. A pool below min_slots is not created: its tensors
+    stay on the CPU and the budget passes on."""
+    floor = PROVIDER_POOL_SLOTS_MIN if min_slots is None else min_slots
+    order: list[tuple[str, int]] = []
+    left = 0
+    for layer in sorted(layers):
+        for t in tensors[layer]:
+            left += slots * t[1]
+            if t not in order:
+                order.append(t)
+    pools: dict[tuple[str, int], int] = {}
+    for t in order:
+        n = min(left // t[1], n_expert)
+        pools[t] = n if n >= floor else 0
+        left -= pools[t] * t[1]
+    return pools
 
 
 def sim_dynamic_tensors(events: list[list[tuple[int, Step]]], tensors: dict[int, list[tuple[str, int]]],
@@ -553,16 +577,17 @@ def main(argv: list[str] | None = None) -> int:
         rows.append(("static-prefill", sim_static(decode, top_by_freq(prefill, slots)) if prefill else None))
         # rates per decode event: a layer may route on fewer steps than the model decodes
         rows.append(("lru", sim_lru(decode, slots, len(events))))
-        rows.append(("lfu-decay", sim_lfu_decay(decode, slots, len(events))))
+        rows.append(("lfu-decay", sim_lfu_decay(events, slots)))
         rows.append((f"reelect-{args.reelect}", sim_reelect(trace, slots, args.reelect, len(events))))
         # the provider shares one pool per expert size and weight type across all layers and caps
         # it at the creating tensor's n_expert slabs (moe-cache.cpp), whatever the budget
         if trace.tensors:
-            pools = dynamic_pools(trace.tensors, decode, slots, n_expert)
+            pools = dynamic_pools(trace.tensors, decode, slots, n_expert, PROVIDER_POOL_SLOTS_MIN)
             rows.append(("dynamic", sim_dynamic_tensors(events, trace.tensors, pools, args.hot_uses,
                                                         args.inserts_per_plan)))
         else:
             units = min(slots * len(decode), n_expert)
+            units = units if units >= PROVIDER_POOL_SLOTS_MIN else 0
             rows.append(("dynamic", sim_dynamic(events, units, args.hot_uses, args.inserts_per_plan)))
         for name, res in rows:
             if res is None:
