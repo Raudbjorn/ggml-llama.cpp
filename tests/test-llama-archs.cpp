@@ -445,7 +445,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them;
         // --n-expert sets the count explicitly
-        ms.add_kv(LLM_KV_EXPERT_COUNT,               g_n_expert ? g_n_expert : uint32_t(host_experts_test(arch) ? 64 : 2));
+        const uint32_t n_expert = g_n_expert ? g_n_expert : uint32_t(host_experts_test(arch) ? 64 : 2);
+        if (g_n_expert_used > n_expert) {
+            throw std::runtime_error(string_format("--n-expert-used %u exceeds the %u experts of the %s fixture; set --n-expert",
+                                            g_n_expert_used, n_expert, llm_arch_name(arch)));
+        }
+        ms.add_kv(LLM_KV_EXPERT_COUNT,               n_expert);
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          g_n_expert_used);
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
         ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,
@@ -1221,7 +1226,8 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: stdev must be > 0\n", __func__);
         return 1;
     }
-    if (g_n_expert_used > (g_n_expert ? g_n_expert : 2)) {
+    // the default count depends on the arch (host_experts_test), so get_gguf_ctx checks it
+    if (g_n_expert && g_n_expert_used > g_n_expert) {
         LOG_ERR("%s: --n-expert-used must not exceed --n-expert\n", __func__);
         return 1;
     }

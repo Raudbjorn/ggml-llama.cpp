@@ -17,6 +17,23 @@ trap 'rm -rf "$work_dir"' EXIT
 
 "$archs_bin" -o "$work_dir" -a '^(qwen3moe|qwen35moe)$' -s 42 --n-expert 8 --n-expert-used 2 > "$work_dir/archs.log" 2>&1
 
+# without --n-expert the expert count follows the arch: deepseek2 fixtures have 64, the others 2
+mkdir -p "$work_dir/default-count"
+"$archs_bin" -o "$work_dir/default-count" -a '^deepseek2$' -s 42 --n-expert-used 3 > "$work_dir/default-count.log" 2>&1 || {
+    tail -n 3 "$work_dir/default-count.log" >&2
+    printf 'FAIL: --n-expert-used 3 must be accepted for the 64-expert deepseek2 fixture\n' >&2
+    exit 1
+}
+if "$archs_bin" -o "$work_dir/default-count" -a '^qwen3moe$' -s 42 --n-expert-used 3 > "$work_dir/default-count.log" 2>&1; then
+    printf 'FAIL: --n-expert-used 3 must be refused for the 2-expert qwen3moe fixture\n' >&2
+    exit 1
+fi
+grep -q "exceeds the 2 experts of the qwen3moe fixture" "$work_dir/default-count.log" || {
+    printf 'FAIL: missing diagnostic for --n-expert-used above the fixture default\n' >&2
+    exit 1
+}
+printf 'ok: --n-expert-used checked against the fixture default\n'
+
 for arch in qwen3moe qwen35moe; do
     case_dir="$work_dir/$arch"
     mkdir -p "$case_dir"
