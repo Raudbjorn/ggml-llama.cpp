@@ -386,6 +386,31 @@ if [ -n "$python_bin" ] && [ -n "$simulate_py" ]; then
     fi
     grep -q "router fingerprint" "$work_dir/two.sim" || fail "simulate.py: missing router fingerprint diagnostic"
 fi
+# every router byte counts: one changed row of a 32-expert router (row 1, between the rows an
+# evenly spaced sample would take) is another expert mapping
+if [ -n "$python_bin" ] && "$python_bin" -c 'import numpy' > /dev/null 2>&1; then
+    mkdir -p "$work_dir/wide"
+    "$archs_bin" -o "$work_dir/wide" -a '^qwen3moe$' --n-expert 32 --n-expert-used 2 > "$work_dir/wide.log" 2>&1
+    cp "$work_dir/wide/qwen3moe-moe.gguf" "$work_dir/wide/row1.gguf"
+    "$python_bin" - "$(dirname "$0")/../gguf-py" "$work_dir/wide/row1.gguf" <<'PY' || fail "could not change a router row"
+import sys
+sys.path.insert(0, sys.argv[1])
+import gguf
+model = gguf.GGUFReader(sys.argv[2], "r+")
+gate = next(t for t in model.tensors if t.name == "blk.0.ffn_gate_inp.weight")
+gate.data[1] += 0.5  # numpy rows are experts
+model.data.flush()
+PY
+    for m in qwen3moe-moe row1; do
+        "$trace_bin" -m "$work_dir/wide/$m.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/wide/$m.csv" \
+            > "$work_dir/wide/$m.log" 2>&1 || fail "tracing the 32-expert fixture $m failed: $(tail -n 2 "$work_dir/wide/$m.log")"
+    done
+    fp_w=$(fp "$work_dir/wide/qwen3moe-moe.csv")
+    [ -n "$fp_w" ] && [ "$fp_w" != "$(fp "$work_dir/wide/row1.csv")" ] \
+        || fail "a changed router row kept router fingerprint $fp_w"
+else
+    printf 'skip: one changed router row (no numpy)\n'
+fi
 printf 'ok: router fingerprints tell checkpoints apart\n'
 
 if "$trace_bin" -m "$work_dir/llama-moe.gguf" -p "hello world" -n 2 -c 64 -o "$work_dir/lm.csv" \

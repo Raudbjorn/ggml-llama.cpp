@@ -2124,11 +2124,12 @@ struct moe_pack_profile {
     uint64_t router  = 0; // '# router_fingerprint=', 0 when absent
 };
 
-// FNV-1a over each MoE layer's router (ffn_gate_inp): its layer, type and shape, and up to 16
-// evenly spaced whole rows (one per expert; whole rows also suit a split tensor's reads). Models
-// whose routers differ number their experts differently, so a trace of one does not describe the
-// other; quantizing keeps the router (llama-quant does not quantize ffn_gate_inp). 0 when the
-// model has no router or its weights are not loaded (no_alloc).
+// FNV-1a over each MoE layer's router (ffn_gate_inp): its layer, type, shape and every byte, so
+// that any changed or permuted expert row changes it. Models whose routers differ number their
+// experts differently, so a trace of one does not describe the other; quantizing keeps the router
+// (llama-quant does not quantize ffn_gate_inp). Reads every router once: tens of MB for a 30B
+// MoE, a few hundred for the largest. 0 when the model has no router or its weights are not
+// loaded (no_alloc).
 static uint64_t moe_router_fingerprint(const std::vector<llama_layer> & layers) {
     uint64_t h = 0xcbf29ce484222325ull;
     const auto mix = [&h](const uint8_t * p, size_t n) {
@@ -2143,9 +2144,8 @@ static uint64_t moe_router_fingerprint(const std::vector<llama_layer> & layers) 
         }
         mix(le, sizeof(le));
     };
-    constexpr int64_t max_rows = 16;
     bool any = false;
-    std::vector<uint8_t> row;
+    std::vector<uint8_t> data;
     for (size_t il = 0; il < layers.size(); il++) {
         const ggml_tensor * t = layers[il].ffn_gate_inp;
         if (t == nullptr) {
@@ -2157,14 +2157,9 @@ static uint64_t moe_router_fingerprint(const std::vector<llama_layer> & layers) 
         for (const int64_t v : { (int64_t) il, (int64_t) t->type, t->ne[0], t->ne[1], t->ne[2], t->ne[3] }) {
             mix_i64(v);
         }
-        const int64_t n_rows = ggml_nrows(t);
-        const int64_t n_take = std::min(n_rows, max_rows);
-        row.resize(t->nb[1]);
-        for (int64_t i = 0; i < n_take; i++) {
-            const int64_t r = n_take == 1 ? 0 : i * (n_rows - 1) / (n_take - 1);
-            ggml_backend_tensor_get(t, row.data(), (size_t) r * t->nb[1], t->nb[1]);
-            mix(row.data(), row.size());
-        }
+        data.resize(ggml_nbytes(t));
+        ggml_backend_tensor_get(t, data.data(), 0, data.size());
+        mix(data.data(), data.size());
         any = true;
     }
     return any ? h : 0;

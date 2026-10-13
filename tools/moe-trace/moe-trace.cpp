@@ -396,7 +396,7 @@ static std::string prompt_identity(const std::vector<llama_token> & tokens) {
 
 static bool write_header(FILE * out, const llama_model * model, const llama_context * lctx, const common_params & params,
                          uint32_t seed, const std::string & chain, const std::vector<llama_token> & prompt,
-                         uint64_t session, const char * kind) {
+                         uint64_t session, uint64_t router, const char * kind) {
     const size_t n_prompt = prompt.size();
     char desc[256] = {};
     llama_model_desc(model, desc, sizeof(desc));
@@ -417,7 +417,7 @@ static bool write_header(FILE * out, const llama_model * model, const llama_cont
     failed |= fprintf(out, "# arch=%s\n", arch.c_str()) < 0;
     failed |= fprintf(out, "# n_layer=%d\n", llama_model_n_layer(model)) < 0;
     // which routers: a fine-tune of the same shapes numbers its experts differently
-    if (const uint64_t router = llama_model_router_fingerprint(model)) {
+    if (router != 0) {
         failed |= fprintf(out, "# router_fingerprint=%016" PRIx64 "\n", router) < 0;
     }
     if (!n_expert.empty()) {
@@ -687,12 +687,13 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         }
     }
 
+    const uint64_t router = llama_model_router_fingerprint(model); // reads every router: once
     ts.out = fopen(params.out_file.c_str(), "w");
     if (ts.out == nullptr) {
         LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, params.out_file.c_str(), strerror(errno));
         return 1;
     }
-    if (!write_header(ts.out, model, lctx, params, seed, chain, tokens, session, nullptr)) {
+    if (!write_header(ts.out, model, lctx, params, seed, chain, tokens, session, router, nullptr)) {
         ts.write_failed = true;
     }
     if (params.moe_spec_router_k > 0) {
@@ -703,7 +704,7 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
             return 1;
         }
         const std::string kind = "kind=spec-router k=" + std::to_string(params.moe_spec_router_k);
-        if (!write_header(ts.spec_out, model, lctx, params, seed, chain, tokens, session, kind.c_str())) {
+        if (!write_header(ts.spec_out, model, lctx, params, seed, chain, tokens, session, router, kind.c_str())) {
             ts.write_failed = true;
         }
     }

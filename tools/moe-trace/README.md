@@ -21,8 +21,8 @@ tools/moe-trace/simulate.py eval.csv --profile work.csv --budgets 0.125,0.25
 Lines starting with `#` carry provenance: tool version, a per-run `session`
 id, model path/description/size, architecture, `n_layer`, the router
 fingerprint (`# router_fingerprint=`, 16 hex digits: FNV-1a over each MoE layer's
-`ffn_gate_inp` type, shape and up to 16 evenly spaced rows; quantizations of one
-checkpoint share it, a fine-tune of the same shapes does not), `n_expert`,
+`ffn_gate_inp` type, shape and bytes; quantizations of one checkpoint share it, a
+fine-tune of the same shapes does not), `n_expert`,
 `n_expert_used`, prompt length and identity (`# prompt_tokens=COUNT:FNV-1a-64` of the token ids
 as 4 little-endian bytes each) and the context's `n_ctx`, `n_batch` and `n_ubatch`
 (as the context resolved them, not as requested), and the sampling seed and settings. Without
