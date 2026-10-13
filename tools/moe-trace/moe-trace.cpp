@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
@@ -313,22 +314,44 @@ static std::string fingerprint(size_t count, uint64_t hash) {
     return count ? std::string(buf) : std::string("none");
 }
 
+// a float as the shortest text that reads back as the same value
+static std::string exact(float v) {
+    char buf[32];
+    const auto res = std::to_chars(buf, buf + sizeof(buf), v);
+    return res.ec == std::errc() ? std::string(buf, res.ptr) : std::string("?");
+}
+
 // every sampling control that can change the continuation, and with it the routing: the sampler
-// chain in order, the parameters common_params_sampling::print() shows as name=value pairs, the
-// ones it leaves out, and identities of the grammar, the logit biases and the DRY breakers
+// chain in order, the parameters common_params_sampling::print() shows (its names, but every float
+// exact: print() rounds to three decimals, and repeat penalties 0.9996 and 1.0004 differ), the ones
+// it leaves out, and identities of the grammar, the logit biases and the DRY breakers
 static bool write_sampling(FILE * out, const common_params_sampling & s, const std::string & chain) {
+    const std::pair<const char *, std::string> values[] = {
+        { "repeat_last_n",      std::to_string(s.penalty_last_n) },
+        { "repeat_penalty",     exact(s.penalty_repeat) },
+        { "frequency_penalty",  exact(s.penalty_freq) },
+        { "presence_penalty",   exact(s.penalty_present) },
+        { "dry_multiplier",     exact(s.dry_multiplier) },
+        { "dry_base",           exact(s.dry_base) },
+        { "dry_allowed_length", std::to_string(s.dry_allowed_length) },
+        { "dry_penalty_last_n", std::to_string(s.dry_penalty_last_n) },
+        { "top_k",              std::to_string(s.top_k) },
+        { "top_p",              exact(s.top_p) },
+        { "min_p",              exact(s.min_p) },
+        { "xtc_probability",    exact(s.xtc_probability) },
+        { "xtc_threshold",      exact(s.xtc_threshold) },
+        { "typical_p",          exact(s.typ_p) },
+        { "top_n_sigma",        exact(s.top_n_sigma) },
+        { "temp",               exact(s.temp) },
+        { "mirostat",           std::to_string(s.mirostat) },
+        { "mirostat_lr",        exact(s.mirostat_eta) },
+        { "mirostat_ent",       exact(s.mirostat_tau) },
+        { "adaptive_target",    exact(s.adaptive_target) },
+        { "adaptive_decay",     exact(s.adaptive_decay) },
+    };
     std::string params;
-    for (const char c : s.print()) {
-        if (c == '\n') {
-            params += ", ";
-        } else if (c != '\t') {
-            params += c;
-        }
-    }
-    for (const auto & [from, to] : { std::pair<std::string, std::string>{ " = ", "=" }, { ", ", " " } }) {
-        for (size_t at = params.find(from); at != std::string::npos; at = params.find(from, at + to.size())) {
-            params.replace(at, from.size(), to);
-        }
+    for (const auto & [name, value] : values) {
+        params += (params.empty() ? "" : " ") + std::string(name) + "=" + value;
     }
     uint64_t bias = fnv1a(nullptr, 0);
     for (const llama_logit_bias & b : s.logit_bias) {
@@ -348,10 +371,10 @@ static bool write_sampling(FILE * out, const common_params_sampling & s, const s
     const std::string & grammar = s.grammar.grammar;
     bool failed = fprintf(out, "# sampling_chain=%s\n", chain.c_str()) < 0;
     failed |= fprintf(out, "# sampling_params=%s\n", params.c_str()) < 0;
-    failed |= fprintf(out, "# sampling_inputs=n_prev=%d min_keep=%d dynatemp_range=%.3f dynatemp_exponent=%.3f "
+    failed |= fprintf(out, "# sampling_inputs=n_prev=%d min_keep=%d dynatemp_range=%s dynatemp_exponent=%s "
                       "ignore_eos=%d backend_sampling=%d logit_bias=%s dry_breakers=%s grammar=%s grammar_lazy=%d "
                       "grammar_triggers=%s\n",
-                      s.n_prev, s.min_keep, s.dynatemp_range, s.dynatemp_exponent, (int) s.ignore_eos,
+                      s.n_prev, s.min_keep, exact(s.dynatemp_range).c_str(), exact(s.dynatemp_exponent).c_str(), (int) s.ignore_eos,
                       (int) s.backend_sampling, fingerprint(s.logit_bias.size(), bias).c_str(),
                       fingerprint(s.dry_sequence_breakers.size(), breakers).c_str(),
                       fingerprint(grammar.size(), fnv1a(grammar.data(), grammar.size())).c_str(), (int) s.grammar_lazy,

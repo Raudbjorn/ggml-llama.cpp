@@ -24,8 +24,9 @@ id, model path/description/size, architecture, `n_layer`, `n_expert`,
 (as the context resolved them, not as requested), and the sampling seed and settings.
 Every sampling control that can change the continuation, and with it the routing, is
 recorded: `# sampling_chain=` lists the sampler chain in order (`?` marks a sampler that
-is inactive with its parameters), `# sampling_params=` the parameters of
-`common_params_sampling::print()` as `name=value` pairs, and `# sampling_inputs=` the
+is inactive with its parameters), `# sampling_params=` the parameters
+`common_params_sampling::print()` shows, as `name=value` pairs with every float exact
+(the shortest text that reads back to the same value), and `# sampling_inputs=` the
 others, with the grammar, the logit biases, the DRY sequence breakers and the lazy-grammar
 triggers as `COUNT:FNV-1a-64` identities (`none` when empty).
 One `# expert_tensors=LAYER:TYPE/BYTES/N_IN/N_OUT,...` line per MoE layer lists its

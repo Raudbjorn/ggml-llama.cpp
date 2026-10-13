@@ -212,7 +212,13 @@ printf 'ok: header records the context sizes (%s)\n' "$sizes"
     --samplers 'top_k;temperature' --grammar 'root ::= [^\x01]*' -o "$work_dir/smp1.csv" \
     > "$work_dir/smp.log" 2>&1 || fail "sampling trace failed: $(tail -n 2 "$work_dir/smp.log")"
 grep -q '^# sampling_chain=logits -> top-k -> temp-ext -> dist$' "$work_dir/smp1.csv" || fail "--samplers not recorded"
-grep -q '^# sampling_params=.* repeat_penalty=1.250 ' "$work_dir/smp1.csv" || fail "--repeat-penalty not recorded"
+grep -q '^# sampling_params=.* repeat_penalty=1.25 ' "$work_dir/smp1.csv" || fail "--repeat-penalty not recorded"
+# the values are exact: 0.9996 and 1.0004 both round to 1.000 at three decimals
+for p in 0.9996 1.0004; do
+    "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 --seed 7 --repeat-penalty "$p" \
+        -o "$work_dir/smp-$p.csv" > "$work_dir/smp.log" 2>&1 || fail "sampling trace failed: $(tail -n 2 "$work_dir/smp.log")"
+    grep -q "^# sampling_params=.* repeat_penalty=$p " "$work_dir/smp-$p.csv" || fail "--repeat-penalty $p not recorded exactly"
+done
 grep -q '^# sampling_inputs=.* grammar=none ' "$work_dir/smp0.csv" || fail "default trace must record no grammar"
 grep -q '^# sampling_inputs=.* grammar=17:[0-9a-f]\{16\} ' "$work_dir/smp1.csv" || fail "--grammar not recorded"
 [ "$(grep -c '^# sampling' "$work_dir/smp0.csv")" -eq 4 ] || fail "expected 4 sampling lines"
