@@ -90,14 +90,14 @@ has a throughput measurement: llvmpipe and OpenVINO CPU run on the host CPU.
 
 | Item | Status | Implementation | Validation | Open |
 | --- | --- | --- | --- | --- |
-| 1. Routing trace | done | `63c9853` [llama-moe-trace](../../tools/moe-trace/README.md): eval-callback capture, sampling flags, per-run session and model provenance | `test-moe-trace` | - |
-| 1. Simulator | done | `5567504` `simulate.py`: per-(layer, expert) skew, expert count from the header, sessions never interleaved, held-out `static` policy, shared-pool `dynamic` model of `--moe-cache` (per-plan fill limit and pins, `9303a9a`; one plan per expert tensor on the pool of its type and size from the trace's `# expert_tensors=` lines, `c82a19e`), costs only with stated assumptions | `test-moe-trace-simulate` | calibrate the cost model on the A770 |
+| 1. Routing trace | done | `63c9853` [llama-moe-trace](../../tools/moe-trace/README.md): eval-callback capture, sampling flags, per-run session and model provenance; the main router only where a layer routes twice (GroveMoE, `c2e24e7`); no output over a file named as an input (`ae9c631`) | `test-moe-trace` | - |
+| 1. Simulator | done | `5567504` `simulate.py`: per-(layer, expert) skew, expert count from the header, sessions never interleaved, held-out `static` policy, shared-pool `dynamic` model of `--moe-cache` (per-plan fill limit and pins, `9303a9a`; one plan per expert tensor on the pool of its type and size from the trace's `# expert_tensors=` lines, `c82a19e`; one byte budget taken by the pools in graph order and the providers' 64-slot pool minimum, `lfu-decay` on the decode-event clock, `b9267d3`), costs only with stated assumptions | `test-moe-trace-simulate` | calibrate the cost model on the A770 |
 | 2. Static packs | done, opt-in | `bf671e8`, `43c945a`, `e078fb2` ([guide](../backend/MOE-PACK.md)): per-layer device, `--fit` accounting, eligibility checks (a LoRA on the experts disables the pack), the `build_lora_mm_id` precision path, no source `op_params` flag, exclusive with `--moe-cache`, `llama-bench --moe-pack`; since the `master` merge `d7ff063`, no pack for Hadamard-folded experts, and the device cache (`--moe-cache-mib`) skips packed layers; `MUL_MAT_ID` probed on every pack tensor (`7016e31`); `llama-bench` reports the pack that was built (`c252d2b`) | `test-moe-pack` (`010aaf9` fixtures): bit-exact on the CPU, NMSE 3e-8 on Vulkan; a Hadamard fixture, the cached layer count beside a pack on Vulkan, Q5_0 down experts on OpenVINO, llama-bench arms | SYCL run; A/B against `--moe-cache` at equal VRAM |
 | 3. Packs on OpenVINO | done, opt-in | `a6c59d1` (`-1` in `MUL_MAT_ID`/`ADD_ID`), `a6529c2` and `3a4ebce` (view write-back), `43c945a` (host id maps) | `test-moe-pack`; on OpenVINO `test-backend-ops` `MUL_MAT_ID` 757/757, `ADD_ID` 72/72 | fusion and compile-time cost, GPU device |
 | 4. Decision engine | done | `7957865` [llama-schema-decision](../../tools/schema-decision/README.md): errors as values, overflow-free bounds, joint-text tokenization, hybrid padding bounded by `n_ubatch` | `test-schema-decision-vocab`, `test-schema-decision` (oracle within 4e-8) on CPU and Vulkan, e2e on three real models | task accuracy and latency on real workloads; OpenVINO cannot run it (multi-sequence batches fail, below) |
 | 4. `/v1/decision` | done, opt-in (`--decision-seqs`) | `81e2bcf`: engine reset before context destruction, cancellation, 400/503/500 mapping; `/v1/systemone` unchanged | `tools/server/tests/unit/test_schema_decision.py` (19 tests: sleep/wake, embeddings, per-request LoRA, cell reclaim) | - |
 | 5. CPU tensor parallel | done, experimental | `3277180` `--cpu-tp`, `--cpu-tp-margin` ([guide](../backend/CPU-TP.md)): explicit membership, one split source, sizing over all split files | `test-arg-parser`; perplexity on Vulkan+CPU | SYCL has no `cpy_tensor_async`; latency and capacity on the A770; `--cpu-tp-margin` sizes as if every tensor were split (mirrored tensors and the CPU-resident embedding are not separated) |
-| 6. Async CPU splits | done, default off | `4e992bd` `--sched-async-cpu` ([section](../backend/MOE-PACK.md#overlapping-the-cold-chain---sched-async-cpu-experimental)): job joined on every return, memory-root dependency checks, serial with a MoE cache session, status propagation | `test-moe-pack`: logits bitwise equal with and without on CPU, Vulkan, OpenVINO; 8 splits launched beside the CPU split on Vulkan (4 steps x 2 packed layers); abort recovery; `test-moe-cache`: no split on the worker with a cache session | speed; oversubscription with `--cpu-tp` |
+| 6. Async CPU splits | done, default off | `4e992bd` `--sched-async-cpu` ([section](../backend/MOE-PACK.md#overlapping-the-cold-chain---sched-async-cpu-experimental)): job joined on every return, memory-root dependency checks, serial with a MoE cache session, status propagation, backends synchronized before a worker error returns (`c7f81ea`) | `test-moe-pack`: logits bitwise equal with and without on CPU, Vulkan, OpenVINO; 8 splits launched beside the CPU split on Vulkan (4 steps x 2 packed layers); abort recovery; `test-moe-cache`: no split on the worker with a cache session; `test-sched-stream-ordered`: a device split launched beside a failing worker has run when the error returns | speed; oversubscription with `--cpu-tp` |
 | 6. Expert prediction | diagnostics only | `3872d7e` `llama-moe-trace --spec-router`, `--hidden-out` (versioned header, bounded) | `test-moe-trace` with a host recomputation oracle on CPU, Vulkan, OpenVINO | recall on real models; lead time |
 | 6. Dynamic ring refill | not built | [reasons](../../tools/moe-trace/README.md#why-there-is-no-dynamic-ring) | - | build only as a `--moe-cache` admission policy if recall justifies it |
 
@@ -129,10 +129,12 @@ Pre-existing failures seen on this host, unchanged by the branch (checked agains
     rejects its I32 slot map as a weight (seen after the `master` merge).
 - With `LLAMA_BUILD_SERVER=OFF` the `llama` app does not link: `app/CMakeLists.txt`,
   which this branch does not change, always links `llama-server-impl`.
-- `llama-server --embedding --pooling mean` aborts at load with
+- `llama-server --embedding --pooling mean` aborted at load with
   `GGML_ASSERT(ggml_can_mul_mat(a, b))` when the sequence count does not divide the
-  batch size (`-np 9 -c 2048 -b 256` on stories260K, also on `master`); with
-  `--decision-seqs` the count is `-np` plus the decision sequences.
+  batch size (`-np 9 -c 2048 -b 256` on stories260K, also on `master`; with
+  `--decision-seqs` the count is `-np` plus the decision sequences). Since `32c5f5c`
+  the server rounds the embedding ubatch down to a multiple of the count; the
+  context's reserve rounding that causes it is unchanged.
 
 ## Code map
 
