@@ -27,7 +27,9 @@ fine-tune of the same shapes does not), `n_expert`,
 as 4 little-endian bytes each) and the context's `n_ctx`, `n_batch` and `n_ubatch`
 (as the context resolved them, not as requested), and the sampling seed and settings. Without
 `--seed` the tool draws one seed and gives it to every sampler (the distribution, XTC and mirostat
-samplers would each draw their own), so the recorded seed replays the run.
+samplers would each draw their own), so the recorded seed replays the run. The tool samples with
+the context's own sampler, the one `--backend-sampling` attaches to the context, so that flag
+replays too.
 Every sampling control that can change the continuation, and with it the routing, is
 recorded: `# sampling_chain=` lists the sampler chain in order (`?` marks a sampler that
 is inactive with its parameters), `# sampling_params=` the parameters

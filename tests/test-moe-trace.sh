@@ -239,6 +239,18 @@ seed=$(sed -n 's/^# sampling seed=\([0-9]*\) .*/\1/p' "$work_dir/xtc0.csv")
     -o "$work_dir/xtc1.csv" > "$work_dir/xtc.log" 2>&1 || fail "XTC replay failed: $(tail -n 2 "$work_dir/xtc.log")"
 cmp -s <(grep -v '^#' "$work_dir/xtc0.csv") <(grep -v '^#' "$work_dir/xtc1.csv") \
     || fail "an XTC trace replayed with its recorded seed $seed routed differently"
+# --backend-sampling attaches the context's sampler: it must be the one that takes the recorded
+# seed and the accepted tokens
+bs="--backend-sampling --temp 1.5 --repeat-penalty 1.5"
+# shellcheck disable=SC2086
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "one two three four five" -n 8 -c 64 $bs -o "$work_dir/bs0.csv" \
+    > "$work_dir/bs.log" 2>&1 || fail "backend sampling trace failed: $(tail -n 2 "$work_dir/bs.log")"
+seed=$(sed -n 's/^# sampling seed=\([0-9]*\) .*/\1/p' "$work_dir/bs0.csv")
+# shellcheck disable=SC2086
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "one two three four five" -n 8 -c 64 $bs --seed "$seed" \
+    -o "$work_dir/bs1.csv" > "$work_dir/bs.log" 2>&1 || fail "backend sampling replay failed: $(tail -n 2 "$work_dir/bs.log")"
+cmp -s <(grep -v '^#' "$work_dir/bs0.csv") <(grep -v '^#' "$work_dir/bs1.csv") \
+    || fail "a --backend-sampling trace replayed with its recorded seed $seed routed differently"
 printf 'ok: the recorded seed reproduces every sampler\n'
 
 # the header identifies the prompt: equal token counts, different tokens, different identities

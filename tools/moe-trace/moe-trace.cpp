@@ -621,6 +621,17 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         }
     }
 
+    // each stochastic sampler (dist, XTC, mirostat) resolves a default seed on its own, so resolve
+    // one here: the recorded seed then reproduces all of them, as --seed does. Before the context
+    // is made: it creates the sampler this tool uses, which --backend-sampling attaches to it
+    if (params.sampling.seed == LLAMA_DEFAULT_SEED) {
+        std::random_device rd;
+        const uint32_t t = (uint32_t) std::chrono::system_clock::now().time_since_epoch().count();
+        do {
+            params.sampling.seed = rd() ^ t;
+        } while (params.sampling.seed == LLAMA_DEFAULT_SEED);
+    }
+
     common_init_result_ptr llama_init = common_init_from_params(params);
     llama_model   * model = llama_init ? llama_init->model()   : nullptr;
     llama_context * lctx  = llama_init ? llama_init->context() : nullptr;
@@ -642,22 +653,15 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         return 1;
     }
 
-    // each stochastic sampler (dist, XTC, mirostat) resolves a default seed on its own, so resolve
-    // one here: the recorded seed then reproduces all of them, as --seed does
-    if (params.sampling.seed == LLAMA_DEFAULT_SEED) {
-        std::random_device rd;
-        const uint32_t t = (uint32_t) std::chrono::system_clock::now().time_since_epoch().count();
-        do {
-            params.sampling.seed = rd() ^ t;
-        } while (params.sampling.seed == LLAMA_DEFAULT_SEED);
-    }
-    common_sampler_ptr smpl(common_sampler_init(model, params.sampling));
+    // the context's own sampler: with --backend-sampling it is the chain the context runs, so the
+    // accepted tokens (penalty and DRY history) must reach it, as in llama-completion
+    common_sampler * smpl = llama_init->sampler(0);
     if (!smpl) {
         LOG_ERR("%s: failed to initialize the sampler\n", __func__);
         return 1;
     }
     const uint32_t seed = params.sampling.seed;
-    std::string chain = common_sampler_print(smpl.get()); // "logits -> a -> b "
+    std::string chain = common_sampler_print(smpl); // "logits -> a -> b "
     chain.erase(chain.find_last_not_of(' ') + 1);
     const uint64_t session = new_session_id();
 
@@ -746,14 +750,14 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
     // the routing follows the generated tokens a server would see; like a server, the
     // sampler's history (repeat, presence, frequency and DRY penalties) starts with the prompt
     for (llama_token t : tokens) {
-        common_sampler_accept(smpl.get(), t, false);
+        common_sampler_accept(smpl, t, false);
     }
     ts.prefill = false;
     ts.n_eval  = 1;
     int n_decoded = 0;
     for (int i = 0; i < params.n_predict && decode_ok && !ts.write_failed && ts.router_wrapped < 0; i++) {
-        llama_token tok = common_sampler_sample(smpl.get(), lctx, -1);
-        common_sampler_accept(smpl.get(), tok, true);
+        llama_token tok = common_sampler_sample(smpl, lctx, -1);
+        common_sampler_accept(smpl, tok, true);
         if (llama_vocab_is_eog(vocab, tok)) {
             LOG_INF("%s: end of generation after %d decode steps\n", __func__, i);
             break;
