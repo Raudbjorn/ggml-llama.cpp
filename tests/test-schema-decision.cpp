@@ -138,6 +138,7 @@ static void test_schema() {
     // enums
     expect_schema_error("duplicate choice", R"({"e": {"type": "enum", "choices": ["a", "a"], "description": "d"}})", "duplicate");
     expect_schema_error("non-string choice", R"({"e": {"type": "enum", "choices": ["a", 1], "description": "d"}})", "strings");
+    expect_schema_error("enum and choices", R"({"e": {"type": "enum", "enum": ["allow"], "choices": ["deny"], "description": "d"}})", "not both");
     {
         std::string many = R"({"e": {"type": "enum", "description": "d", "choices": [)";
         for (int i = 0; i < 256; i++) {

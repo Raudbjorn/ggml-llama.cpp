@@ -97,7 +97,7 @@ fields may be named `type` or `properties`.
 
 | type | keys | values |
 | --- | --- | --- |
-| `enum` (JSON Schema: `string` with `enum`) | `choices` or `enum` | 1-255 distinct strings of up to 256 bytes |
+| `enum` (JSON Schema: `string` with `enum`) | `choices` or `enum` (not both) | 1-255 distinct strings of up to 256 bytes |
 | `boolean` | | `true`, `false` |
 | `integer` | `minimum`, `maximum` | every integer in the bounds, 1-255 values, full 64-bit range |
 | `number`, compact | `minimum`, `maximum`, `step` | `minimum + k*step`, which must reach `maximum` exactly |

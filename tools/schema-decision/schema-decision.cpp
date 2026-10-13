@@ -1080,6 +1080,10 @@ outcome<field_spec> make_field(const std::string & name, const std::string & typ
         f.values  = { common_json(true), common_json(false) };
         f.encoded = { "true", "false" };
     } else if (type == "enum" || type == "string") {
+        // the compact format's two names for one list; both would leave one of them unchecked
+        if (spec.contains("enum") && spec.contains("choices")) {
+            return bad("give the choices as \"enum\" or as \"choices\", not both");
+        }
         const char * key = spec.contains("enum") ? "enum" : "choices";
         if (!spec.contains(key) || !spec.at(key).is_array()) {
             return bad("enum fields need a list of choices");
