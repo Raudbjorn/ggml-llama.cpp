@@ -405,7 +405,7 @@ static bool async_counts(const std::string & log, unsigned long long & splits, u
     bool found = false;
     for (size_t at = log.find(key); at != std::string::npos; at = log.find(key, at + 1)) {
         unsigned long long s = 0, o = 0;
-        if (sscanf(log.c_str() + at + sizeof(key) - 1, "%llu, splits launched beside one: %llu", &s, &o) == 2) {
+        if (sscanf(log.c_str() + at + sizeof(key) - 1, "%llu, splits launched without waiting for one: %llu", &s, &o) == 2) {
             splits += s;
             overlaps += o;
             found = true;
@@ -450,11 +450,11 @@ static void expect_async_same(const char * name, const run_result & sync, const 
     unsigned long long splits = 0, overlaps = 0;
     CHECK(async_counts(async.log, splits, overlaps), "%s: no async scheduler counters in the log", name);
     CHECK(!need_split || splits > 0, "%s: the worker computed no CPU split", name);
-    CHECK(!need_overlap || overlaps > 0, "%s: no split was launched beside a CPU split", name);
+    CHECK(!need_overlap || overlaps > 0, "%s: no split was launched without waiting for a CPU split", name);
     const size_t n_diff = bitwise_diff(sync.logits, async.logits);
     CHECK(n_diff == 0, "%s: %zu of %zu logits differ bitwise", name, n_diff, sync.logits.size());
     if (g_failures == failures_before) {
-        printf("ok: %s (%llu CPU splits on the worker, %llu splits beside them)\n", name, splits, overlaps);
+        printf("ok: %s (%llu CPU splits on the worker, %llu splits launched without waiting for them)\n", name, splits, overlaps);
     }
 }
 

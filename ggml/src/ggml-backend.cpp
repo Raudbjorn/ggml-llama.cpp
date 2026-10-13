@@ -1358,7 +1358,9 @@ struct ggml_backend_sched {
     // CPU splits on a worker thread (ggml_backend_sched_set_async_cpu); NULL when off
     struct ggml_sched_cpu_async * cpu_async;
     uint64_t n_async_cpu_splits;   // CPU splits the worker computed
-    uint64_t n_async_cpu_overlaps; // splits launched while a CPU split was still running
+    // splits launched while a CPU split was on the worker and not joined: the scheduler did not wait
+    // for it. Whether it was still computing then is timing, which this count does not measure
+    uint64_t n_async_cpu_overlaps;
 
     // mindcontrol-port of --prefetch-experts-slots: full-tensor lookahead prefetch of
     // offloaded MUL_MAT_ID weights (MoE experts resident in CPU/host memory, i.e. ncmoe).
@@ -3269,7 +3271,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
         return;
     }
     if (sched->cpu_async) {
-        GGML_LOG_DEBUG("%s: async CPU splits: %llu, splits launched beside one: %llu\n", __func__,
+        GGML_LOG_DEBUG("%s: async CPU splits: %llu, splits launched without waiting for one: %llu\n", __func__,
                        (unsigned long long) sched->n_async_cpu_splits,
                        (unsigned long long) sched->n_async_cpu_overlaps);
         delete sched->cpu_async; // idle: a job never outlives a graph compute

@@ -163,7 +163,7 @@ remap stays on the CPU, so nothing overlaps.
 | Runs without the worker | graphs with an eval callback (`llama-moe-trace`, `LLAMA_ENABLE_INNERQ=1`), schedulers with a `--moe-cache` session, splits with a prefetch slot; BLAS splits and the `--cpu-tp` meta device's CPU member stay on the main thread |
 | On return | every graph compute has joined the worker, as without it |
 | Errors | a failed or aborted CPU split is the graph's status; `llama_decode` returns 2 on an abort |
-| Counters | `ggml_backend_sched_free: async CPU splits: N, splits launched beside one: M` at `-lv 5` (completion) or `-v` (bench) |
+| Counters | `ggml_backend_sched_free: async CPU splits: N, splits launched without waiting for one: M` at `-lv 5` (completion) or `-v` (bench); `M` counts the splits the scheduler launched while a CPU split was on the worker and not joined, not how long the two ran together (a short CPU split may have finished already): time decode for that |
 
 Hazards to measure before relying on it on the A770:
 
@@ -186,9 +186,9 @@ Hazards to measure before relying on it on the A770:
 
 Validation: with the worker, `test-moe-pack` gives logits bitwise equal to the
 synchronous run on the CPU, on Vulkan (llvmpipe) with and without a pack, and on
-OpenVINO. On Vulkan the counter reports 8 splits launched beside a running CPU
-split, as many as the test's packed decode layers (4 steps x 2 layers); the test
-asserts only that it is non-zero. With a `--moe-cache` session the worker computes
+OpenVINO. On Vulkan the counter reports 8 splits launched without waiting for the
+CPU split, as many as the test's packed decode layers (4 steps x 2 layers); the
+test asserts only that it is non-zero. With a `--moe-cache` session the worker computes
 no split (`test-moe-cache`, case `cache-hit-async-cpu`). An abort raised on the worker returns 2, and the next decode gives
 the reference logits on the CPU and on Vulkan. On OpenVINO, decoding after an
 abort fails in OpenVINO's ScatterUpdate with or without the worker, so the test
@@ -210,7 +210,7 @@ measurement exists: llvmpipe runs on the CPU.
 | `--moe-pack-profile and --moe-cache are mutually exclusive` | both were given | choose one |
 | `static expert packs are not supported with split mode tensor` | `-sm tensor` | use layer split |
 | decode not faster | low held-out hit rate, or 2-8 token batches on the blocking sorted SYCL `MUL_MAT_ID` path (two per projection with a pack) | check `simulate.py` on held-out traces; compare `-np 1` decode with and without |
-| `--sched-async-cpu`: `splits launched beside one: 0` | no pack in use, OpenVINO or another device without I32 `GET_ROWS` (no device hot map), batches above 8 tokens, an eval callback, or a `--moe-cache` session | expected: see [Overlapping the cold chain](#overlapping-the-cold-chain---sched-async-cpu-experimental) |
+| `--sched-async-cpu`: `splits launched without waiting for one: 0` | no pack in use, OpenVINO or another device without I32 `GET_ROWS` (no device hot map), batches above 8 tokens, an eval callback, or a `--moe-cache` session | expected: see [Overlapping the cold chain](#overlapping-the-cold-chain---sched-async-cpu-experimental) |
 
 ## Validation status
 
