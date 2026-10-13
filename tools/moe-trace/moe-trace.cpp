@@ -39,6 +39,7 @@
 #include <random>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 static const char * TOPK_PREFIX = "ffn_moe_topk-";
@@ -294,8 +295,70 @@ static bool write_expert_tensors(FILE * out, const llama_model * model) {
     return !failed;
 }
 
+// FNV-1a 64, a stable identity for the sampling inputs a header line cannot spell out
+static uint64_t fnv1a(const void * data, size_t n, uint64_t h = 0xcbf29ce484222325ull) {
+    const auto * p = static_cast<const unsigned char *>(data);
+    for (size_t i = 0; i < n; i++) {
+        h = (h ^ p[i]) * 0x100000001b3ull;
+    }
+    return h;
+}
+
+// "none", or COUNT:HASH
+static std::string fingerprint(size_t count, uint64_t hash) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%zu:%016" PRIx64, count, hash);
+    return count ? std::string(buf) : std::string("none");
+}
+
+// every sampling control that can change the continuation, and with it the routing: the sampler
+// chain in order, the parameters common_params_sampling::print() shows as name=value pairs, the
+// ones it leaves out, and identities of the grammar, the logit biases and the DRY breakers
+static bool write_sampling(FILE * out, const common_params_sampling & s, const std::string & chain) {
+    std::string params;
+    for (const char c : s.print()) {
+        if (c == '\n') {
+            params += ", ";
+        } else if (c != '\t') {
+            params += c;
+        }
+    }
+    for (const auto & [from, to] : { std::pair<std::string, std::string>{ " = ", "=" }, { ", ", " " } }) {
+        for (size_t at = params.find(from); at != std::string::npos; at = params.find(from, at + to.size())) {
+            params.replace(at, from.size(), to);
+        }
+    }
+    uint64_t bias = fnv1a(nullptr, 0);
+    for (const llama_logit_bias & b : s.logit_bias) {
+        bias = fnv1a(&b.bias, sizeof(b.bias), fnv1a(&b.token, sizeof(b.token), bias));
+    }
+    uint64_t breakers = fnv1a(nullptr, 0);
+    for (const std::string & b : s.dry_sequence_breakers) {
+        breakers = fnv1a("", 1, fnv1a(b.data(), b.size(), breakers)); // NUL-separated
+    }
+    uint64_t triggers = fnv1a(nullptr, 0);
+    for (const common_grammar_trigger & t : s.grammar_triggers) {
+        const int32_t type = (int32_t) t.type;
+        triggers = fnv1a(&type, sizeof(type), triggers);
+        triggers = fnv1a("", 1, fnv1a(t.value.data(), t.value.size(), triggers));
+        triggers = fnv1a(&t.token, sizeof(t.token), triggers);
+    }
+    const std::string & grammar = s.grammar.grammar;
+    bool failed = fprintf(out, "# sampling_chain=%s\n", chain.c_str()) < 0;
+    failed |= fprintf(out, "# sampling_params=%s\n", params.c_str()) < 0;
+    failed |= fprintf(out, "# sampling_inputs=n_prev=%d min_keep=%d dynatemp_range=%.3f dynatemp_exponent=%.3f "
+                      "ignore_eos=%d backend_sampling=%d logit_bias=%s dry_breakers=%s grammar=%s grammar_lazy=%d "
+                      "grammar_triggers=%s\n",
+                      s.n_prev, s.min_keep, s.dynatemp_range, s.dynatemp_exponent, (int) s.ignore_eos,
+                      (int) s.backend_sampling, fingerprint(s.logit_bias.size(), bias).c_str(),
+                      fingerprint(s.dry_sequence_breakers.size(), breakers).c_str(),
+                      fingerprint(grammar.size(), fnv1a(grammar.data(), grammar.size())).c_str(), (int) s.grammar_lazy,
+                      fingerprint(s.grammar_triggers.size(), triggers).c_str()) < 0;
+    return !failed;
+}
+
 static bool write_header(FILE * out, const llama_model * model, const llama_context * lctx, const common_params & params,
-                         uint32_t seed, size_t n_prompt, uint64_t session, const char * kind) {
+                         uint32_t seed, const std::string & chain, size_t n_prompt, uint64_t session, const char * kind) {
     char desc[256] = {};
     llama_model_desc(model, desc, sizeof(desc));
     const std::string arch     = meta_str(model, "general.architecture");
@@ -326,6 +389,7 @@ static bool write_header(FILE * out, const llama_model * model, const llama_cont
                       llama_n_ctx(lctx), llama_n_batch(lctx), llama_n_ubatch(lctx)) < 0;
     failed |= fprintf(out, "# sampling seed=%u temp=%.4f top_k=%d top_p=%.4f min_p=%.4f\n",
                   seed, s.temp, s.top_k, s.top_p, s.min_p) < 0;
+    failed |= !write_sampling(out, s, chain);
     failed |= fprintf(out, "pos,layer,ids...\n") < 0;
     return !failed;
 }
@@ -539,6 +603,8 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         return 1;
     }
     const uint32_t seed = llama_sampler_get_seed(common_sampler_get(smpl.get()));
+    std::string chain = common_sampler_print(smpl.get()); // "logits -> a -> b "
+    chain.erase(chain.find_last_not_of(' ') + 1);
     const uint64_t session = new_session_id();
 
     const bool spec_on = params.moe_spec_router_k > 0;
@@ -572,7 +638,7 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
         LOG_ERR("%s: cannot open '%s' for writing: %s\n", __func__, params.out_file.c_str(), strerror(errno));
         return 1;
     }
-    if (!write_header(ts.out, model, lctx, params, seed, tokens.size(), session, nullptr)) {
+    if (!write_header(ts.out, model, lctx, params, seed, chain, tokens.size(), session, nullptr)) {
         ts.write_failed = true;
     }
     if (params.moe_spec_router_k > 0) {
@@ -583,7 +649,7 @@ static int run_trace(common_params & params, trace_state & ts, const std::vector
             return 1;
         }
         const std::string kind = "kind=spec-router k=" + std::to_string(params.moe_spec_router_k);
-        if (!write_header(ts.spec_out, model, lctx, params, seed, tokens.size(), session, kind.c_str())) {
+        if (!write_header(ts.spec_out, model, lctx, params, seed, chain, tokens.size(), session, kind.c_str())) {
             ts.write_failed = true;
         }
     }

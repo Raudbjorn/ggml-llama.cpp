@@ -22,6 +22,12 @@ Lines starting with `#` carry provenance: tool version, a per-run `session`
 id, model path/description/size, architecture, `n_layer`, `n_expert`,
 `n_expert_used`, prompt length and the context's `n_ctx`, `n_batch` and `n_ubatch`
 (as the context resolved them, not as requested), and the sampling seed and settings.
+Every sampling control that can change the continuation, and with it the routing, is
+recorded: `# sampling_chain=` lists the sampler chain in order (`?` marks a sampler that
+is inactive with its parameters), `# sampling_params=` the parameters of
+`common_params_sampling::print()` as `name=value` pairs, and `# sampling_inputs=` the
+others, with the grammar, the logit biases, the DRY sequence breakers and the lazy-grammar
+triggers as `COUNT:FNV-1a-64` identities (`none` when empty).
 One `# expert_tensors=LAYER:TYPE/BYTES,...` line per MoE layer lists its routed
 expert tensors in the order the graph multiplies them (up, gate, down; or
 gate_up, down), with the weight type and bytes per expert; the simulator groups

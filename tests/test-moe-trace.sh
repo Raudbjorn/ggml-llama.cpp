@@ -203,6 +203,22 @@ read -r h_ctx h_batch h_ubatch <<< "$sizes"
     || fail "header sizes '$sizes' are not the context's"
 printf 'ok: header records the context sizes (%s)\n' "$sizes"
 
+# every sampling control that changes the continuation is in the header: the chain, the
+# parameters, and the grammar as an identity
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 2 -c 64 --seed 7 -o "$work_dir/smp0.csv" \
+    > "$work_dir/smp.log" 2>&1 || fail "default sampling trace failed: $(tail -n 2 "$work_dir/smp.log")"
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 2 -c 64 --seed 7 --repeat-penalty 1.25 \
+    --samplers 'top_k;temperature' --grammar 'root ::= [^\x01]*' -o "$work_dir/smp1.csv" \
+    > "$work_dir/smp.log" 2>&1 || fail "sampling trace failed: $(tail -n 2 "$work_dir/smp.log")"
+grep -q '^# sampling_chain=logits -> top-k -> temp-ext -> dist$' "$work_dir/smp1.csv" || fail "--samplers not recorded"
+grep -q '^# sampling_params=.* repeat_penalty=1.250 ' "$work_dir/smp1.csv" || fail "--repeat-penalty not recorded"
+grep -q '^# sampling_inputs=.* grammar=none ' "$work_dir/smp0.csv" || fail "default trace must record no grammar"
+grep -q '^# sampling_inputs=.* grammar=17:[0-9a-f]\{16\} ' "$work_dir/smp1.csv" || fail "--grammar not recorded"
+[ "$(grep -c '^# sampling' "$work_dir/smp0.csv")" -eq 4 ] || fail "expected 4 sampling lines"
+[ "$(grep '^# sampling' "$work_dir/smp0.csv")" != "$(grep '^# sampling' "$work_dir/smp1.csv")" ] \
+    || fail "two sampling policies must not share their provenance"
+printf 'ok: header records the sampling chain, parameters and grammar\n'
+
 if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 2 -c 64 \
         -o "$work_dir/no-such-dir/x.csv" > "$work_dir/badpath.log" 2>&1; then
     fail "an unwritable output path must fail"
