@@ -17,7 +17,7 @@ addition to it: a run uses one or the other.
 | Prefill | packed experts run on the GPU at every batch size | batches above `max_batch` (8) are not cached |
 | Memory | exact, counted by `--fit` | provider budget, not wired into `--fit` |
 | Needs | a routing profile of the intended workload | nothing |
-| Supported layers | plain SiLU-gated experts (below) | also scaled and biased experts |
+| Supported layers | gated experts without scales or biases (below) | also scaled and biased experts |
 
 ## Quick start
 
@@ -93,7 +93,10 @@ The device MoE cache (`--moe-cache-mib`) skips a layer that has a pack; the
 other host-resident layers keep it.
 
 The graph then uses a pack only when `build_moe_ffn` receives exactly the
-pack's source tensors with `LLM_FFN_SILU` and no LoRA adapter on them.
+pack's source tensors and no LoRA adapter on them. The hot and the cold chain
+apply the layer's own activation (SiLU, GELU, ReLU, and the others
+`build_moe_ffn` knows), which acts on each (token, expert) row alone, so the
+split is exact whatever it is.
 `sched_reserve` logs how many packs the graph uses; fewer than built means the
 architecture's graph does not qualify and the pack memory is wasted.
 

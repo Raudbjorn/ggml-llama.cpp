@@ -15,7 +15,8 @@
 // abort raised by the CPU split on the worker fails the decode, and the context
 // decodes the same logits afterwards. A layer with Hadamard-folded experts gets no
 // pack, and the device MoE cache (moe_cache_size) leaves a packed layer to its pack. A
-// device that runs MUL_MAT_ID only for decode-sized batches gets no pack.
+// device that runs MUL_MAT_ID only for decode-sized batches gets no pack. The chains apply the
+// layer's own activation: test-moe-pack.sh also runs a ReLU (smallthinker) and a GELU (grok) fixture.
 //
 // usage: test-moe-pack MODEL.gguf WORK_DIR
 //   MODEL is a MoE fixture with separate gate/up/down experts and at least
@@ -287,6 +288,8 @@ static run_result run_model(const std::string & path, const char * profile, int3
     llama_model_params mp = model_params(profile, slots, place);
     llama_model * model = llama_model_load_from_file(path.c_str(), mp);
     if (!model) {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        r.log = g_log;
         return r;
     }
     llama_context_params cp = llama_context_default_params();
@@ -648,7 +651,12 @@ int main(int argc, char ** argv) {
         const std::string hdm = work + "/hadamard.gguf";
         CHECK(fold_expert_hadamard(f32, hdm), "cannot write %s", hdm.c_str());
         const run_result hbase = run_model(hdm, nullptr, 0);
-        CHECK(hbase.ok, "Hadamard baseline run failed");
+        // the loader folds only the archs it has verified
+        const bool unverified = !hbase.ok && contains(hbase.log, "is not verified to apply the activation transform");
+        if (unverified) {
+            printf("skip: Hadamard-folded experts (the loader does not fold this arch)\n");
+        }
+        CHECK(hbase.ok || unverified, "Hadamard baseline run failed");
         if (hbase.ok) {
             CHECK(bitwise_diff(base.logits, hbase.logits) > 0, "the Hadamard metadata did not change the logits");
             expect_disabled("Hadamard-folded experts", hbase, run_model(hdm, p_mixed.c_str(), 2), "Hadamard-folded experts");

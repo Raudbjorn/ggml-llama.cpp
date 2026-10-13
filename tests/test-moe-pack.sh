@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs test-moe-pack on 8-expert qwen3moe and qwen35moe fixtures. With LLAMA_BENCH,
+# Runs test-moe-pack on 8-expert qwen3moe, qwen35moe, smallthinker and grok fixtures. With LLAMA_BENCH,
 # also checks that llama-bench reports the pack that was built, not the one requested.
 set -euo pipefail
 
@@ -15,7 +15,9 @@ bench_bin=${3:-}
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/llama-moe-pack.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT
 
-"$archs_bin" -o "$work_dir" -a '^(qwen3moe|qwen35moe)$' -s 42 --n-expert 8 --n-expert-used 2 > "$work_dir/archs.log" 2>&1
+# smallthinker gates its experts with ReLU and grok with GELU: a pack must follow the layer's activation
+"$archs_bin" -o "$work_dir" -a '^(qwen3moe|qwen35moe|smallthinker|grok)$' -s 42 --n-expert 8 --n-expert-used 2 \
+    > "$work_dir/archs.log" 2>&1
 
 # without --n-expert the expert count follows the arch: deepseek2 fixtures have 64, the others 2
 mkdir -p "$work_dir/default-count"
@@ -34,7 +36,7 @@ grep -q "exceeds the 2 experts of the qwen3moe fixture" "$work_dir/default-count
 }
 printf 'ok: --n-expert-used checked against the fixture default\n'
 
-for arch in qwen3moe qwen35moe; do
+for arch in qwen3moe qwen35moe smallthinker grok; do
     case_dir="$work_dir/$arch"
     mkdir -p "$case_dir"
     printf '== %s\n' "$arch"

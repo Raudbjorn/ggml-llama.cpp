@@ -2365,8 +2365,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             why = "the graph uses other expert tensors";
         } else if (up_exps_s || gate_exps_s || down_exps_s || up_exps_b || gate_exps_b || gate_up_exps_b || down_exps_b) {
             why = "expert scales or biases";
-        } else if (type_op != LLM_FFN_SILU || weight_before_ffn || hparams.swiglu_clamp_exp[il] > 1e-6f) {
-            why = "not a plain SiLU-gated FFN";
+        } else if (weight_before_ffn || hparams.swiglu_clamp_exp[il] > 1e-6f) {
+            // the chains apply the layer's own activation (activate below), whatever it is
+            why = "a SwiGLU clamp or pre-FFN weighting";
         } else if (n_expert != down_exps->ne[2]) {
             why = "routed expert count differs from the tensor";
         } else if (has_lora(down_exps) || (gate_up_exps ? has_lora(gate_up_exps) : has_lora(gate_exps) || has_lora(up_exps))) {
@@ -2383,6 +2384,102 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // the experts of host-resident layers may be read from the MoE cache; a pack layer remaps its
     // experts to the pack and the CPU tensors instead, so it gets no cache slots
     ggml_tensor * slots = pack ? nullptr : build_moe_cache_slots(selected_experts, up_exps, gate_exps, down_exps, gate_up_exps, il);
+
+    // the layer's activation of the gate and up rows. A pack's cold and hot chains apply it to their
+    // own rows, which is exact because it acts on each (token, expert) row alone; named gives the
+    // nodes their callback names (the single chain only, the two chains would repeat them)
+    const auto activate = [&](ggml_tensor * g, ggml_tensor * u, const bool has_gate, const bool named) {
+        const auto name = [&](ggml_tensor * t, const char * n) {
+            if (named) {
+                cb(t, n, il);
+            }
+        };
+        switch (type_op) {
+            case LLM_FFN_SILU:
+                if (gate_exps) {
+                    if (il >= 0) {
+                        const float limit = hparams.swiglu_clamp_exp[il];
+                        constexpr float eps = 1e-6f;
+                        // default zero-filled - only archs loading clamp metadata
+                        // (Step35, DSv4) get non-zero.
+                        if (limit > eps) {
+                            if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
+                                g = ggml_swiglu_clamp(ctx0, g, u, limit);
+                            } else {
+                                u = ggml_clamp(ctx0, u, -limit, limit);
+                                name(u, "ffn_moe_up_clamped");
+                                ggml_tensor * gate_act = ggml_silu(ctx0, g);
+                                name(gate_act, "ffn_moe_silu");
+                                gate_act = ggml_clamp(ctx0, gate_act, -INFINITY, limit);
+                                name(gate_act, "ffn_moe_silu_clamped");
+                                g = ggml_mul(ctx0, gate_act, u);
+                            }
+                            name(g, "ffn_moe_swiglu_limited");
+                            break;
+                        }
+                    }
+                }
+
+                if (has_gate) {
+                    g = ggml_swiglu_split(ctx0, g, u);
+                    name(g, "ffn_moe_swiglu");
+                } else {
+                    g = ggml_silu(ctx0, g);
+                    name(g, "ffn_moe_silu");
+                } break;
+            case LLM_FFN_SITU:
+                {
+                    // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * lb*tanh(up/lb)
+                    GGML_ASSERT(has_gate);
+                    const float beta = hparams.situ_beta;
+                    const float lb   = hparams.situ_linear_beta;
+
+                    ggml_tensor * act = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, g, 1.0f/beta)), beta);
+                    act = ggml_mul(ctx0, act, ggml_sigmoid(ctx0, g));
+                    if (lb > 0.0f) {
+                        u = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, u, 1.0f/lb)), lb);
+                    }
+                    g = ggml_mul(ctx0, act, u);
+                    name(g, "ffn_moe_situ");
+                } break;
+            case LLM_FFN_GELU:
+                if (has_gate) {
+                    g = ggml_geglu_split(ctx0, g, u);
+                    name(g, "ffn_moe_geglu");
+                } else {
+                    g = ggml_gelu(ctx0, g);
+                    name(g, "ffn_moe_gelu");
+                } break;
+            case LLM_FFN_SWIGLU_OAI_MOE:
+                {
+                    // TODO: move to hparams?
+                    constexpr float alpha = 1.702f;
+                    constexpr float limit = 7.0f;
+                    g = ggml_swiglu_oai(ctx0, g, u, alpha, limit);
+                    name(g, "ffn_moe_swiglu_oai");
+                } break;
+            case LLM_FFN_RELU:
+                if (has_gate) {
+                    g = ggml_reglu_split(ctx0, g, u);
+                    name(g, "ffn_moe_reglu");
+                } else {
+                    g = ggml_relu(ctx0, g);
+                    name(g, "ffn_moe_relu");
+                } break;
+            case LLM_FFN_RELU_SQR:
+                if (has_gate) {
+                    // TODO: add support for gated squared relu
+                    GGML_ABORT("fatal error: gated squared relu not implemented");
+                } else {
+                    g = ggml_relu(ctx0, g);
+                    g = ggml_sqr(ctx0, g);
+                    name(g, "ffn_moe_relu_sqr");
+                } break;
+            default:
+                GGML_ABORT("fatal error");
+        }
+        return g;
+    };
 
     if (pack) {
         // With the scheduler's CPU worker, the cold chain's CPU split runs while the pack's
@@ -2436,7 +2533,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 g = mm(w_gate, gate_exps, cur, ids);
                 u = mm(w_up,   up_exps,   cur, ids);
             }
-            ggml_tensor * act = ggml_swiglu_split(ctx0, g, u);
+            ggml_tensor * act = activate(g, u, true, false);
             ggml_tensor * d   = mm(w_down, down_exps, act, ids);
             if (arch == LLM_ARCH_MISTRAL4) {
                 ggml_prec_set_src(d, GGML_PREC_F32, 1);
@@ -2507,91 +2604,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     if (!pack) {
         const bool has_gate = gate_exps || gate_up_exps;
-
-        switch (type_op) {
-            case LLM_FFN_SILU:
-                if (gate_exps) {
-                    if (il >= 0) {
-                        const float limit = hparams.swiglu_clamp_exp[il];
-                        constexpr float eps = 1e-6f;
-                        // default zero-filled - only archs loading clamp metadata
-                        // (Step35, DSv4) get non-zero.
-                        if (limit > eps) {
-                            if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
-                                cur = ggml_swiglu_clamp(ctx0, cur, up, limit);
-                            } else {
-                                up = ggml_clamp(ctx0, up, -limit, limit);
-                                cb(up, "ffn_moe_up_clamped", il);
-                                ggml_tensor * gate_act = ggml_silu(ctx0, cur);
-                                cb(gate_act, "ffn_moe_silu", il);
-                                gate_act = ggml_clamp(ctx0, gate_act, -INFINITY, limit);
-                                cb(gate_act, "ffn_moe_silu_clamped", il);
-                                cur = ggml_mul(ctx0, gate_act, up);
-                            }
-                            cb(cur, "ffn_moe_swiglu_limited", il);
-                            break;
-                        }
-                    }
-                }
-
-                if (has_gate) {
-                    cur = ggml_swiglu_split(ctx0, cur, up);
-                    cb(cur, "ffn_moe_swiglu", il);
-                } else {
-                    cur = ggml_silu(ctx0, cur);
-                    cb(cur, "ffn_moe_silu", il);
-                } break;
-            case LLM_FFN_SITU:
-                {
-                    // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * lb*tanh(up/lb)
-                    GGML_ASSERT(has_gate);
-                    const float beta = hparams.situ_beta;
-                    const float lb   = hparams.situ_linear_beta;
-
-                    ggml_tensor * act = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, cur, 1.0f/beta)), beta);
-                    act = ggml_mul(ctx0, act, ggml_sigmoid(ctx0, cur));
-                    if (lb > 0.0f) {
-                        up = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, up, 1.0f/lb)), lb);
-                    }
-                    cur = ggml_mul(ctx0, act, up);
-                    cb(cur, "ffn_moe_situ", il);
-                } break;
-            case LLM_FFN_GELU:
-                if (has_gate) {
-                    cur = ggml_geglu_split(ctx0, cur, up);
-                    cb(cur, "ffn_moe_geglu", il);
-                } else {
-                    cur = ggml_gelu(ctx0, cur);
-                    cb(cur, "ffn_moe_gelu", il);
-                } break;
-            case LLM_FFN_SWIGLU_OAI_MOE:
-                {
-                    // TODO: move to hparams?
-                    constexpr float alpha = 1.702f;
-                    constexpr float limit = 7.0f;
-                    cur = ggml_swiglu_oai(ctx0, cur, up, alpha, limit);
-                    cb(cur, "ffn_moe_swiglu_oai", il);
-                } break;
-            case LLM_FFN_RELU:
-                if (has_gate) {
-                    cur = ggml_reglu_split(ctx0, cur, up);
-                    cb(cur, "ffn_moe_reglu", il);
-                } else {
-                    cur = ggml_relu(ctx0, cur);
-                    cb(cur, "ffn_moe_relu", il);
-                } break;
-            case LLM_FFN_RELU_SQR:
-                if (has_gate) {
-                    // TODO: add support for gated squared relu
-                    GGML_ABORT("fatal error: gated squared relu not implemented");
-                } else {
-                    cur = ggml_relu(ctx0, cur);
-                    cur = ggml_sqr(ctx0, cur);
-                    cb(cur, "ffn_moe_relu_sqr", il);
-                } break;
-            default:
-                GGML_ABORT("fatal error");
-        }
+        cur = activate(cur, up, has_gate, true);
 
         experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s, slots); // [n_embd, n_expert_used, n_tokens]
         if (arch == LLM_ARCH_MISTRAL4) {
