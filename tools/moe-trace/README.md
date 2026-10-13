@@ -140,9 +140,11 @@ replay does the same: each expert tensor of a layer is its own plan, in the
 listed order, on the pool of its type and size. Gate, up and down of one type
 and size therefore compete for one pool, and hit and `ins/tok` are weighted by
 bytes, the inserts in (layer, expert) units. The byte budget holds `S` experts of
-every expert tensor, and like the providers' per-device budget the pools take it
-in the order the graph meets them, `min(left / expert size, n_expert)` slabs
-each, so a later pool can get less than its share or nothing. A trace without
+every expert tensor. `--provider sycl` (the default) follows the SYCL provider's
+per-device budget: the pools take it in the order the graph meets them,
+`min(left / expert size, n_expert)` slabs each, so a later pool can get less than
+its share or nothing. `--provider vulkan` follows the Vulkan provider, which sizes
+every pool from the whole budget, so its pools together can exceed it. A trace without
 those lines (older traces) gets one pool of `min(S x n_layers, n_expert)`
 (layer, expert) units and one plan per layer: an upper bound wherever tensors of
 a layer share a pool. In both, a pool below the providers' 64-slot minimum is

@@ -22,9 +22,11 @@ plan fills at most --inserts-per-plan misses and never evicts a unit it hit or
 filled; its other misses stay on the CPU. With the trace's '# expert_tensors='
 lines, every expert tensor of a layer is its own plan on the pool of its weight
 type and expert size, so gate, up and down of one type compete for one pool;
-the byte budget holds S experts of every tensor, and the pools take it in the
-order the graph meets them, min(left / expert size, n_expert) slabs each; hit
-and ins/tok are then weighted by bytes. Without them, one pool of
+the byte budget holds S experts of every tensor. With --provider sycl (the
+default) the pools take it in the order the graph meets them,
+min(left / expert size, n_expert) slabs each; with --provider vulkan every pool
+sizes itself from the whole budget, as that provider does. Hit and ins/tok are
+then weighted by bytes. Without them, one pool of
 min(S x n_layers, n_expert) (layer, expert) units with one plan per layer is an
 upper bound. Like the provider, a pool below 64 slots is not created.
 
@@ -398,12 +400,13 @@ def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int,
 
 
 def dynamic_pools(tensors: dict[int, list[tuple[str, int]]], layers: Iterable[int], slots: int,
-                  n_expert: int, min_slots: int | None = None) -> dict[tuple[str, int], int]:
-    """Slabs of each provider pool, one per weight type and expert size. The byte budget holds S
-    experts of every expert tensor; like the providers' per-device budget (moe-cache.cpp), the
-    pools take it in the order the graph first meets them (layer, then tensor order), each
-    min(left / expert size, n_expert) slabs. A pool below min_slots is not created: its tensors
-    stay on the CPU and the budget passes on."""
+                  n_expert: int, min_slots: int | None = None, shared: bool = True) -> dict[tuple[str, int], int]:
+    """Slabs of each provider pool, one per weight type and expert size; the byte budget holds S
+    experts of every expert tensor. shared (the SYCL provider, ggml-sycl/moe-cache.cpp): the pools
+    take that budget in the order the graph first meets them (layer, then tensor order), each
+    min(left / expert size, n_expert) slabs. Not shared (the Vulkan provider,
+    ggml-vulkan-moe-cache.cpp): every pool sizes itself from the whole budget. A pool below
+    min_slots is not created: its tensors stay on the CPU and the budget passes on."""
     floor = PROVIDER_POOL_SLOTS_MIN if min_slots is None else min_slots
     order: list[tuple[str, int]] = []
     left = 0
@@ -416,7 +419,7 @@ def dynamic_pools(tensors: dict[int, list[tuple[str, int]]], layers: Iterable[in
     for t in order:
         n = min(left // t[1], n_expert)
         pools[t] = n if n >= floor else 0
-        left -= pools[t] * t[1]
+        left -= pools[t] * t[1] if shared else 0
     return pools
 
 
@@ -476,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--budgets", default="0.0625,0.125,0.25,0.5", help="slots per layer as a fraction of n_expert")
     ap.add_argument("--reelect", type=int, default=32, help="re-election interval in decode steps")
     ap.add_argument("--hot-uses", type=int, default=4, help="dynamic policy hot threshold (GGML_CUDA_MOE_CACHE_HOT_USES)")
+    ap.add_argument("--provider", choices=("sycl", "vulkan"), default="sycl",
+                    help="dynamic policy: the --moe-cache provider whose pool budget to model (default: sycl)")
     ap.add_argument("--inserts-per-plan", type=int, default=PROVIDER_INSERTS_PER_PLAN,
                     help="dynamic policy fills per layer per step, 1..1024 (GGML_CUDA_MOE_CACHE_INSERTS)")
     ap.add_argument("--slab-mb", type=float, default=None,
@@ -582,7 +587,8 @@ def main(argv: list[str] | None = None) -> int:
         # the provider shares one pool per expert size and weight type across all layers and caps
         # it at the creating tensor's n_expert slabs (moe-cache.cpp), whatever the budget
         if trace.tensors:
-            pools = dynamic_pools(trace.tensors, decode, slots, n_expert, PROVIDER_POOL_SLOTS_MIN)
+            pools = dynamic_pools(trace.tensors, decode, slots, n_expert, PROVIDER_POOL_SLOTS_MIN,
+                                  shared=args.provider == "sycl")
             rows.append(("dynamic", sim_dynamic_tensors(events, trace.tensors, pools, args.hot_uses,
                                                         args.inserts_per_plan)))
         else:
@@ -605,8 +611,10 @@ def main(argv: list[str] | None = None) -> int:
               "activation transfers, synchronization and compilation")
     print("static-oracle selects residents from the scored trace itself and is optimistic")
     if trace.tensors:
-        print("dynamic replays each expert tensor as its own plan on the pool of its weight type and size; "
-              "hit and ins/tok are weighted by bytes")
+        budget = ("SYCL provider: the pools share one byte budget in graph order" if args.provider == "sycl"
+                  else "Vulkan provider: every pool sizes itself from the whole budget")
+        print("dynamic replays each expert tensor as its own plan on the pool of its weight type and size "
+              f"({budget}); hit and ins/tok are weighted by bytes")
     else:
         print("dynamic counts one pool unit per (layer, expert): the trace has no '# expert_tensors=' lines, so it is an "
               "upper bound where gate, up and down of one weight type share a pool")

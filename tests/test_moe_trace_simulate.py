@@ -227,6 +227,14 @@ class PolicyTests(unittest.TestCase):
         res = simulate.sim_dynamic_tensors(steps, tensors, pools, hot_uses=4)
         self.assertAlmostEqual(res.hit, 3 / 8)  # layer 0 hits from step 1, layer 1 never
 
+    def test_vulkan_pools_each_take_the_whole_budget(self) -> None:
+        # the Vulkan provider passes the configured budget to every new pool: both get 128
+        tensors = {0: [("q4_K", 100)], 1: [("q5_K", 100)]}
+        pools = simulate.dynamic_pools(tensors, [0, 1], 64, 128, shared=False)
+        self.assertEqual(pools, {("q4_K", 100): 128, ("q5_K", 100): 128})
+        steps = [[(0, [0, 1]), (1, [0, 1])]] * 4
+        self.assertAlmostEqual(simulate.sim_dynamic_tensors(steps, tensors, pools, hot_uses=4).hit, 6 / 8)
+
     def test_dynamic_pools_below_the_provider_minimum_are_not_created(self) -> None:
         # S = 30 of 128 is a budget of 30 x (100 + 50) = 4500 bytes: 45 f32 slabs, below the
         # provider's 64, so that pool is not created and the f16 pool met later gets 90
@@ -430,6 +438,27 @@ class CliTests(unittest.TestCase):
         self.assertIn("weighted by bytes", out)
         code, out, _ = run([self.trace])
         self.assertIn("upper bound", out)
+
+    def test_provider_selects_the_pool_budget(self) -> None:
+        # two layers of one tensor each, equal size, different types, n_expert 128 at budget 0.5
+        text = HEADER.format(sid="v").replace("n_expert=4", "n_expert=128")
+        text += "# expert_tensors=0:q4_K/100\n# expert_tensors=1:q5_K/100\n"
+        text += "".join(f"{p},{layer},0,1\n" for p in range(4) for layer in (0, 1))
+        path = write(self.tmp.name, "v.csv", text)
+        simulate.PROVIDER_POOL_SLOTS_MIN = self.pool_min
+
+        def dynamic(argv: list[str]) -> list[str]:
+            code, out, err = run([path, "--budgets", "0.5", *argv])
+            self.assertEqual(code, 0, err)
+            line = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == "dynamic")
+            return [line.split("|")[1].split()[1], out]
+
+        hit, out = dynamic([])
+        self.assertEqual(hit, "37.5%")
+        self.assertIn("SYCL provider: the pools share one byte budget", out)
+        hit, out = dynamic(["--provider", "vulkan"])
+        self.assertEqual(hit, "75.0%")
+        self.assertIn("Vulkan provider: every pool sizes itself", out)
 
     def test_dynamic_needs_the_provider_minimum(self) -> None:
         simulate.PROVIDER_POOL_SLOTS_MIN = self.pool_min
