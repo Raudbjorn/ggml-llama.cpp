@@ -62,11 +62,12 @@ for arch in qwen3moe qwen35moe; do
     grep -q '^# n_expert=[0-9][0-9]*$' "$out" || fail "$arch: missing n_expert line"
     grep -q '^# sampling seed=7 ' "$out" || fail "$arch: seed not recorded"
 
-    # one line per routed layer with its expert tensors: separate gate, up and down in
-    # qwen3moe, a merged gate_up and down in qwen35moe
+    # one line per routed layer with its expert tensors (type, bytes, inputs and outputs per expert):
+    # separate gate, up and down in qwen3moe, a merged gate_up and down in qwen35moe
     case "$arch" in qwen3moe) n_tensors=3 ;; *) n_tensors=2 ;; esac
     routed=$(grep -v '^#' "$out" | awk -F, 'NR > 1 { print $2 }' | sort -un | tr '\n' ' ')
-    listed=$(grep -E "^# expert_tensors=[0-9]+:[A-Za-z0-9_]+/[0-9]+(,[A-Za-z0-9_]+/[0-9]+){$((n_tensors - 1))}\$" "$out" \
+    entry='[A-Za-z0-9_]+/[0-9]+/[0-9]+/[0-9]+'
+    listed=$(grep -E "^# expert_tensors=[0-9]+:$entry(,$entry){$((n_tensors - 1))}\$" "$out" \
         | sed 's/^# expert_tensors=\([0-9]*\):.*/\1/' | sort -un | tr '\n' ' ')
     [ "$listed" = "$routed" ] || fail "$arch: expert_tensors lines for layers '$listed', routed layers '$routed'"
 

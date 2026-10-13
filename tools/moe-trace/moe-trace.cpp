@@ -265,9 +265,10 @@ static std::string meta_str(const llama_model * model, const std::string & key) 
     return n < 0 ? std::string() : std::string(buf);
 }
 
-// the routed expert tensors of each MoE layer as TYPE/BYTES per expert, in the order build_moe_ffn
-// multiplies them: the --moe-cache provider keeps one pool per weight type and expert size, so
-// simulate.py replays them per pool. Only the main experts: a second router of the layer (GroveMoE's
+// the routed expert tensors of each MoE layer as TYPE/BYTES/N_IN/N_OUT per expert, in the order
+// build_moe_ffn multiplies them: the --moe-cache provider keeps one pool per weight type and expert
+// size, so simulate.py replays them per pool, and the SYCL provider holds back scratch sized by
+// N_IN and N_OUT. Only the main experts: a second router of the layer (GroveMoE's
 // _chexps) is not traced
 static bool write_expert_tensors(FILE * out, const llama_model * model) {
     static const char * const order[] = {
@@ -275,12 +276,13 @@ static bool write_expert_tensors(FILE * out, const llama_model * model) {
     };
     std::vector<llama_moe_tensor_info> info(llama_model_get_moe_tensor_info(model, nullptr, 0));
     info.resize(std::min(info.size(), llama_model_get_moe_tensor_info(model, info.data(), info.size())));
-    std::map<int64_t, std::map<size_t, std::string>> by_layer; // layer -> rank in order -> TYPE/BYTES
+    std::map<int64_t, std::map<size_t, std::string>> by_layer; // layer -> rank in order -> entry
     for (const llama_moe_tensor_info & t : info) {
         const char * dot = t.name && t.layer >= 0 ? strchr(t.name + 4, '.') : nullptr; // after "blk.N"
         for (size_t rank = 0; dot && rank < std::size(order); rank++) {
             if (strcmp(dot + 1, order[rank]) == 0) {
-                by_layer[t.layer][rank] = std::string(ggml_type_name(t.type)) + "/" + std::to_string(t.expert_size);
+                by_layer[t.layer][rank] = std::string(ggml_type_name(t.type)) + "/" + std::to_string(t.expert_size) +
+                                          "/" + std::to_string(t.n_input) + "/" + std::to_string(t.n_output);
             }
         }
     }

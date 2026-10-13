@@ -28,10 +28,11 @@ is inactive with its parameters), `# sampling_params=` the parameters of
 `common_params_sampling::print()` as `name=value` pairs, and `# sampling_inputs=` the
 others, with the grammar, the logit biases, the DRY sequence breakers and the lazy-grammar
 triggers as `COUNT:FNV-1a-64` identities (`none` when empty).
-One `# expert_tensors=LAYER:TYPE/BYTES,...` line per MoE layer lists its routed
-expert tensors in the order the graph multiplies them (up, gate, down; or
-gate_up, down), with the weight type and bytes per expert; the simulator groups
-them into the provider's pools. A layer with a second router under the same
+One `# expert_tensors=LAYER:TYPE/BYTES/N_IN/N_OUT,...` line per MoE layer lists its
+routed expert tensors in the order the graph multiplies them (up, gate, down; or
+gate_up, down), with the weight type, bytes per expert and the expert's input and
+output widths; the simulator groups them into the provider's pools and sizes the SYCL
+provider's scratch from the widths (older traces write `TYPE/BYTES` only). A layer with a second router under the same
 tensor name (GroveMoE's adjugate experts) keeps only the main router's rows and
 tensors. Then a header row and one row per (token, layer):
 
@@ -148,8 +149,11 @@ and size therefore compete for one pool, and hit and `ins/tok` are weighted by
 bytes, the inserts in (layer, expert) units. The byte budget holds `S` experts of
 every expert tensor. `--provider sycl` (the default) follows the SYCL provider's
 per-device budget: the pools take it in the order the graph meets them,
-`min(left / expert size, n_expert)` slabs each, so a later pool can get less than
-its share or nothing. `--provider vulkan` follows the Vulkan provider, which sizes
+`min((left - scratch) / expert size, n_expert)` slabs each, so a later pool can get
+less than its share or nothing. `scratch` is the device scratch the provider holds
+back, sized by the largest plan met so far (f32 outputs and q8_1 activations for 64
+ids, `sycl_moe_scratch_bytes`); without the widths in the trace it is left out and
+the report calls the figure an upper bound. `--provider vulkan` follows the Vulkan provider, which sizes
 every pool from the whole budget, so its pools together can exceed it. A trace without
 those lines (older traces) gets one pool of `min(S x n_layers, n_expert)`
 (layer, expert) units and one plan per layer: an upper bound wherever tensors of

@@ -54,7 +54,9 @@ class ParseTests(unittest.TestCase):
             self.assertIsNone(err)
             assert trace is not None
             self.assertEqual(trace.tensors, {1: [("q4_K", 100), ("q4_K", 100), ("q6_K", 150)]})
-            for bad in ("1", "1:", "x:f32/1", "-1:f32/1", "1:f32", "1:f32/0", "1:/4", "1:f32/1,"):
+            self.assertEqual(trace.dims, {})
+            for bad in ("1", "1:", "x:f32/1", "-1:f32/1", "1:f32", "1:f32/0", "1:/4", "1:f32/1,", "1:f32/1/2",
+                        "1:f32/1/2/0", "1:f32/1/2/3,f32/1"):
                 with self.subTest(bad=bad):
                     text = HEADER.format(sid="a") + f"# expert_tensors={bad}\n0,1,0,1\n"
                     trace, err = simulate.parse_traces([write(d, "bad.csv", text)])
@@ -65,6 +67,20 @@ class ParseTests(unittest.TestCase):
             b = write(d, "b.csv", HEADER.format(sid="b") + "# expert_tensors=1:f32/100\n0,1,0,1\n")
             self.assertIsNone(simulate.parse_traces([a, a])[1])
             trace, err = simulate.parse_traces([a, b])
+            self.assertIsNone(trace)
+            self.assertIn("expert tensors conflict", err or "")
+
+    def test_expert_tensors_lines_with_widths(self) -> None:
+        line = "# expert_tensors=1:q4_K/100/256/64,q6_K/150/64/256\n"
+        with tempfile.TemporaryDirectory() as d:
+            trace, err = simulate.parse_traces([write(d, "t.csv", HEADER.format(sid="a") + line + "0,1,0,1\n")])
+            self.assertIsNone(err)
+            assert trace is not None
+            self.assertEqual(trace.tensors, {1: [("q4_K", 100), ("q6_K", 150)]})
+            self.assertEqual(trace.dims, {1: [(256, 64), (64, 256)]})
+            other = HEADER.format(sid="b") + "# expert_tensors=1:q4_K/100/256/32,q6_K/150/64/256\n0,1,0,1\n"
+            trace, err = simulate.parse_traces([write(d, "t.csv", HEADER.format(sid="a") + line + "0,1,0,1\n"),
+                                                write(d, "o.csv", other)])
             self.assertIsNone(trace)
             self.assertIn("expert tensors conflict", err or "")
 
@@ -257,6 +273,21 @@ class PolicyTests(unittest.TestCase):
         tensors = {0: [("f32", 100)], 1: [("f16", 50)]}
         self.assertEqual(simulate.dynamic_pools(tensors, [0, 1], 30, 128),
                          {("f32", 100): 0, ("f16", 50): 90})
+
+    def test_sycl_pools_hold_back_the_scratch(self) -> None:
+        # 64 slabs of 1000 bytes fit a budget of 64 x 1000 exactly; the SYCL provider first holds
+        # back the scratch of the plan, 64 x (1 x 4 + 1 x 36) = 2560 bytes for 32 inputs and one
+        # output, which leaves 61 slabs, below the 64-slot minimum. Vulkan reserves nothing.
+        self.assertEqual(simulate.sycl_scratch_bytes(32, 1), 2560)
+        tensors = {0: [("f32", 1000)]}
+        self.assertEqual(simulate.dynamic_pools(tensors, [0], 64, 128), {("f32", 1000): 64})
+        self.assertEqual(simulate.dynamic_pools(tensors, [0], 64, 128, scratch={0: [2560]}), {("f32", 1000): 0})
+        self.assertEqual(simulate.dynamic_pools(tensors, [0], 64, 128, shared=False, scratch={0: [2560]}),
+                         {("f32", 1000): 64})
+        # the reserve is the largest scratch met so far: a pool created before a larger plan keeps its size
+        two = {0: [("f32", 1000)], 1: [("f16", 1000)]}
+        self.assertEqual(simulate.dynamic_pools(two, [0, 1], 64, 256, scratch={0: [100], 1: [64000]}),
+                         {("f32", 1000): 127, ("f16", 1000): 0})
 
     def test_dynamic_tensor_plans_fill_separately(self) -> None:
         # each tensor's plan has its own fill budget: one fill per plan still inserts both
@@ -523,6 +554,28 @@ class CliTests(unittest.TestCase):
         hit, out = dynamic(["--provider", "vulkan"])
         self.assertEqual(hit, "75.0%")
         self.assertIn("Vulkan provider: every pool sizes itself", out)
+
+    def test_sycl_scratch_can_disable_a_pool(self) -> None:
+        # n_expert 128 at budget 0.5: 64 slabs of 1000 bytes, exactly the provider's minimum. With the
+        # tensor's widths the SYCL replay holds back 2560 bytes of scratch and has no pool; Vulkan
+        # reserves nothing; without the widths the report says the SYCL figure is an upper bound
+        simulate.PROVIDER_POOL_SLOTS_MIN = self.pool_min
+        head = HEADER.format(sid="s").replace("n_expert=4", "n_expert=128")
+        rows = "".join(f"{p},0,0,1\n" for p in range(4))
+
+        def dynamic(line: str, *argv: str) -> tuple[str, str]:
+            code, out, err = run([write(self.tmp.name, "s.csv", head + line + rows), "--budgets", "0.5", *argv])
+            self.assertEqual(code, 0, err)
+            row = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == "dynamic")
+            return row.split("|")[1].split()[1], out
+
+        widths = "# expert_tensors=0:f32/1000/32/1\n"
+        self.assertEqual(dynamic(widths)[0], "0.0%")
+        self.assertEqual(dynamic(widths, "--provider", "vulkan")[0], "75.0%")
+        hit, out = dynamic("# expert_tensors=0:f32/1000\n")
+        self.assertEqual(hit, "75.0%")
+        self.assertIn("device scratch is not held back: an upper bound", out)
+        self.assertNotIn("not held back", dynamic(widths)[1])
 
     def test_dynamic_needs_the_provider_minimum(self) -> None:
         simulate.PROVIDER_POOL_SLOTS_MIN = self.pool_min

@@ -24,7 +24,9 @@ lines, every expert tensor of a layer is its own plan on the pool of its weight
 type and expert size, so gate, up and down of one type compete for one pool;
 the byte budget holds S experts of every tensor. With --provider sycl (the
 default) the pools take it in the order the graph meets them,
-min(left / expert size, n_expert) slabs each; with --provider vulkan every pool
+min((left - scratch) / expert size, n_expert) slabs each, where scratch is the
+device scratch the provider holds back for the largest plan met so far (from the
+lines' tensor widths; older lines lack them); with --provider vulkan every pool
 sizes itself from the whole budget, as that provider does. Hit and ins/tok are
 then weighted by bytes. Without them, one pool of
 min(S x n_layers, n_expert) (layer, expert) units with one plan per layer is an
@@ -71,6 +73,8 @@ class Trace:
     n_layer: int | None = None
     # per MoE layer, its expert tensors as (weight type, bytes per expert), from '# expert_tensors='
     tensors: dict[int, list[tuple[str, int]]] = field(default_factory=dict)
+    # per MoE layer, each tensor's (n_in, n_out), where the line carries them
+    dims: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -87,6 +91,7 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
     arch: str | None = None
     n_layer: int | None = None
     tensors: dict[int, list[tuple[str, int]]] = {}
+    dims: dict[int, list[tuple[int, int]]] = {}
     for path in paths:
         try:
             with open(path, encoding="utf-8") as f:
@@ -133,8 +138,8 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
                     parsed = parse_expert_tensors(value.strip())
                     if parsed is None:
                         return None, f"{path}:{lineno}: invalid expert_tensors '{value.strip()}'"
-                    layer, layout = parsed
-                    if tensors.setdefault(layer, layout) != layout:
+                    layer, layout, shapes = parsed
+                    if tensors.setdefault(layer, layout) != layout or (shapes and dims.setdefault(layer, shapes) != shapes):
                         return None, f"{path}:{lineno}: layer {layer}: expert tensors conflict with an earlier trace"
                 elif key == "n_prompt" and current is not None:
                     chunk = parse_prompt_chunk(line[1:])
@@ -174,7 +179,8 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
             rows.sort(key=lambda r: -r[0])  # pos = -(p + 1): prompt order
         for rows in s.decode.values():
             rows.sort(key=lambda r: r[0])
-    return Trace(sessions=sessions, n_expert=n_expert, widths=widths, arch=arch, n_layer=n_layer, tensors=tensors), None
+    return Trace(sessions=sessions, n_expert=n_expert, widths=widths, arch=arch, n_layer=n_layer, tensors=tensors,
+                 dims=dims), None
 
 
 def parse_prompt_chunk(text: str) -> int | None:
@@ -193,8 +199,10 @@ def parse_prompt_chunk(text: str) -> int | None:
     return min(sizes.values())
 
 
-def parse_expert_tensors(value: str) -> tuple[int, list[tuple[str, int]]] | None:
-    """'LAYER:TYPE/BYTES,TYPE/BYTES,...' as llama-moe-trace writes it, or None if malformed."""
+def parse_expert_tensors(value: str) -> tuple[int, list[tuple[str, int]], list[tuple[int, int]]] | None:
+    """'LAYER:TYPE/BYTES/N_IN/N_OUT,...' as llama-moe-trace writes it, or the 'LAYER:TYPE/BYTES,...'
+    of older traces: (layer, [(type, bytes)], [(n_in, n_out)], empty without the widths), or None
+    if malformed."""
     layer_text, sep, rest = value.partition(":")
     if not sep or not rest:
         return None
@@ -203,16 +211,21 @@ def parse_expert_tensors(value: str) -> tuple[int, list[tuple[str, int]]] | None
     except ValueError:
         return None
     layout: list[tuple[str, int]] = []
+    shapes: list[tuple[int, int]] = []
     for item in rest.split(","):
-        ty, sep, size = item.partition("/")
+        ty, *fields = item.split("/")
         try:
-            nbytes = int(size)
+            numbers = [int(x) for x in fields]
         except ValueError:
             return None
-        if not sep or not ty or nbytes <= 0:
+        if not ty or len(numbers) not in (1, 3) or min(numbers) <= 0:
             return None
-        layout.append((ty, nbytes))
-    return (layer, layout) if layer >= 0 else None
+        layout.append((ty, numbers[0]))
+        if len(numbers) == 3:
+            shapes.append((numbers[1], numbers[2]))
+    if shapes and len(shapes) != len(layout):
+        return None  # every entry of a line has the widths, or none
+    return (layer, layout, shapes) if layer >= 0 else None
 
 
 def validate_ids(trace: Trace, n_expert: int) -> str | None:
@@ -416,6 +429,7 @@ PROVIDER_INSERTS_PER_PLAN = 8  # GGML_CUDA_MOE_CACHE_INSERTS default, ggml-moe-c
 PROVIDER_POOL_SLOTS_MIN = 64   # moe_cache_pool_slots_min, ggml-moe-cache-common.h: a smaller pool is not created
 PROVIDER_MAX_BATCH = 8         # moe_cache_batch_max, ggml-moe-cache-common.h: a plan of more tokens bypasses the cache
 PROVIDER_PLAN_ROWS_MAX = 64    # moe_cache_node_rows_max and the CPU's MOE_CACHE_MAX_TOPK: ids (tokens x experts) per plan
+Q8_1_BLOCK = (32, 36)          # QK8_1 values in a block_q8_1 of 36 bytes: the SYCL provider's activations
 
 
 def plan(uses: OrderedDict[Hashable, int], units: int, keys: Iterable[Hashable], hot_uses: int,
@@ -477,25 +491,38 @@ def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int,
     return Result(hits / max(total, 1), inserts / max(n_scored, 1))
 
 
+def sycl_scratch_bytes(n_in: int, n_out: int) -> int:
+    """The SYCL provider's device scratch for a plan of this shape (sycl_moe_scratch_bytes,
+    ggml-sycl/moe-cache.cpp): f32 output rows and q8_1 activations for PROVIDER_PLAN_ROWS_MAX ids."""
+    return PROVIDER_PLAN_ROWS_MAX * (n_out * 4 + -(-n_in // Q8_1_BLOCK[0]) * Q8_1_BLOCK[1])
+
+
 def dynamic_pools(tensors: dict[int, list[tuple[str, int]]], layers: Iterable[int], slots: int,
-                  n_expert: int, min_slots: int | None = None, shared: bool = True) -> dict[tuple[str, int], int]:
+                  n_expert: int, min_slots: int | None = None, shared: bool = True,
+                  scratch: dict[int, list[int]] | None = None) -> dict[tuple[str, int], int]:
     """Slabs of each provider pool, one per weight type and expert size; the byte budget holds S
     experts of every expert tensor. shared (the SYCL provider, ggml-sycl/moe-cache.cpp): the pools
     take that budget in the order the graph first meets them (layer, then tensor order), each
-    min(left / expert size, n_expert) slabs. Not shared (the Vulkan provider,
-    ggml-vulkan-moe-cache.cpp): every pool sizes itself from the whole budget. A pool below
-    min_slots is not created: its tensors stay on the CPU and the budget passes on."""
+    min((left - scratch) / expert size, n_expert) slabs, where scratch (bytes per layer and tensor)
+    is held back as the largest of the plans met so far, the pool's own included. Not shared (the
+    Vulkan provider, ggml-vulkan-moe-cache.cpp): every pool sizes itself from the whole budget. A
+    pool below min_slots is not created: its tensors stay on the CPU and the budget passes on."""
     floor = PROVIDER_POOL_SLOTS_MIN if min_slots is None else min_slots
     order: list[tuple[str, int]] = []
+    reserved: dict[tuple[str, int], int] = {}  # the scratch held back when the pool is created
+    held = 0
     left = 0
     for layer in sorted(layers):
-        for t in tensors[layer]:
+        for i, t in enumerate(tensors[layer]):
             left += slots * t[1]
+            if shared and scratch:
+                held = max(held, scratch[layer][i])
             if t not in order:
                 order.append(t)
+                reserved[t] = held
     pools: dict[tuple[str, int], int] = {}
     for t in order:
-        n = min(left // t[1], n_expert)
+        n = min(max(left - reserved[t], 0) // t[1], n_expert)
         pools[t] = n if n >= floor else 0
         left -= pools[t] * t[1] if shared else 0
     return pools
@@ -658,6 +685,9 @@ def main(argv: list[str] | None = None) -> int:
     reads_per_step = sum(len(ids) for step in events for _, ids in step) / len(events)
     # the provider also plans the prompt calls of at most max_batch tokens: they warm the pools unscored
     dyn_events, dyn_scored = dynamic_events(trace, set(decode), args.max_batch)
+    # the SYCL provider holds its device scratch back from the pools; its size needs every layer's widths
+    scratch = ({layer: [sycl_scratch_bytes(n_in, n_out) for n_in, n_out in trace.dims[layer]] for layer in decode}
+               if args.provider == "sycl" and all(layer in trace.dims for layer in decode) else None)
     fill_uses = args.provider == "vulkan"
 
     hdr = f"{'budget':>7} {'slots':>5} | {'policy':>14} {'hit':>7} {'ins/tok':>8}"
@@ -680,7 +710,7 @@ def main(argv: list[str] | None = None) -> int:
         # it at the creating tensor's n_expert slabs (moe-cache.cpp), whatever the budget
         if trace.tensors:
             pools = dynamic_pools(trace.tensors, decode, slots, n_expert, PROVIDER_POOL_SLOTS_MIN,
-                                  shared=args.provider == "sycl")
+                                  shared=args.provider == "sycl", scratch=scratch)
             rows.append(("dynamic", sim_dynamic_tensors(dyn_events, trace.tensors, pools, args.hot_uses,
                                                         args.inserts_per_plan, dyn_scored, fill_uses)))
         else:
@@ -704,7 +734,8 @@ def main(argv: list[str] | None = None) -> int:
               "activation transfers, synchronization and compilation")
     print("static-oracle selects residents from the scored trace itself and is optimistic")
     if trace.tensors:
-        budget = ("SYCL provider: the pools share one byte budget in graph order" if args.provider == "sycl"
+        budget = ("SYCL provider: the pools share one byte budget in graph order, less the largest device scratch "
+                  "met so far" if args.provider == "sycl"
                   else "Vulkan provider: every pool sizes itself from the whole budget")
         print("dynamic replays each expert tensor as its own plan on the pool of its weight type and size "
               f"({budget}); hit and ins/tok are weighted by bytes")
@@ -714,6 +745,9 @@ def main(argv: list[str] | None = None) -> int:
     print("dynamic assumes the --moe-cache provider takes every MoE layer; it leaves on the CPU expert tensors below its "
           "minimum (logged as min-expert=, GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB) and unsupported weight types, which the "
           "replay does not apply")
+    if trace.tensors and args.provider == "sycl" and scratch is None:
+        print("dynamic: the '# expert_tensors=' lines carry no tensor widths (older traces), so the SYCL provider's "
+              "device scratch is not held back: an upper bound near the 64-slot pool minimum")
     chunks = sorted({s.chunk for s in trace.sessions if s.chunk is not None and s.prefill})
     if chunks:
         print(f"dynamic replays the prompt plans of at most {args.max_batch} tokens (the trace's prompt calls of "
