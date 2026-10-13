@@ -263,6 +263,21 @@ for opt in "--lora $work_dir/adapter.gguf" "--control-vector $work_dir/adapter.g
     grep -q "was not written by llama-moe-trace" "$work_dir/in.log" || fail "-o naming the $opt file: missing diagnostic"
     [ "$(cksum < "$victim")" = "$before" ] || fail "-o naming the $opt file changed it"
 done
+# a header is no proof: a grammar may open with the trace's first line as a comment, and a
+# pack profile is a trace; both are inputs and must survive
+printf '# llama-moe-trace v1\nroot ::= "a"\n' > "$work_dir/spoof.gbnf"
+"$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/profile.csv" > "$work_dir/prof.log" 2>&1 \
+    || fail "writing a profile trace failed: $(tail -n 2 "$work_dir/prof.log")"
+for opt in "--grammar-file $work_dir/spoof.gbnf" "--moe-pack-profile $work_dir/profile.csv --moe-pack-slots 1"; do
+    victim=$(printf '%s\n' "$opt" | cut -d' ' -f2)
+    before=$(cksum < "$victim")
+    # shellcheck disable=SC2086
+    if "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 $opt -o "$victim" > "$work_dir/in.log" 2>&1; then
+        fail "-o naming the input of '$opt' must be rejected"
+    fi
+    grep -q "must not name the input file" "$work_dir/in.log" || fail "-o naming the input of '$opt': missing diagnostic"
+    [ "$(cksum < "$victim")" = "$before" ] || fail "-o naming the input of '$opt' changed it"
+done
 # a trace may be replaced, unless it is also the prompt file
 for _ in 1 2; do
     "$trace_bin" -m "$work_dir/qwen3moe-moe.gguf" -p "hello" -n 1 -c 64 -o "$work_dir/again.csv" > "$work_dir/again.log" 2>&1 \

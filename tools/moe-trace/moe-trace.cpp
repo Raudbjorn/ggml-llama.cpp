@@ -343,9 +343,59 @@ static bool same_file(const std::string & a, const std::string & b) {
     return ec ? a == b : ca == cb;
 }
 
-// the files the trace reads: every model shard (mapped while the trace runs) and the prompt file
-static std::vector<std::string> trace_inputs(const llama_model * model, const common_params & params) {
+#ifndef _WIN32
+extern char ** environ;
+#endif
+
+// every existing file named on the command line or in a LLAMA_ARG_* variable, except the values
+// of the output options: the parser reads adapters, grammar, schema and profile files itself, and
+// common_params keeps only their contents. A file named twice, as an output and as an input, stays.
+static std::vector<std::string> named_files(int argc, char ** argv) {
+    static const char * const outputs[] = { "-o", "--output", "--output-file", "--spec-out", "--hidden-out" };
+    const auto is_output = [](const std::string & flag) {
+        return std::any_of(std::begin(outputs), std::end(outputs), [&](const char * o) { return flag == o; });
+    };
+    std::vector<std::string> files;
+    const auto add = [&](const std::string & value) {
+        std::error_code ec;
+        if (!value.empty() && std::filesystem::is_regular_file(value, ec) && !ec) {
+            files.push_back(value);
+        }
+    };
+    for (int i = 1; i < argc; i++) {
+        const std::string arg = argv[i];
+        const size_t eq = arg.find('=');
+        if (arg.rfind("-", 0) == 0 && eq != std::string::npos) {
+            if (!is_output(arg.substr(0, eq))) {
+                add(arg.substr(eq + 1));
+            }
+        } else if (is_output(arg)) {
+            i++; // its value is the output
+        } else {
+            add(arg);
+        }
+    }
+#ifdef _WIN32
+    char ** env = _environ;
+#else
+    char ** env = environ;
+#endif
+    for (; env != nullptr && *env != nullptr; env++) {
+        const std::string kv = *env;
+        const size_t eq = kv.find('=');
+        if (kv.rfind("LLAMA_ARG_", 0) == 0 && eq != std::string::npos) {
+            add(kv.substr(eq + 1));
+        }
+    }
+    return files;
+}
+
+// the files the trace reads: every model shard (mapped while the trace runs), the prompt file and
+// the files named on the command line
+static std::vector<std::string> trace_inputs(const llama_model * model, const common_params & params,
+                                             const std::vector<std::string> & named) {
     std::vector<std::string> inputs = { params.model.path };
+    inputs.insert(inputs.end(), named.begin(), named.end());
     const std::string count = meta_str(model, "split.count");
     const int n_split = count.empty() ? 0 : atoi(count.c_str());
     // the loader derives the other shard names the same way from the first shard
@@ -405,8 +455,8 @@ static void log_spec_recall(const trace_state & ts, int32_t k) {
 // returns 0 on a complete trace; owns the model and context so that they are
 // freed before the backend
 // an output may replace only a file this tool wrote: a non-empty regular file must start with
-// one of its headers. That protects every input (adapters, control vectors, grammar and schema
-// files, whose paths common_params does not keep) without listing them.
+// one of its headers. A header proves little (a GBNF comment can spell it, and a pack profile is
+// a trace), so the files named as inputs are also compared by path (named_files).
 static bool written_by_trace(const std::string & path) {
     std::error_code ec;
     const auto st = std::filesystem::status(path, ec);
@@ -424,7 +474,7 @@ static bool written_by_trace(const std::string & path) {
     return h.rfind("# llama-moe-trace v1\n", 0) == 0 || h.rfind("llama-moe-trace hidden v1\n", 0) == 0;
 }
 
-static int run_trace(common_params & params, trace_state & ts) {
+static int run_trace(common_params & params, trace_state & ts, const std::vector<std::string> & named) {
     std::vector<std::string> outs = { params.out_file };
     if (params.moe_spec_router_k > 0) {
         outs.push_back(params.moe_trace_spec_out);
@@ -478,7 +528,7 @@ static int run_trace(common_params & params, trace_state & ts) {
         return 1;
     }
     // opening an output truncates it: none may be an input, least of all a mapped model shard
-    for (const std::string & in : trace_inputs(model, params)) {
+    for (const std::string & in : trace_inputs(model, params, named)) {
         if (same_file(params.out_file, in) || (spec_on && same_file(params.moe_trace_spec_out, in)) ||
             (hid_on && same_file(params.moe_trace_hidden_out, in))) {
             LOG_ERR("%s: -o, --spec-out and --hidden-out must not name the input file '%s'\n", __func__, in.c_str());
@@ -651,7 +701,7 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    const int ret = run_trace(params, ts);
+    const int ret = run_trace(params, ts, named_files(argc, argv));
 
     llama_backend_free();
     common_log_flush(common_log_main());
