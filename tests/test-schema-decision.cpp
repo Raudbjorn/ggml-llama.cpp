@@ -333,6 +333,54 @@ static const char * k_test_schema = R"({
     "score":    {"type": "number", "minimum": 0, "maximum": 1, "step": 0.25, "description": "Confidence."}
 })";
 
+// the token plans of a request's distinct context endings share one budget (max_plan_tokens);
+// contexts that end alike share one plan
+static void test_plan_budget(const std::string & dir) {
+    const int failures_at_start = g_failures;
+    llama_model_params mp = llama_model_default_params();
+    mp.vocab_only = true;
+    const std::string path = dir + "/ggml-vocab-llama-bpe.gguf";
+    llama_model * model = llama_model_load_from_file(path.c_str(), mp);
+    CHECK(model != nullptr, "cannot load %s", path.c_str());
+    if (!model) {
+        return;
+    }
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    // 32 fields of 255 values of about 60 tokens: about 0.5M plan entries per distinct ending
+    std::string words;
+    for (int w = 0; w < 58; w++) {
+        words += std::string(" ") + (char) ('a' + w % 26);
+    }
+    std::string text = "{";
+    for (int f = 0; f < 32; f++) {
+        text += std::string(f ? "," : "") + "\"f" + std::to_string(f) + "\": {\"type\": \"enum\", \"description\": \"d\", \"choices\": [";
+        for (int v = 0; v < 255; v++) {
+            text += std::string(v ? "," : "") + "\"w" + std::to_string(v) + words + "\"";
+        }
+        text += "]}";
+    }
+    text += "}";
+    const auto cs = compile_text(text);
+    CHECK(cs.ok(), "budget schema: %s", cs.error.c_str());
+    if (cs.ok()) {
+        std::vector<std::string> distinct, alike;
+        for (int i = 0; i < 12; i++) {
+            distinct.push_back("Ticket " + std::to_string(i) + " is about item number " + std::to_string(1000 + i) + ".");
+            alike.push_back("Ticket " + std::to_string(i) + " is about the same old item as all the others here.");
+        }
+        const auto many = plan_tokens(vocab, "", distinct, cs.value.inputs);
+        CHECK(!many.ok() && many.error.find("distinct context endings") != std::string::npos,
+              "12 distinct endings of a 32 x 255 schema: %s", many.ok() ? "planned" : many.error.c_str());
+        const auto shared = plan_tokens(vocab, "", alike, cs.value.inputs);
+        CHECK(shared.ok() && shared.value.tails.size() == 1, "12 contexts that end alike: %s, %zu plan(s)",
+              shared.ok() ? "planned" : shared.error.c_str(), shared.ok() ? shared.value.tails.size() : (size_t) 0);
+    }
+    llama_model_free(model);
+    if (g_failures == failures_at_start) {
+        printf("ok: the token plans of distinct context endings share one budget\n");
+    }
+}
+
 static void test_vocabs(const std::string & dir) {
     const int failures_at_start = g_failures;
     const auto files = list_vocabs(dir);
@@ -999,6 +1047,7 @@ int main(int argc, char ** argv) {
     if (mode == "--vocab") {
         test_schema();
         test_vocabs(argv[2]);
+        test_plan_budget(argv[2]);
     } else if (mode == "--model") {
         for (int i = 2; i < argc; i++) {
             test_model(argv[i]);

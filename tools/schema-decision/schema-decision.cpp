@@ -359,6 +359,7 @@ outcome<token_plan> plan_tokens(const llama_vocab * vocab, const std::string & s
     plan.shared.assign(shared.begin(), shared.begin() + n_shared);
 
     std::map<std::string, int> tail_index; // left + '\0' + rest -> tail
+    size_t plan_size = 0;                  // token ids plus paths of the plans so far (max_plan_tokens)
     for (size_t i = 0; i < full.size(); ++i) {
         const tokens_t & f = full[i];
         if (f.size() <= n_shared) {
@@ -452,7 +453,16 @@ outcome<token_plan> plan_tokens(const llama_vocab * vocab, const std::string & s
                     }
                 }
             }
+            for (const auto & path : ft.paths) {
+                plan_size += path.size() + 1;
+            }
             fields.push_back(std::move(ft));
+        }
+        if (plan_size > max_plan_tokens) {
+            out.error = "the value paths after the " + std::to_string(plan.tails.size() + 1) + " distinct context endings so far need " +
+                        std::to_string(plan_size) + " token entries, more than " + std::to_string(max_plan_tokens) +
+                        "; send fewer contexts with distinct endings or a smaller schema";
+            return out;
         }
         plan.tails.push_back(std::move(fields));
     }

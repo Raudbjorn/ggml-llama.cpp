@@ -79,7 +79,7 @@ Numeric fields also return `interval_p10_p90`, and `mean` with the `mean` aggreg
 | key | default | meaning |
 | --- | --- | --- |
 | `schema` | required | compact fields or a JSON Schema object (below) |
-| `contexts` | required | 1-256 non-empty strings, 1 MiB each, 16 MiB together; results keep their order |
+| `contexts` | required | 1-256 non-empty strings, 1 MiB each, 16 MiB together; results keep their order. Contexts that end alike share one token plan; the plans of the distinct endings may hold 4,194,304 token entries in all (a schema of 32 fields of 255 values of 64 tokens fills it in about 8) |
 | `instructions` | `""` | appended to the generated field catalogue; cached with it (64 KiB) |
 | `mode` | `auto` | `auto`, `tree` or `greedy` |
 | `tree_max` | 128 | integer 0-255: `auto` uses `tree` for fields with at most this many values |

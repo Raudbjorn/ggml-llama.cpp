@@ -44,6 +44,9 @@ constexpr size_t max_context_bytes      = 1 << 20; // one context
 constexpr size_t max_request_bytes      = 16 << 20; // all contexts together
 constexpr size_t max_path_tokens        = 64;      // one value with its terminator
 constexpr size_t max_rows_per_context   = 65536;   // token rows of one context, before recurrent padding
+// token ids plus paths kept for the value paths of all distinct context endings of one request: each
+// ending is planned once, so contexts that share one cost one plan
+constexpr size_t max_plan_tokens        = 1 << 22;
 constexpr int    max_tree_max           = 255;
 // a request text that holds every decoded limit above at worst-case JSON escaping (6 bytes for a
 // \u00XX escape), so the parser's checks bound the contents and not their encoding
