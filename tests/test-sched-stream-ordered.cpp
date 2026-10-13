@@ -256,6 +256,49 @@ static bool mapped_weights() {
     return ok;
 }
 
+// A CPU split that fails on the scheduler's worker must not return while a device split launched
+// beside it still runs: the caller may reset or reallocate that memory next.
+static bool async_cpu_failure() {
+    deferred_device dev(false);
+    dev.device.iface.get_type = [](ggml_backend_dev_t) { return GGML_BACKEND_DEVICE_TYPE_GPU; };
+    dev.cpu->iface.graph_compute = [](ggml_backend_t, ggml_cgraph *) { return GGML_STATUS_FAILED; };
+    ggml_backend_t backends[] = {dev.backend, dev.cpu};
+    auto sched = ggml_backend_sched_new(backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, false, false);
+    auto ctx = ggml_init({ggml_tensor_overhead() * 8 + ggml_graph_overhead(), nullptr, true});
+    GGML_ASSERT(sched && ctx);
+    bool ok = ggml_backend_sched_set_async_cpu(sched, true);
+    auto a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
+    auto b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
+    ggml_set_input(a);
+    ggml_set_input(b);
+    auto on_cpu = ggml_scale(ctx, a, 2.0f);
+    auto on_dev = ggml_scale(ctx, b, 3.0f);
+    ggml_set_output(on_cpu);
+    ggml_set_output(on_dev);
+    auto graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, on_cpu);
+    ggml_build_forward_expand(graph, on_dev);
+    ggml_backend_sched_set_tensor_backend(sched, a, dev.cpu);
+    ggml_backend_sched_set_tensor_backend(sched, on_cpu, dev.cpu);
+    ggml_backend_sched_set_tensor_backend(sched, b, dev.backend);
+    ggml_backend_sched_set_tensor_backend(sched, on_dev, dev.backend);
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched, graph));
+    ok &= ggml_backend_sched_get_n_splits(sched) == 2;
+    const float values[] = {1, 2, 3, 4};
+    ggml_backend_tensor_set(a, values, 0, sizeof(values));
+    ggml_backend_tensor_set(b, values, 0, sizeof(values));
+    ok &= ggml_backend_sched_graph_compute_async(sched, graph) == GGML_STATUS_FAILED;
+    // the device split was launched beside the CPU split, and has run by the time the error returns
+    const bool launched = !dev.queue.empty();
+    const bool drained  = dev.completed == dev.queue.size();
+    ok &= launched && drained;
+    std::printf("async CPU failure: launched=%d, drained=%d: %s\n", launched, drained, ok ? "PASS" : "FAIL");
+    ggml_backend_sched_synchronize(sched);
+    ggml_backend_sched_free(sched);
+    ggml_free(ctx);
+    return ok;
+}
+
 int main(int argc, char ** argv) {
     if (argc == 2 && std::strcmp(argv[1], "--expect-sync") == 0) {
         // Run with an event-capable device so fallback cannot hide accidental opt-in.
@@ -270,5 +313,6 @@ int main(int argc, char ** argv) {
     ok &= run_case("serial null events", false, false, false, false, false);
     ok &= run_case("parallel null events", false, true, false, false, false);
     ok &= mapped_weights();
+    ok &= async_cpu_failure();
     return ok ? 0 : 1;
 }

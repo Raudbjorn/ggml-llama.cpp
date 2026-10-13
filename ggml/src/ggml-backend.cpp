@@ -2716,6 +2716,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 const enum ggml_status ec = cpu_async->join();
                 if (ec != GGML_STATUS_SUCCESS) {
                     abandon_lookahead(split_id);
+                    // splits launched beside the job may still run; the caller may reset their memory
+                    ggml_backend_sched_synchronize(sched);
                     return ec;
                 }
             } else {
@@ -3048,6 +3050,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     if (cpu_async) {
         const enum ggml_status ec = cpu_async->join();
         if (ec != GGML_STATUS_SUCCESS) {
+            // splits launched beside the job may still run; the caller may reset their memory
+            ggml_backend_sched_synchronize(sched);
             return ec;
         }
     }
