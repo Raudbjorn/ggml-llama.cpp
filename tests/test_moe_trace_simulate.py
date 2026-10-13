@@ -5,6 +5,8 @@ import os
 import sys
 import tempfile
 import unittest
+from collections import OrderedDict
+from collections.abc import Hashable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "moe-trace"))
@@ -133,6 +135,20 @@ class ParseTests(unittest.TestCase):
             self.assertIsNone(trace)
             assert err is not None
             self.assertIn("layer 1", err)
+
+    def test_prompt_header_sets_the_prompt_call_size(self) -> None:
+        head = HEADER.format(sid="c") + "# n_prompt=6 n_predict=2 n_ctx=64 n_batch=8 n_ubatch=4\n"
+        with tempfile.TemporaryDirectory() as d:
+            trace, err = simulate.parse_traces([write(d, "c.csv", head + "0,0,0,1\n"),
+                                                write(d, "o.csv", HEADER.format(sid="o") + "0,0,0,1\n")])
+            self.assertIsNone(err)
+            assert trace is not None
+            self.assertEqual([s.chunk for s in trace.sessions], [4, None])
+            bad = head.replace("n_ubatch=4", "n_ubatch=x")
+            trace, err = simulate.parse_traces([write(d, "b.csv", bad + "0,0,0,1\n")])
+        self.assertIsNone(trace)
+        assert err is not None
+        self.assertIn("invalid prompt sizes", err)
 
     def test_missing_file_is_an_error(self) -> None:
         trace, err = simulate.parse_traces(["/nonexistent/trace.csv"])
@@ -276,6 +292,53 @@ class PolicyTests(unittest.TestCase):
         res = simulate.sim_reelect(trace, slots=1, interval=2, n_steps=len(simulate.decode_events(trace)))
         self.assertAlmostEqual(res.hit, 1 / 3)
 
+    def test_prompt_plans_follow_the_prompt_calls(self) -> None:
+        # 6 prompt tokens in calls of 4: layer 0 routes every row, layer 1 (output-pruned) only the
+        # last row of each call. With max_batch 2 the 4-row plan of layer 0 bypasses the provider.
+        rows = "".join(f"-{p + 1},0,{p % 4},{(p + 1) % 4}\n" for p in range(6)) + "-4,1,3,0\n-6,1,1,2\n0,0,0,1\n0,1,0,1\n"
+        head = HEADER.format(sid="p") + "# n_prompt=6 n_predict=1 n_ctx=64 n_batch=4 n_ubatch=4\n"
+        with tempfile.TemporaryDirectory() as d:
+            trace, err = simulate.parse_traces([write(d, "p.csv", head + rows)])
+        self.assertIsNone(err)
+        assert trace is not None
+        s = trace.sessions[0]
+        self.assertEqual(simulate.prompt_plans(s, trace.widths, {0, 1}, 8),
+                         [[(0, [0, 1, 1, 2, 2, 3, 3, 0]), (1, [3, 0])], [(0, [0, 1, 1, 2]), (1, [1, 2])]])
+        self.assertEqual(simulate.prompt_plans(s, trace.widths, {0, 1}, 2),
+                         [[(1, [3, 0])], [(0, [0, 1, 1, 2]), (1, [1, 2])]])
+        self.assertEqual(simulate.prompt_plans(s, trace.widths, {1}, 2), [[(1, [3, 0])], [(1, [1, 2])]])
+        rows_max = simulate.PROVIDER_PLAN_ROWS_MAX
+        simulate.PROVIDER_PLAN_ROWS_MAX = 3  # the 2-row plans hold 4 ids
+        try:
+            self.assertEqual(simulate.prompt_plans(s, trace.widths, {0, 1}, 8), [[(1, [3, 0])], [(1, [1, 2])]])
+        finally:
+            simulate.PROVIDER_PLAN_ROWS_MAX = rows_max
+        events, scored = simulate.dynamic_events(trace, {0, 1}, 2)
+        self.assertEqual(events, [[(1, [3, 0])], [(0, [0, 1, 1, 2]), (1, [1, 2])], [(0, [0, 1]), (1, [0, 1])]])
+        self.assertEqual(scored, [False, False, True])
+
+    def test_plan_rides_recurring_keys_on_their_fill(self) -> None:
+        # three tokens of a prompt plan route expert 1: one fill serves all three. The SYCL
+        # provider counts no use for the riders, the Vulkan provider (host-mapped slabs) does.
+        for fill_uses, want in ((False, 0), (True, 2)):
+            with self.subTest(fill_uses=fill_uses):
+                uses: OrderedDict[Hashable, int] = OrderedDict()
+                self.assertEqual(simulate.plan(uses, 4, [1, 1, 1], 4, 8, fill_uses), (2, 1))
+                self.assertEqual(uses[1], want)
+        # hits on an earlier resident count a use each, as before
+        uses = OrderedDict([(1, 0)])
+        self.assertEqual(simulate.plan(uses, 4, [1, 1], 4, 8), (2, 0))
+        self.assertEqual(uses[1], 2)
+
+    def test_dynamic_scores_only_marked_steps(self) -> None:
+        # a warm step fills expert 1: the scored decode step hits it and inserts nothing
+        events = [[(0, [1])], [(0, [1])]]
+        res = simulate.sim_dynamic(events, units=2, hot_uses=4, scored=[False, True])
+        self.assertEqual((res.hit, res.inserts_per_step), (1.0, 0.0))
+        res = simulate.sim_dynamic_tensors(events, {0: [("f32", 100)]}, {("f32", 100): 2}, hot_uses=4,
+                                           scored=[False, True])
+        self.assertEqual((res.hit, res.inserts_per_step), (1.0, 0.0))
+
     def test_dynamic_replays_sessions_in_file_order(self) -> None:
         # session a stops after layer 0 at pos 1; indexing the per-layer lists would pair
         # a's layer-1 row at pos 1 with b's layer-0 row at pos 0
@@ -360,7 +423,8 @@ class CliTests(unittest.TestCase):
 
     def test_invalid_arguments(self) -> None:
         for argv in (["--budgets", "0"], ["--budgets", "1.5"], ["--budgets", "x"], ["--reelect", "0"], ["--hot-uses", "-1"],
-                     ["--inserts-per-plan", "0"], ["--inserts-per-plan", "1025"]):
+                     ["--inserts-per-plan", "0"], ["--inserts-per-plan", "1025"], ["--max-batch", "0"],
+                     ["--max-batch", "9"]):
             with self.subTest(argv=argv):
                 code, _, _ = run([self.trace, *argv])
                 self.assertEqual(code, 2)
@@ -466,6 +530,31 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         line = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == "dynamic")
         self.assertEqual(line.split("|")[1].split()[1:3], ["0.0%", "0.00"])
+
+    def test_dynamic_is_warmed_by_the_prompt_plans(self) -> None:
+        # a 3-token prompt in one call routes experts 0 and 1, then 2 decode steps route them again.
+        # Two units: the prompt plan fills both, so decode hits every read and inserts nothing;
+        # cold, step 0 misses both (50.0%, 1.00 per token)
+        head = HEADER.format(sid="w") + "# n_prompt=3 n_predict=2 n_ctx=64 n_batch=8 n_ubatch=8\n"
+        rows = "-1,0,0,1\n-2,0,1,0\n-3,0,0,1\n0,0,0,1\n1,0,1,0\n"
+
+        def dynamic(text: str, *argv: str) -> tuple[list[str], str]:
+            code, out, err = run([write(self.tmp.name, "w.csv", text), "--budgets", "0.5", *argv])
+            self.assertEqual(code, 0, err)
+            line = next(x for x in out.splitlines() if "| " in x and x.split("|")[1].split()[0] == "dynamic")
+            return line.split("|")[1].split()[1:3], out
+
+        cols, out = dynamic(head + rows)
+        self.assertEqual(cols, ["100.0%", "0.00"])
+        self.assertIn("prompt plans of at most 8 tokens (the trace's prompt calls of 8 tokens)", out)
+        tensors = head + "# expert_tensors=0:f32/100\n"
+        self.assertEqual(dynamic(tensors + rows)[0], ["100.0%", "0.00"])
+        # a plan of 3 tokens bypasses a provider limited to 2
+        self.assertEqual(dynamic(head + rows, "--max-batch", "2")[0], ["50.0%", "1.00"])
+        # without the header the prompt calls are unknown
+        cols, out = dynamic(HEADER.format(sid="w") + rows)
+        self.assertEqual(cols, ["50.0%", "1.00"])
+        self.assertIn("1 session(s) without a '# n_prompt=' line", out)
 
     def test_expert_tensors_must_cover_every_routed_layer(self) -> None:
         text = HEADER.format(sid="m") + "# expert_tensors=0:f32/100\n0,0,0,1\n0,1,0,1\n"

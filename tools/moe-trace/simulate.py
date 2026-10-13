@@ -32,7 +32,12 @@ upper bound. Like the provider, a pool below 64 slots is not created.
 
 Sessions ('# session=' lines) are replayed in file order and never
 interleaved; cache state carries over between sessions as in a long-running
-server. Only decode rows (pos >= 0) are scored.
+server. Only decode rows (pos >= 0) are scored. The provider also plans the
+prompt: before a session's decode rows, dynamic replays the plans of its prompt
+calls (from the '# n_prompt=' line, min(n_batch, n_ubatch) tokens each) of at
+most --max-batch tokens and 64 ids, a short prompt, a short last call, or a
+last layer that routes only the output row, unscored. A recurring expert in
+such a plan rides on its fill; only --provider vulkan counts it as a use.
 
 Usage: simulate.py TRACE [TRACE ...] [--profile PROFILE ...] [--budgets ...]
 """
@@ -53,6 +58,8 @@ class Session:
     sid: str
     prefill: dict[int, list[tuple[int, Step]]] = field(default_factory=lambda: defaultdict(list))
     decode: dict[int, list[tuple[int, Step]]] = field(default_factory=lambda: defaultdict(list))
+    # prompt tokens per decode call, min(n_batch, n_ubatch) from '# n_prompt='; None when the header is absent
+    chunk: int | None = None
 
 
 @dataclass
@@ -129,6 +136,11 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
                     layer, layout = parsed
                     if tensors.setdefault(layer, layout) != layout:
                         return None, f"{path}:{lineno}: layer {layer}: expert tensors conflict with an earlier trace"
+                elif key == "n_prompt" and current is not None:
+                    chunk = parse_prompt_chunk(line[1:])
+                    if chunk is None:
+                        return None, f"{path}:{lineno}: invalid prompt sizes '{line[1:].strip()}'"
+                    current.chunk = chunk
                 continue
             if line.startswith("pos,"):
                 continue
@@ -163,6 +175,22 @@ def parse_traces(paths: list[str]) -> tuple[Trace | None, str | None]:
         for rows in s.decode.values():
             rows.sort(key=lambda r: r[0])
     return Trace(sessions=sessions, n_expert=n_expert, widths=widths, arch=arch, n_layer=n_layer, tensors=tensors), None
+
+
+def parse_prompt_chunk(text: str) -> int | None:
+    """'n_prompt=N ... n_batch=B n_ubatch=U' as llama-moe-trace writes it: the tokens of each prompt
+    decode call, min(B, U) (one ubatch per call), or None if malformed."""
+    sizes: dict[str, int] = {}
+    for item in text.split():
+        name, sep, value = item.partition("=")
+        if sep and name in ("n_batch", "n_ubatch"):
+            try:
+                sizes[name] = int(value)
+            except ValueError:
+                return None
+    if len(sizes) != 2 or min(sizes.values()) <= 0:
+        return None
+    return min(sizes.values())
 
 
 def parse_expert_tensors(value: str) -> tuple[int, list[tuple[str, int]]] | None:
@@ -207,18 +235,54 @@ def decode_steps(trace: Trace) -> dict[int, list[Step]]:
     return out
 
 
+def session_decode_events(s: Session) -> list[list[tuple[int, Step]]]:
+    by_pos: dict[int, list[tuple[int, Step]]] = defaultdict(list)
+    for layer in sorted(s.decode):
+        for pos, ids in s.decode[layer]:
+            by_pos[pos].append((layer, ids))
+    return [by_pos[p] for p in sorted(by_pos)]
+
+
 def decode_events(trace: Trace) -> list[list[tuple[int, Step]]]:
     """Decode steps in file order across layers: per session, per position, (layer, ids)
     for every layer routed there. A session whose layers hold different row counts stays
     aligned by position, unlike the per-layer lists of decode_steps."""
+    return [step for s in trace.sessions for step in session_decode_events(s)]
+
+
+def prompt_plans(s: Session, widths: dict[int, int], layers: set[int], max_batch: int) -> list[list[tuple[int, Step]]]:
+    """The provider plans of a session's prompt, one step per prompt decode call of the trace
+    (s.chunk tokens), each layer of `layers` that routed rows in it one plan, in layer order, with
+    the ids of its rows in prompt order. The last layer of many models routes only the output
+    row. A plan of more than max_batch tokens or PROVIDER_PLAN_ROWS_MAX ids bypasses the
+    provider and is left out."""
+    if s.chunk is None:
+        return []
+    calls: dict[int, dict[int, list[Step]]] = defaultdict(lambda: defaultdict(list))
+    for layer, rows in s.prefill.items():
+        if layer in layers:
+            for pos, ids in rows:
+                calls[(-pos - 1) // s.chunk][layer].append(ids)
     out: list[list[tuple[int, Step]]] = []
-    for s in trace.sessions:
-        by_pos: dict[int, list[tuple[int, Step]]] = defaultdict(list)
-        for layer in sorted(s.decode):
-            for pos, ids in s.decode[layer]:
-                by_pos[pos].append((layer, ids))
-        out.extend(by_pos[p] for p in sorted(by_pos))
+    for c in sorted(calls):
+        step = [(layer, [e for ids in rows for e in ids]) for layer, rows in sorted(calls[c].items())
+                if len(rows) <= max_batch and len(rows) * widths[layer] <= PROVIDER_PLAN_ROWS_MAX]
+        if step:
+            out.append(step)
     return out
+
+
+def dynamic_events(trace: Trace, layers: set[int], max_batch: int) -> tuple[list[list[tuple[int, Step]]], list[bool]]:
+    """Per session in file order, its prompt plans (prompt_plans) and then its decode events;
+    the second list marks the decode events, the ones that are scored."""
+    events: list[list[tuple[int, Step]]] = []
+    scored: list[bool] = []
+    for s in trace.sessions:
+        warm = prompt_plans(s, trace.widths, layers, max_batch)
+        decode = session_decode_events(s)
+        events += warm + decode
+        scored += [False] * len(warm) + [True] * len(decode)
+    return events, scored
 
 
 def prefill_steps(trace: Trace) -> dict[int, list[Step]]:
@@ -350,17 +414,25 @@ def sim_reelect(trace: Trace, slots: int, interval: int, n_steps: int, alpha: fl
 
 PROVIDER_INSERTS_PER_PLAN = 8  # GGML_CUDA_MOE_CACHE_INSERTS default, ggml-moe-cache-common.h
 PROVIDER_POOL_SLOTS_MIN = 64   # moe_cache_pool_slots_min, ggml-moe-cache-common.h: a smaller pool is not created
+PROVIDER_MAX_BATCH = 8         # moe_cache_batch_max, ggml-moe-cache-common.h: a plan of more tokens bypasses the cache
+PROVIDER_PLAN_ROWS_MAX = 64    # moe_cache_node_rows_max and the CPU's MOE_CACHE_MAX_TOPK: ids (tokens x experts) per plan
 
 
 def plan(uses: OrderedDict[Hashable, int], units: int, keys: Iterable[Hashable], hot_uses: int,
-         inserts_per_plan: int) -> tuple[int, int]:
+         inserts_per_plan: int, fill_uses: bool = False) -> tuple[int, int]:
     """One provider plan on one pool (uses: LRU order, head = oldest): it fills at most
     inserts_per_plan of its misses, and it cannot evict a unit it hit or filled (the
-    provider pins those); its other misses run on the CPU and are not inserted.
-    Returns (hits, inserts)."""
+    provider pins those); its other misses run on the CPU and are not inserted. A key that
+    recurs after its fill in the plan (tokens of a prompt plan routing one expert) is served
+    from the fill; the SYCL provider does not count it as a use, the Vulkan provider, whose
+    host-mapped slabs make the fill valid at once, does (fill_uses). Returns (hits, inserts)."""
     hits = inserts = fills = 0
     pinned: set[Hashable] = set()
+    filled: set[Hashable] = set()
     for key in keys:
+        if key in filled and not fill_uses:
+            hits += 1
+            continue
         if key in uses:
             hits += 1
             uses[key] += 1
@@ -379,24 +451,30 @@ def plan(uses: OrderedDict[Hashable, int], units: int, keys: Iterable[Hashable],
             del uses[victim]
         uses[key] = 0
         pinned.add(key)
+        filled.add(key)
         inserts += 1
     return hits, inserts
 
 
 def sim_dynamic(events: list[list[tuple[int, Step]]], units: int, hot_uses: int,
-                inserts_per_plan: int = PROVIDER_INSERTS_PER_PLAN) -> Result:
+                inserts_per_plan: int = PROVIDER_INSERTS_PER_PLAN, scored: list[bool] | None = None,
+                fill_uses: bool = False) -> Result:
     """Global LRU pool over (layer, expert) units with the provider's rules, replayed in
-    the order of decode_events, one plan per (step, layer). An upper bound when a layer's
-    expert tensors share a pool: see sim_dynamic_tensors."""
-    hits = total = inserts = 0
+    the order of decode_events (or dynamic_events), one plan per (step, layer). Only the
+    steps that `scored` marks (default: all) count in hit and ins/tok. An upper bound when a
+    layer's expert tensors share a pool: see sim_dynamic_tensors."""
+    hits = total = inserts = n_scored = 0
     uses: OrderedDict[Hashable, int] = OrderedDict()
-    for step in events:
+    for k, step in enumerate(events):
+        score = scored is None or scored[k]
+        n_scored += score
         for layer, ids in step:
-            h, i = plan(uses, units, [(layer, e) for e in ids], hot_uses, inserts_per_plan)
-            hits += h
-            inserts += i
-            total += len(ids)
-    return Result(hits / max(total, 1), inserts / max(len(events), 1))
+            h, i = plan(uses, units, [(layer, e) for e in ids], hot_uses, inserts_per_plan, fill_uses)
+            if score:
+                hits += h
+                inserts += i
+                total += len(ids)
+    return Result(hits / max(total, 1), inserts / max(n_scored, 1))
 
 
 def dynamic_pools(tensors: dict[int, list[tuple[str, int]]], layers: Iterable[int], slots: int,
@@ -425,23 +503,28 @@ def dynamic_pools(tensors: dict[int, list[tuple[str, int]]], layers: Iterable[in
 
 def sim_dynamic_tensors(events: list[list[tuple[int, Step]]], tensors: dict[int, list[tuple[str, int]]],
                         pools: dict[tuple[str, int], int], hot_uses: int,
-                        inserts_per_plan: int = PROVIDER_INSERTS_PER_PLAN) -> Result:
+                        inserts_per_plan: int = PROVIDER_INSERTS_PER_PLAN, scored: list[bool] | None = None,
+                        fill_uses: bool = False) -> Result:
     """The provider's keys: an entry per (expert tensor, expert), and a plan per MUL_MAT_ID,
     so each expert tensor of a layer is its own plan on the pool of its type and size, in
     the trace's tensor order. Hits are the fraction of routed expert bytes served from the
-    pools; inserts are counted in (layer, expert) units of all the layer's tensors."""
-    hit_bytes = total_bytes = 0
+    pools; inserts are counted in (layer, expert) units of all the layer's tensors. Only the
+    steps that `scored` marks (default: all) count."""
+    hit_bytes = total_bytes = n_scored = 0
     inserted = 0.0
     state: dict[tuple[str, int], OrderedDict[Hashable, int]] = {t: OrderedDict() for t in pools}
-    for step in events:
+    for k, step in enumerate(events):
+        score = scored is None or scored[k]
+        n_scored += score
         for layer, ids in step:
             layer_bytes = sum(nbytes for _, nbytes in tensors[layer])
             for ti, t in enumerate(tensors[layer]):
-                h, i = plan(state[t], pools[t], [(layer, ti, e) for e in ids], hot_uses, inserts_per_plan)
-                hit_bytes += h * t[1]
-                total_bytes += len(ids) * t[1]
-                inserted += i * t[1] / layer_bytes
-    return Result(hit_bytes / max(total_bytes, 1), inserted / max(len(events), 1))
+                h, i = plan(state[t], pools[t], [(layer, ti, e) for e in ids], hot_uses, inserts_per_plan, fill_uses)
+                if score:
+                    hit_bytes += h * t[1]
+                    total_bytes += len(ids) * t[1]
+                    inserted += i * t[1] / layer_bytes
+    return Result(hit_bytes / max(total_bytes, 1), inserted / max(n_scored, 1))
 
 
 def skew_lines(decode: dict[int, list[Step]]) -> list[str]:
@@ -483,6 +566,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="dynamic policy: the --moe-cache provider whose pool budget to model (default: sycl)")
     ap.add_argument("--inserts-per-plan", type=int, default=PROVIDER_INSERTS_PER_PLAN,
                     help="dynamic policy fills per layer per step, 1..1024 (GGML_CUDA_MOE_CACHE_INSERTS)")
+    ap.add_argument("--max-batch", type=int, default=PROVIDER_MAX_BATCH,
+                    help=f"dynamic policy: tokens of the largest plan the provider takes, 1..{PROVIDER_MAX_BATCH} "
+                    "(GGML_CUDA_MOE_CACHE_MAX_BATCH); prompt plans up to it warm the pools")
     ap.add_argument("--slab-mb", type=float, default=None,
                     help="MiB per (layer, expert) gate+up+down; enables the assumed cost columns")
     ap.add_argument("--ram-gbs", type=float, default=None, help="assumed host read bandwidth, GB/s")
@@ -501,6 +587,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if not 1 <= args.inserts_per_plan <= 1024:
         print("error: --inserts-per-plan must be in 1..1024", file=sys.stderr)
+        return 2
+    if not 1 <= args.max_batch <= PROVIDER_MAX_BATCH:
+        print(f"error: --max-batch must be in 1..{PROVIDER_MAX_BATCH}", file=sys.stderr)
         return 2
     cost_args = (args.slab_mb, args.ram_gbs, args.link_gbs)
     if any(v is not None for v in cost_args) and not all(v is not None and v > 0 for v in cost_args):
@@ -567,6 +656,9 @@ def main(argv: list[str] | None = None) -> int:
     with_cost = args.slab_mb is not None
     # routed expert reads per decode step, from the rows themselves: a layer may route on fewer steps
     reads_per_step = sum(len(ids) for step in events for _, ids in step) / len(events)
+    # the provider also plans the prompt calls of at most max_batch tokens: they warm the pools unscored
+    dyn_events, dyn_scored = dynamic_events(trace, set(decode), args.max_batch)
+    fill_uses = args.provider == "vulkan"
 
     hdr = f"{'budget':>7} {'slots':>5} | {'policy':>14} {'hit':>7} {'ins/tok':>8}"
     if with_cost:
@@ -589,12 +681,13 @@ def main(argv: list[str] | None = None) -> int:
         if trace.tensors:
             pools = dynamic_pools(trace.tensors, decode, slots, n_expert, PROVIDER_POOL_SLOTS_MIN,
                                   shared=args.provider == "sycl")
-            rows.append(("dynamic", sim_dynamic_tensors(events, trace.tensors, pools, args.hot_uses,
-                                                        args.inserts_per_plan)))
+            rows.append(("dynamic", sim_dynamic_tensors(dyn_events, trace.tensors, pools, args.hot_uses,
+                                                        args.inserts_per_plan, dyn_scored, fill_uses)))
         else:
             units = min(slots * len(decode), n_expert)
             units = units if units >= PROVIDER_POOL_SLOTS_MIN else 0
-            rows.append(("dynamic", sim_dynamic(events, units, args.hot_uses, args.inserts_per_plan)))
+            rows.append(("dynamic", sim_dynamic(dyn_events, units, args.hot_uses, args.inserts_per_plan,
+                                                dyn_scored, fill_uses)))
         for name, res in rows:
             if res is None:
                 print(f"{frac:>7.4f} {slots:>5} | {name:>14} {'n/a':>7}")
@@ -621,6 +714,15 @@ def main(argv: list[str] | None = None) -> int:
     print("dynamic assumes the --moe-cache provider takes every MoE layer; it leaves on the CPU expert tensors below its "
           "minimum (logged as min-expert=, GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB) and unsupported weight types, which the "
           "replay does not apply")
+    chunks = sorted({s.chunk for s in trace.sessions if s.chunk is not None and s.prefill})
+    if chunks:
+        print(f"dynamic replays the prompt plans of at most {args.max_batch} tokens (the trace's prompt calls of "
+              f"{'/'.join(map(str, chunks))} tokens) before each session's decode rows; they warm the pools "
+              "and are not scored")
+    blind = sum(1 for s in trace.sessions if s.chunk is None and s.prefill)
+    if blind:
+        print(f"dynamic: {blind} session(s) without a '# n_prompt=' line start their decode from the previous "
+              "session's state: their prompt calls are unknown, so their prompt plans are not replayed")
     return 0
 
 

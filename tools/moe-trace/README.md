@@ -157,10 +157,23 @@ at `GGML_CUDA_MOE_CACHE_QUEUE_MB / expert size`, which the simulator does not
 model (with the 512 MiB default it binds only above 64 MiB per expert tensor).
 The replay assumes the provider takes every MoE layer. It does not: expert tensors
 below its minimum (`GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB`; the provider logs the value
-in use as `min-expert=`), unsupported weight types and batches above
-`GGML_CUDA_MOE_CACHE_MAX_BATCH` stay on the CPU. The `# expert_tensors=` sizes
-can be compared with that `min-expert=` value; the replay does not apply it, nor
-the per-backend list of supported types.
+in use as `min-expert=`) and unsupported weight types stay on the CPU. The
+`# expert_tensors=` sizes can be compared with that `min-expert=` value; the replay
+does not apply it, nor the per-backend list of supported types.
+
+The provider plans prompt calls too: a `MUL_MAT_ID` of at most
+`GGML_CUDA_MOE_CACHE_MAX_BATCH` tokens (default 8, `--max-batch`) and 64 ids fills
+and evicts like a decode step; larger ones bypass it. Before each session's decode
+rows the replay runs the plans of its prompt calls that fit, from the session's
+`# n_prompt=` line (calls of `min(n_batch, n_ubatch)` tokens, as llama-moe-trace
+decodes the prompt): a short prompt, a short last call, and a last layer that routes
+only the output row. They warm the pools and are not scored, and their fills do not
+count in `ins/tok`. An expert that several tokens of one plan route is filled once:
+the SYCL provider counts no use for the later tokens, the Vulkan provider with
+host-mapped slabs counts one each, and `--provider` follows that (without
+host-mapped slabs the Vulkan provider fills it again into a second slot, which the
+replay does not model). A session without the line starts its decode from the
+previous session's state, and the report says so.
 
 Expert counts come from the trace's `# n_expert=` line, or from `--n-expert`
 for a trace without one (a different value is an error), never from the
